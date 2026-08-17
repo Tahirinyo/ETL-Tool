@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EtlTool.Domain\EtlTool.Domain.csproj" />
     <ProjectReference Include="..\EtlTool.Application\EtlTool.Application.csproj" />
+    <ProjectReference Include="..\EtlTool.Web\EtlTool.Web.csproj" />
   </ItemGroup>
 
 </Project>

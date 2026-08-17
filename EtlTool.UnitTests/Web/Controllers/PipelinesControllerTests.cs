@@ -1,0 +1,532 @@
+using System.ComponentModel.DataAnnotations;
+using System.Reflection;
+using EtlTool.Application.Pipelines;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+using EtlTool.Web.Controllers;
+using EtlTool.Web.Models.Pipelines;
+using Microsoft.AspNetCore.Mvc;
+
+namespace EtlTool.UnitTests.Web.Controllers;
+
+public sealed class PipelinesControllerTests
+{
+    [Fact]
+    public async Task Index_RequestsServiceAndMapsNewestPipelineFirst()
+    {
+        var olderId = Guid.NewGuid();
+        var newerId = Guid.NewGuid();
+        IReadOnlyList<PipelineDefinition> pipelines =
+        [
+            new()
+            {
+                Id = olderId,
+                Name = "Older",
+                UpdatedAt = new DateTimeOffset(2026, 8, 15, 10, 0, 0, TimeSpan.Zero)
+            },
+            new()
+            {
+                Id = newerId,
+                Name = "Newer",
+                SourceType = SourceType.Csv,
+                DestinationDatabase = "analytics",
+                DestinationCollection = "customers",
+                UpdatedAt = new DateTimeOffset(2026, 8, 16, 10, 0, 0, TimeSpan.Zero)
+            }
+        ];
+        var service = new RecordingPipelineService
+        {
+            ListHandler = _ => Task.FromResult(pipelines)
+        };
+        var controller = new PipelinesController(service);
+        using var cancellationSource = new CancellationTokenSource();
+
+        var result = await controller.Index(cancellationSource.Token);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsAssignableFrom<IReadOnlyList<PipelineListItemViewModel>>(view.Model);
+        Assert.Equal([newerId, olderId], model.Select(item => item.Id));
+        Assert.Equal(SourceType.Csv, model[0].SourceType);
+        Assert.Equal("analytics", model[0].DestinationDatabase);
+        Assert.Equal("customers", model[0].DestinationCollection);
+        Assert.Equal("Not configured", model[1].SourceTypeDisplay);
+        Assert.Equal("Not configured", model[1].DestinationDatabaseDisplay);
+        Assert.Equal(cancellationSource.Token, service.ListCancellationToken);
+        Assert.Equal(1, service.ListCallCount);
+    }
+
+    [Fact]
+    public async Task Index_EmptyServiceResultReturnsEmptyViewModel()
+    {
+        var controller = new PipelinesController(new RecordingPipelineService());
+
+        var result = await controller.Index(CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsAssignableFrom<IReadOnlyList<PipelineListItemViewModel>>(view.Model);
+        Assert.Empty(model);
+    }
+
+    [Fact]
+    public void Create_GetReturnsEmptyForm()
+    {
+        var controller = new PipelinesController(new RecordingPipelineService());
+
+        var result = controller.Create();
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<PipelineFormViewModel>(view.Model);
+        Assert.Equal(string.Empty, model.Name);
+        Assert.Null(model.Description);
+    }
+
+    [Fact]
+    public async Task Create_ValidPostMapsDraftAndRedirects()
+    {
+        var service = new RecordingPipelineService();
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel
+        {
+            Name = "Customer import",
+            Description = "Draft description"
+        };
+        using var cancellationSource = new CancellationTokenSource();
+
+        var result = await controller.Create(model, cancellationSource.Token);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(PipelinesController.Index), redirect.ActionName);
+        var pipeline = Assert.IsType<PipelineDefinition>(service.CreatedPipeline);
+        Assert.Equal(model.Name, pipeline.Name);
+        Assert.Equal(model.Description, pipeline.Description);
+        Assert.Equal(Guid.Empty, pipeline.Id);
+        Assert.Equal(SourceType.Unspecified, pipeline.SourceType);
+        Assert.Empty(pipeline.FieldMappings);
+        Assert.Empty(pipeline.TransformationRules);
+        Assert.Empty(pipeline.ValidationRules);
+        Assert.Equal(cancellationSource.Token, service.CreateCancellationToken);
+        Assert.Equal(1, service.CreateCallCount);
+    }
+
+    [Fact]
+    public async Task Create_InvalidModelDoesNotCallService()
+    {
+        var service = new RecordingPipelineService();
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel { Name = string.Empty };
+        controller.ModelState.AddModelError(nameof(model.Name), "Name is required.");
+
+        var result = await controller.Create(model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.Same(model, view.Model);
+        Assert.Equal(0, service.CreateCallCount);
+    }
+
+    [Fact]
+    public async Task Create_ServiceValidationFailureAddsNameError()
+    {
+        var service = new RecordingPipelineService
+        {
+            CreateHandler = (_, _) => Task.FromException<PipelineDefinition>(
+                new ArgumentException("Pipeline name cannot be empty.", "pipeline"))
+        };
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel { Name = "Submitted" };
+
+        var result = await controller.Create(model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.Same(model, view.Model);
+        Assert.False(controller.ModelState.IsValid);
+        Assert.Contains(
+            controller.ModelState[nameof(model.Name)]!.Errors,
+            error => error.ErrorMessage.Contains("cannot be empty", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_DuplicateFailureAddsModelError()
+    {
+        var service = new RecordingPipelineService
+        {
+            CreateHandler = (_, _) => Task.FromException<PipelineDefinition>(
+                new DuplicatePipelineDefinitionException(Guid.NewGuid()))
+        };
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel { Name = "Submitted" };
+
+        var result = await controller.Create(model, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.False(controller.ModelState.IsValid);
+        Assert.Contains(
+            controller.ModelState[string.Empty]!.Errors,
+            error => error.ErrorMessage.Contains("identity conflict", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Edit_GetMapsExistingPipelineAndHandlesInvalidOrMissingIds()
+    {
+        var id = Guid.NewGuid();
+        var existing = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Existing",
+            Description = "Description"
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (requestedId, _) => Task.FromResult<PipelineDefinition?>(
+                requestedId == id ? existing : null)
+        };
+        var controller = new PipelinesController(service);
+
+        var foundResult = await controller.Edit(id, CancellationToken.None);
+        var missingResult = await controller.Edit(Guid.NewGuid(), CancellationToken.None);
+        var emptyResult = await controller.Edit(Guid.Empty, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(foundResult);
+        var model = Assert.IsType<PipelineFormViewModel>(view.Model);
+        Assert.Equal(existing.Name, model.Name);
+        Assert.Equal(existing.Description, model.Description);
+        Assert.Equal(id, controller.ViewData["PipelineId"]);
+        Assert.IsType<NotFoundResult>(missingResult);
+        Assert.IsType<NotFoundResult>(emptyResult);
+        Assert.Equal(2, service.GetByIdCallCount);
+    }
+
+    [Fact]
+    public async Task Edit_ValidPostPreservesHiddenAggregateStateAndRedirects()
+    {
+        var id = Guid.NewGuid();
+        var sourceOptions = new SourceOptions
+        {
+            CultureName = "tr-TR",
+            Delimiter = CsvDelimiter.Semicolon
+        };
+        var mappings = new List<FieldMapping>
+        {
+            new() { SourceField = "customer_id", TargetField = "customerId" }
+        };
+        var transformations = new List<TransformationRule>
+        {
+            new() { Id = Guid.NewGuid(), Order = 1 }
+        };
+        var validations = new List<ValidationRule>
+        {
+            new() { Id = Guid.NewGuid(), Field = "customerId" }
+        };
+        var existing = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Before",
+            Description = "Before description",
+            SourceType = SourceType.Csv,
+            SourceOptions = sourceOptions,
+            FieldMappings = mappings,
+            TransformationRules = transformations,
+            ValidationRules = validations,
+            DestinationDatabase = "analytics",
+            DestinationCollection = "customers",
+            UpsertKeyField = "customerId",
+            CreatedAt = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero)
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(existing),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel
+        {
+            Name = "After",
+            Description = "After description"
+        };
+        using var cancellationSource = new CancellationTokenSource();
+
+        var result = await controller.Edit(id, model, cancellationSource.Token);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(PipelinesController.Index), redirect.ActionName);
+        Assert.Same(existing, service.UpdatedPipeline);
+        Assert.Equal(id, service.UpdatedId);
+        Assert.Equal("After", existing.Name);
+        Assert.Equal("After description", existing.Description);
+        Assert.Same(sourceOptions, existing.SourceOptions);
+        Assert.Same(mappings, existing.FieldMappings);
+        Assert.Same(transformations, existing.TransformationRules);
+        Assert.Same(validations, existing.ValidationRules);
+        Assert.Equal("analytics", existing.DestinationDatabase);
+        Assert.Equal("customers", existing.DestinationCollection);
+        Assert.Equal("customerId", existing.UpsertKeyField);
+        Assert.Equal(cancellationSource.Token, service.GetByIdCancellationTokens.Single());
+        Assert.Equal(cancellationSource.Token, service.UpdateCancellationToken);
+    }
+
+    [Fact]
+    public async Task Edit_InvalidPostDoesNotLoadOrUpdate()
+    {
+        var service = new RecordingPipelineService();
+        var controller = new PipelinesController(service);
+        var model = new PipelineFormViewModel { Name = string.Empty };
+        controller.ModelState.AddModelError(nameof(model.Name), "Name is required.");
+
+        var result = await controller.Edit(Guid.NewGuid(), model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.Same(model, view.Model);
+        Assert.Equal(0, service.GetByIdCallCount);
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Edit_PostReturnsNotFoundForMissingRecordOrUpdateRace()
+    {
+        var id = Guid.NewGuid();
+        var model = new PipelineFormViewModel { Name = "Updated" };
+        var missingController = new PipelinesController(new RecordingPipelineService());
+        var raceService = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(
+                new PipelineDefinition { Id = id, Name = "Existing" }),
+            UpdateHandler = (_, _, _) => Task.FromResult(false)
+        };
+        var raceController = new PipelinesController(raceService);
+
+        var missingResult = await missingController.Edit(id, model, CancellationToken.None);
+        var raceResult = await raceController.Edit(id, model, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(missingResult);
+        Assert.IsType<NotFoundResult>(raceResult);
+        Assert.Equal(1, raceService.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Delete_GetLoadsConfirmationAndHandlesMissingIds()
+    {
+        var id = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (requestedId, _) => Task.FromResult<PipelineDefinition?>(
+                requestedId == id
+                    ? new PipelineDefinition { Id = id, Name = "Delete me" }
+                    : null)
+        };
+        var controller = new PipelinesController(service);
+
+        var foundResult = await controller.Delete(id, CancellationToken.None);
+        var missingResult = await controller.Delete(Guid.NewGuid(), CancellationToken.None);
+        var emptyResult = await controller.Delete(Guid.Empty, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(foundResult);
+        var model = Assert.IsType<PipelineDeleteViewModel>(view.Model);
+        Assert.Equal(id, model.Id);
+        Assert.Equal("Delete me", model.Name);
+        Assert.IsType<NotFoundResult>(missingResult);
+        Assert.IsType<NotFoundResult>(emptyResult);
+        Assert.Equal(2, service.GetByIdCallCount);
+    }
+
+    [Fact]
+    public async Task Delete_PostCallsServiceAndHandlesMissingRecord()
+    {
+        var existingId = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            DeleteHandler = (id, _) => Task.FromResult(id == existingId)
+        };
+        var controller = new PipelinesController(service);
+        using var cancellationSource = new CancellationTokenSource();
+
+        var deletedResult = await controller.DeleteConfirmed(existingId, cancellationSource.Token);
+        var missingResult = await controller.DeleteConfirmed(Guid.NewGuid(), cancellationSource.Token);
+        var emptyResult = await controller.DeleteConfirmed(Guid.Empty, cancellationSource.Token);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(deletedResult);
+        Assert.Equal(nameof(PipelinesController.Index), redirect.ActionName);
+        Assert.IsType<NotFoundResult>(missingResult);
+        Assert.IsType<NotFoundResult>(emptyResult);
+        Assert.Equal(2, service.DeleteCallCount);
+        Assert.All(
+            service.DeleteCancellationTokens,
+            token => Assert.Equal(cancellationSource.Token, token));
+    }
+
+    [Fact]
+    public void PostActionsRequirePostAndAntiForgeryAndControllerDependsOnlyOnService()
+    {
+        var postActions = new[]
+        {
+            FindAction(nameof(PipelinesController.Create), 2),
+            FindAction(nameof(PipelinesController.Edit), 3),
+            FindAction(nameof(PipelinesController.DeleteConfirmed), 2)
+        };
+
+        Assert.All(postActions, action =>
+        {
+            Assert.NotNull(action.GetCustomAttribute<HttpPostAttribute>());
+            Assert.NotNull(action.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        });
+
+        var deleteActionName = postActions[2].GetCustomAttribute<ActionNameAttribute>();
+        Assert.Equal(nameof(PipelinesController.Delete), deleteActionName?.Name);
+
+        var constructor = Assert.Single(typeof(PipelinesController).GetConstructors());
+        var parameter = Assert.Single(constructor.GetParameters());
+        Assert.Equal(typeof(IPipelineService), parameter.ParameterType);
+    }
+
+    [Fact]
+    public async Task Index_PreservesUnexpectedFailureAndCancellation()
+    {
+        var failure = new InvalidOperationException("Persistence failed.");
+        var failingController = new PipelinesController(new RecordingPipelineService
+        {
+            ListHandler = _ => Task.FromException<IReadOnlyList<PipelineDefinition>>(failure)
+        });
+        using var cancellationSource = new CancellationTokenSource();
+        cancellationSource.Cancel();
+        var cancelledController = new PipelinesController(new RecordingPipelineService
+        {
+            ListHandler = token => Task.FromCanceled<IReadOnlyList<PipelineDefinition>>(token)
+        });
+
+        var actualFailure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => failingController.Index(CancellationToken.None));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cancelledController.Index(cancellationSource.Token));
+
+        Assert.Same(failure, actualFailure);
+    }
+
+    [Fact]
+    public void PipelineFormViewModel_RejectsWhitespaceNameAndAllowsEmptyDescription()
+    {
+        var model = new PipelineFormViewModel
+        {
+            Name = "   ",
+            Description = null
+        };
+        var validationResults = new List<ValidationResult>();
+
+        var isValid = Validator.TryValidateObject(
+            model,
+            new ValidationContext(model),
+            validationResults,
+            validateAllProperties: true);
+
+        Assert.False(isValid);
+        Assert.Contains(
+            validationResults,
+            result => result.MemberNames.Contains(nameof(PipelineFormViewModel.Name)));
+    }
+
+    private static MethodInfo FindAction(string name, int parameterCount)
+    {
+        return typeof(PipelinesController)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == name && method.GetParameters().Length == parameterCount);
+    }
+
+    private sealed class RecordingPipelineService : IPipelineService
+    {
+        public Func<PipelineDefinition, CancellationToken, Task<PipelineDefinition>>? CreateHandler { get; init; }
+
+        public Func<Guid, CancellationToken, Task<PipelineDefinition?>>? GetByIdHandler { get; init; }
+
+        public Func<CancellationToken, Task<IReadOnlyList<PipelineDefinition>>>? ListHandler { get; init; }
+
+        public Func<Guid, PipelineDefinition, CancellationToken, Task<bool>>? UpdateHandler { get; init; }
+
+        public Func<Guid, CancellationToken, Task<bool>>? DeleteHandler { get; init; }
+
+        public int CreateCallCount { get; private set; }
+
+        public PipelineDefinition? CreatedPipeline { get; private set; }
+
+        public CancellationToken CreateCancellationToken { get; private set; }
+
+        public int GetByIdCallCount => GetByIdIds.Count;
+
+        public List<Guid> GetByIdIds { get; } = [];
+
+        public List<CancellationToken> GetByIdCancellationTokens { get; } = [];
+
+        public int ListCallCount { get; private set; }
+
+        public CancellationToken ListCancellationToken { get; private set; }
+
+        public int UpdateCallCount { get; private set; }
+
+        public Guid UpdatedId { get; private set; }
+
+        public PipelineDefinition? UpdatedPipeline { get; private set; }
+
+        public CancellationToken UpdateCancellationToken { get; private set; }
+
+        public int DeleteCallCount => DeleteIds.Count;
+
+        public List<Guid> DeleteIds { get; } = [];
+
+        public List<CancellationToken> DeleteCancellationTokens { get; } = [];
+
+        public Task<PipelineDefinition> CreateAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            CreateCallCount++;
+            CreatedPipeline = pipeline;
+            CreateCancellationToken = cancellationToken;
+
+            return CreateHandler?.Invoke(pipeline, cancellationToken)
+                ?? Task.FromResult(pipeline);
+        }
+
+        public Task<PipelineDefinition?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken)
+        {
+            GetByIdIds.Add(id);
+            GetByIdCancellationTokens.Add(cancellationToken);
+
+            return GetByIdHandler?.Invoke(id, cancellationToken)
+                ?? Task.FromResult<PipelineDefinition?>(null);
+        }
+
+        public Task<IReadOnlyList<PipelineDefinition>> ListAsync(
+            CancellationToken cancellationToken)
+        {
+            ListCallCount++;
+            ListCancellationToken = cancellationToken;
+
+            return ListHandler?.Invoke(cancellationToken)
+                ?? Task.FromResult<IReadOnlyList<PipelineDefinition>>([]);
+        }
+
+        public Task<bool> UpdateAsync(
+            Guid id,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            UpdateCallCount++;
+            UpdatedId = id;
+            UpdatedPipeline = pipeline;
+            UpdateCancellationToken = cancellationToken;
+
+            return UpdateHandler?.Invoke(id, pipeline, cancellationToken)
+                ?? Task.FromResult(false);
+        }
+
+        public Task<bool> DeleteAsync(
+            Guid id,
+            CancellationToken cancellationToken)
+        {
+            DeleteIds.Add(id);
+            DeleteCancellationTokens.Add(cancellationToken);
+
+            return DeleteHandler?.Invoke(id, cancellationToken)
+                ?? Task.FromResult(false);
+        }
+    }
+}
