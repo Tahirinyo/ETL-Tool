@@ -1,0 +1,20 @@
+@model PipelineDeleteViewModel
+
+@{
+    ViewData["Title"] = "Delete pipeline";
+}
+
+<h1>Delete pipeline</h1>
+
+<div class="alert alert-warning" role="alert">
+    <h2 class="h5">Delete "@Model.Name"?</h2>
+    <p class="mb-0">
+        This removes only the saved pipeline definition. It does not delete destination MongoDB data,
+        databases, collections, run history, or uploaded files.
+    </p>
+</div>
+
+<form asp-action="Delete" asp-route-id="@Model.Id" method="post">
+    <button type="submit" class="btn btn-danger">Delete pipeline</button>
+    <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
+</form>
