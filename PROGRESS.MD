@@ -8,6 +8,7 @@
 - Initial pipeline, rule, source/schema/mapping, and ETL run domain contracts have been defined and verified.
 - Application extraction contracts and the format-independent runtime row model have been defined and verified.
 - Initial streaming CSV extraction with header mapping, logical row numbering, cancellation, and stream-ownership coverage has been implemented and verified.
+- MongoDB metadata persistence for pipeline definitions, including secret-safe configuration, asynchronous CRUD semantics, Infrastructure-only BSON mapping, and isolated Testcontainers integration coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -19,5 +20,5 @@
 
 ## Next
 
-- Configure MongoDB connectivity.
+- Implement Pipeline CRUD application services.
 - Extend source extraction with culture-aware CSV behavior and XLSX support.

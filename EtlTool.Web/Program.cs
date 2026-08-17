@@ -1,7 +1,22 @@
+using EtlTool.Application.Pipelines;
+using EtlTool.Infrastructure.MongoDB;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();
+
+var mongoDbOptions = builder.Configuration
+    .GetRequiredSection(MongoDbOptions.SectionName)
+    .Get<MongoDbOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{MongoDbOptions.SectionName}' is invalid.");
+
+mongoDbOptions.Validate();
+
+builder.Services.AddSingleton(mongoDbOptions);
+builder.Services.AddSingleton<MongoMetadataDatabase>();
+builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 
 var app = builder.Build();
 
