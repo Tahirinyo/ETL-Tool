@@ -1,0 +1,35 @@
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+
+namespace EtlTool.Domain.Entities;
+
+public sealed class PipelineDefinition
+{
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string? Description { get; set; }
+
+    public SourceType SourceType { get; set; }
+
+    public SourceOptions SourceOptions { get; set; } = new();
+
+    public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
+
+    public List<FieldMapping> FieldMappings { get; set; } = [];
+
+    public List<TransformationRule> TransformationRules { get; set; } = [];
+
+    public List<ValidationRule> ValidationRules { get; set; } = [];
+
+    public string DestinationDatabase { get; set; } = string.Empty;
+
+    public string DestinationCollection { get; set; } = string.Empty;
+
+    public string UpsertKeyField { get; set; } = string.Empty;
+
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public DateTimeOffset UpdatedAt { get; set; }
+}
