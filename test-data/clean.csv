@@ -1,0 +1,26 @@
+﻿CustomerId,FullName,Email,Age,Balance,BirthDate,Country
+1,Ahmet Yilmaz,ahmet.yilmaz@example.com,28,1500.5,1998-04-12,Turkey
+2,Mehmet Kaya,mehmet.kaya@example.com,35,4200.75,1991-08-23,Turkey
+3,Ayse Demir,ayse.demir@example.com,31,2800.0,1995-03-10,Turkey
+4,Ali Can,ali.can@example.com,33,3100.25,1993-11-18,Turkey
+5,Fatma Yildiz,fatma.yildiz@example.com,29,1800.25,1997-01-21,Turkey
+6,Veli Arslan,veli.arslan@example.com,40,3500.5,1986-06-02,Turkey
+7,Zeynep Acar,zeynep.acar@example.com,25,1200.0,2001-02-11,Turkey
+8,Burak Sahin,burak.sahin@example.com,30,2700.5,1996-05-30,Turkey
+9,Selin Ak,selin.ak@example.com,26,1900.0,2000-01-01,Turkey
+10,Mert Oz,mert.oz@example.com,30,2200.0,1996-08-15,Turkey
+11,John Smith,john.smith@example.com,42,5100.75,1984-09-14,USA
+12,Emma Brown,emma.brown@example.com,27,3400.25,1999-12-03,UK
+13,Luca Rossi,luca.rossi@example.com,38,4600.0,1988-07-09,Italy
+14,Anna Muller,anna.muller@example.com,36,3900.5,1990-04-22,Germany
+15,Carlos Garcia,carlos.garcia@example.com,41,5200.0,1985-10-17,Spain
+16,Elif Koc,elif.koc@example.com,24,1700.75,2002-03-18,Turkey
+17,Emre Polat,emre.polat@example.com,32,3300.0,1994-06-25,Turkey
+18,Ceren Tas,ceren.tas@example.com,28,2600.4,1998-11-12,Turkey
+19,Can Aydin,can.aydin@example.com,34,4100.1,1992-02-28,Turkey
+20,Ece Kurt,ece.kurt@example.com,23,1400.9,2003-05-16,Turkey
+21,Deniz Yalcin,deniz.yalcin@example.com,29,2950.5,1997-09-19,Turkey
+22,Kerem Gunes,kerem.gunes@example.com,37,4450.0,1989-01-30,Turkey
+23,Melis Er,melis.er@example.com,26,2150.25,2000-08-08,Turkey
+24,Onur Tekin,onur.tekin@example.com,39,4800.75,1987-12-11,Turkey
+25,Seda Kaplan,seda.kaplan@example.com,31,3050.0,1995-04-07,Turkey
