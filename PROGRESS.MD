@@ -9,6 +9,7 @@
 - Application extraction contracts and the format-independent runtime row model have been defined and verified.
 - Initial streaming CSV extraction with header mapping, logical row numbering, cancellation, and stream-ownership coverage has been implemented and verified.
 - MongoDB metadata persistence for pipeline definitions, including secret-safe configuration, asynchronous CRUD semantics, Infrastructure-only BSON mapping, and isolated Testcontainers integration coverage, has been implemented and verified.
+- Application pipeline CRUD services, including service-owned identity and timestamps, draft-level validation, update identity protection, and focused unit coverage, have been implemented and verified.
 
 ## In Progress
 
@@ -20,5 +21,5 @@
 
 ## Next
 
-- Implement Pipeline CRUD application services.
+- Implement basic Pipeline CRUD MVC pages.
 - Extend source extraction with culture-aware CSV behavior and XLSX support.
