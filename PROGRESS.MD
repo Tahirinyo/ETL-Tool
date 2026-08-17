@@ -6,6 +6,7 @@
 - Initial .NET solution and six-project layer structure have been created and verified.
 - Git workflow foundation, pull request checklist, and initial CI configuration have been established and locally verified.
 - Initial pipeline, rule, source/schema/mapping, and ETL run domain contracts have been defined and verified.
+- Application extraction contracts and the format-independent runtime row model have been defined and verified.
 
 ## In Progress
 
@@ -18,4 +19,4 @@
 ## Next
 
 - Configure MongoDB connectivity.
-- Define initial Application interfaces and extractor row contracts.
+- Implement the initial CSV extractor.
