@@ -7,6 +7,7 @@
 - Git workflow foundation, pull request checklist, and initial CI configuration have been established and locally verified.
 - Initial pipeline, rule, source/schema/mapping, and ETL run domain contracts have been defined and verified.
 - Application extraction contracts and the format-independent runtime row model have been defined and verified.
+- Initial streaming CSV extraction with header mapping, logical row numbering, cancellation, and stream-ownership coverage has been implemented and verified.
 
 ## In Progress
 
@@ -19,4 +20,4 @@
 ## Next
 
 - Configure MongoDB connectivity.
-- Implement the initial CSV extractor.
+- Extend source extraction with culture-aware CSV behavior and XLSX support.
