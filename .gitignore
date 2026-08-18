@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local uploaded source files
+/EtlTool.Web/App_Data/uploads/
+
 # User-specific files
 *.rsuser
 *.suo
