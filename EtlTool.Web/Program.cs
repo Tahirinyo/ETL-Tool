@@ -1,5 +1,7 @@
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Uploads;
 using EtlTool.Infrastructure.MongoDB;
+using EtlTool.Infrastructure.Uploads;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,9 +16,22 @@ var mongoDbOptions = builder.Configuration
 
 mongoDbOptions.Validate();
 
+var uploadStorageOptions = builder.Configuration
+    .GetRequiredSection(UploadStorageOptions.SectionName)
+    .Get<UploadStorageOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{UploadStorageOptions.SectionName}' is invalid.");
+
+uploadStorageOptions.RootPath = uploadStorageOptions.ResolveRootPath(
+    builder.Environment.ContentRootPath,
+    builder.Environment.WebRootPath);
+uploadStorageOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
+builder.Services.AddSingleton(uploadStorageOptions);
+builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 
