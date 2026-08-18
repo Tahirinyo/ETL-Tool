@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using EtlTool.Application.Uploads;
 using EtlTool.Infrastructure.Uploads;
 
 namespace EtlTool.IntegrationTests.Uploads;
@@ -245,6 +246,60 @@ public sealed class LocalUploadStorageTests : IDisposable
 
         Assert.Equal("occupied", await File.ReadAllTextAsync(rootPath));
         Assert.True(content.CanRead);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RemovesGeneratedUploadAndIsIdempotentWhenMissing()
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var storage = CreateStorage(rootPath);
+        using var content = new MemoryStream([1, 2, 3]);
+        var upload = await storage.StoreAsync(content, "source.csv", CancellationToken.None);
+
+        await storage.DeleteAsync(upload, CancellationToken.None);
+        await storage.DeleteAsync(upload, CancellationToken.None);
+
+        Assert.False(File.Exists(upload.StoredFilePath));
+        Assert.Empty(Directory.EnumerateFiles(rootPath));
+    }
+
+    [Theory]
+    [InlineData("source.upload")]
+    [InlineData("../0123456789abcdef0123456789abcdef.upload")]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF.upload")]
+    public async Task DeleteAsync_RejectsNonGeneratedStoredFilename(string storedFileName)
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var storage = CreateStorage(rootPath);
+        var unrelatedPath = Path.Combine(_testDirectory, "unrelated.txt");
+        Directory.CreateDirectory(_testDirectory);
+        await File.WriteAllTextAsync(unrelatedPath, "keep");
+        var upload = new StoredUpload("source.csv", storedFileName, unrelatedPath, 4);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => storage.DeleteAsync(upload, CancellationToken.None));
+
+        Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedPath));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RejectsGeneratedNameWithPathOutsideStorageRoot()
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var storage = CreateStorage(rootPath);
+        var unrelatedPath = Path.Combine(_testDirectory, "unrelated.upload");
+        Directory.CreateDirectory(_testDirectory);
+        await File.WriteAllTextAsync(unrelatedPath, "keep");
+        var upload = new StoredUpload(
+            "source.csv",
+            $"{Guid.NewGuid():N}.upload",
+            unrelatedPath,
+            4);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => storage.DeleteAsync(upload, CancellationToken.None));
+
+        Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedPath));
     }
 
     [Fact]

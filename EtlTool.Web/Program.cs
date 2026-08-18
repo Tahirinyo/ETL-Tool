@@ -1,5 +1,6 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Uploads;
+using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Uploads;
 
@@ -27,11 +28,23 @@ uploadStorageOptions.RootPath = uploadStorageOptions.ResolveRootPath(
     builder.Environment.WebRootPath);
 uploadStorageOptions.Validate();
 
+var uploadValidationOptions = builder.Configuration
+    .GetRequiredSection(UploadValidationOptions.SectionName)
+    .Get<UploadValidationOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{UploadValidationOptions.SectionName}' is invalid.");
+
+uploadValidationOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
+builder.Services.AddSingleton(uploadValidationOptions);
+builder.Services.AddSingleton<CsvFileExtractor>();
+builder.Services.AddSingleton<XlsxFileExtractor>();
+builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 

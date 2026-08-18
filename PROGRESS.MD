@@ -15,6 +15,7 @@
 - Streaming XLSX extraction and explicit worksheet selection, including native cell values, header and sparse-row semantics, logical numbering, cancellation, stream ownership, and focused integration coverage, has been implemented and verified.
 - The opt-in 100,000-row extraction experiment has verified incremental CSV/XLSX consumption, collectible emitted rows, stable post-initialization live memory, early disposal, cancellation, and cleanup without requiring production extractor changes.
 - Secure local upload storage, including application-controlled names, leaf-only filename metadata, a configurable private root, streaming copy, cancellation, partial-file cleanup, and filesystem integration coverage, has been implemented and verified.
+- Server-side upload validation, including extension/source-type agreement, configurable byte and data-row limits, zero-byte rejection, production-extractor row semantics, structured rejection results, and safe rejected-file cleanup, has been implemented and verified.
 
 ## In Progress
 
