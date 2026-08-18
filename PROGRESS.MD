@@ -13,6 +13,7 @@
 - Basic pipeline CRUD MVC pages, including narrow form models, anti-forgery-protected create/edit/delete flows, aggregate-preserving edits, Bootstrap navigation, and focused controller coverage, have been implemented and verified.
 - CSV delimiter and source-culture support, including explicit comma/semicolon/tab parsing, invariant fallback, installed-specific-culture validation, and cross-delimiter parser regression coverage, has been implemented and verified.
 - Streaming XLSX extraction and explicit worksheet selection, including native cell values, header and sparse-row semantics, logical numbering, cancellation, stream ownership, and focused integration coverage, has been implemented and verified.
+- The opt-in 100,000-row extraction experiment has verified incremental CSV/XLSX consumption, collectible emitted rows, stable post-initialization live memory, early disposal, cancellation, and cleanup without requiring production extractor changes.
 
 ## In Progress
 
@@ -24,4 +25,4 @@
 
 ## Next
 
-- Characterize memory-controlled XLSX processing with the dedicated 100,000-row experiment (Task 3A.3).
+- Plan schema detection and basic type suggestion for the Day 4 Developer A work.
