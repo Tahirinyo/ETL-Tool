@@ -6,4 +6,8 @@ public interface IUploadStorage
         Stream content,
         string originalFileName,
         CancellationToken cancellationToken);
+
+    Task DeleteAsync(
+        StoredUpload upload,
+        CancellationToken cancellationToken);
 }

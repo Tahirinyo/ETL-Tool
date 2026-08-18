@@ -29,7 +29,7 @@ public sealed class LocalUploadStorage : IUploadStorage
             throw new ArgumentException("The uploaded content stream must be readable.", nameof(content));
         }
 
-        var normalizedOriginalFileName = GetLeafFileName(originalFileName);
+        var normalizedOriginalFileName = UploadFileName.GetLeafName(originalFileName);
         cancellationToken.ThrowIfCancellationRequested();
 
         Directory.CreateDirectory(_rootPath);
@@ -83,6 +83,37 @@ public sealed class LocalUploadStorage : IUploadStorage
         }
     }
 
+    public Task DeleteAsync(
+        StoredUpload upload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(upload);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!TryParseStoredFileName(upload.StoredFileName, out var expectedStoredFileName))
+        {
+            throw new ArgumentException(
+                "The stored upload filename is not a service-generated upload name.",
+                nameof(upload));
+        }
+
+        var expectedPath = Path.GetFullPath(Path.Combine(_rootPath, expectedStoredFileName));
+        var suppliedPath = Path.GetFullPath(upload.StoredFilePath);
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!string.Equals(expectedPath, suppliedPath, pathComparison))
+        {
+            throw new ArgumentException(
+                "The stored upload path does not match its generated filename and storage root.",
+                nameof(upload));
+        }
+
+        File.Delete(expectedPath);
+        return Task.CompletedTask;
+    }
+
     private PendingUpload CreatePendingUpload()
     {
         for (var attempt = 0; attempt < MaximumNameAttempts; attempt++)
@@ -121,23 +152,28 @@ public sealed class LocalUploadStorage : IUploadStorage
         throw new IOException("A unique upload filename could not be generated.");
     }
 
-    private static string GetLeafFileName(string originalFileName)
+    private static bool TryParseStoredFileName(
+        string storedFileName,
+        out string expectedStoredFileName)
     {
-        ArgumentNullException.ThrowIfNull(originalFileName);
+        expectedStoredFileName = string.Empty;
 
-        var normalizedSeparators = originalFileName.Replace('\\', '/');
-        var lastSeparator = normalizedSeparators.LastIndexOf('/');
-        var leafFileName = normalizedSeparators[(lastSeparator + 1)..];
-
-        if (string.IsNullOrWhiteSpace(leafFileName)
-            || leafFileName is "." or "..")
+        if (string.IsNullOrEmpty(storedFileName)
+            || Path.GetFileName(storedFileName) != storedFileName
+            || !storedFileName.EndsWith(".upload", StringComparison.Ordinal))
         {
-            throw new ArgumentException(
-                "The original filename must contain a non-empty leaf filename.",
-                nameof(originalFileName));
+            return false;
         }
 
-        return leafFileName;
+        var token = storedFileName[..^".upload".Length];
+
+        if (!Guid.TryParseExact(token, "N", out var identifier))
+        {
+            return false;
+        }
+
+        expectedStoredFileName = $"{identifier:N}.upload";
+        return string.Equals(storedFileName, expectedStoredFileName, StringComparison.Ordinal);
     }
 
     private sealed record PendingUpload(
