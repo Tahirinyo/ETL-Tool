@@ -11,6 +11,7 @@
 - MongoDB metadata persistence for pipeline definitions, including secret-safe configuration, asynchronous CRUD semantics, Infrastructure-only BSON mapping, and isolated Testcontainers integration coverage, has been implemented and verified.
 - Application pipeline CRUD services, including service-owned identity and timestamps, draft-level validation, update identity protection, and focused unit coverage, have been implemented and verified.
 - Basic pipeline CRUD MVC pages, including narrow form models, anti-forgery-protected create/edit/delete flows, aggregate-preserving edits, Bootstrap navigation, and focused controller coverage, have been implemented and verified.
+- CSV delimiter and source-culture support, including explicit comma/semicolon/tab parsing, invariant fallback, installed-specific-culture validation, and cross-delimiter parser regression coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -22,4 +23,4 @@
 
 ## Next
 
-- Extend source extraction with culture-aware CSV behavior and XLSX support.
+- Implement streaming XLSX extraction and worksheet selection.

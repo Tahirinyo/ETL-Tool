@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using CsvHelper;
@@ -29,7 +28,7 @@ public sealed class CsvFileExtractor : IFileExtractor
             throw new NotSupportedException("CSV extraction without a header row is not supported.");
         }
 
-        var configuration = new CsvConfiguration(CultureInfo.InvariantCulture)
+        var configuration = new CsvConfiguration(options.ResolveCulture())
         {
             Delimiter = GetDelimiter(options.Delimiter),
             DetectColumnCountChanges = false,
