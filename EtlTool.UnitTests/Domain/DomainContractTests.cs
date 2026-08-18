@@ -1,5 +1,7 @@
+using System.Globalization;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.UnitTests.Domain;
 
@@ -74,6 +76,62 @@ public sealed class DomainContractTests
         Assert.NotSame(first.FieldMappings, second.FieldMappings);
         Assert.NotSame(first.TransformationRules, second.TransformationRules);
         Assert.NotSame(first.ValidationRules, second.ValidationRules);
+    }
+
+    [Fact]
+    public void SourceOptions_ResolveCultureUsesInvariantForOmittedNullAndEmptyNames()
+    {
+        var omitted = new SourceOptions();
+        var explicitNull = new SourceOptions { CultureName = null! };
+        var empty = new SourceOptions { CultureName = string.Empty };
+
+        Assert.Same(CultureInfo.InvariantCulture, omitted.ResolveCulture());
+        Assert.Same(CultureInfo.InvariantCulture, explicitNull.ResolveCulture());
+        Assert.Same(CultureInfo.InvariantCulture, empty.ResolveCulture());
+    }
+
+    [Theory]
+    [InlineData("tr-TR", "tr-TR")]
+    [InlineData("TR-tr", "tr-TR")]
+    [InlineData("en-US", "en-US")]
+    public void SourceOptions_ResolveCultureReturnsCanonicalInstalledSpecificCulture(
+        string cultureName,
+        string expectedName)
+    {
+        var options = new SourceOptions { CultureName = cultureName };
+
+        var culture = options.ResolveCulture();
+
+        Assert.Equal(expectedName, culture.Name);
+        Assert.False(culture.IsNeutralCulture);
+        Assert.Equal(cultureName, options.CultureName);
+    }
+
+    [Fact]
+    public void SourceOptions_ResolveCultureDoesNotChangeCurrentCultures()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUiCulture = CultureInfo.CurrentUICulture;
+        var options = new SourceOptions { CultureName = "tr-TR" };
+
+        _ = options.ResolveCulture();
+
+        Assert.Equal(originalCulture, CultureInfo.CurrentCulture);
+        Assert.Equal(originalUiCulture, CultureInfo.CurrentUICulture);
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("tr")]
+    [InlineData("xx-XX")]
+    [InlineData("not-a-real-culture")]
+    public void SourceOptions_ResolveCultureRejectsUnsupportedNames(string cultureName)
+    {
+        var options = new SourceOptions { CultureName = cultureName };
+
+        var exception = Assert.Throws<CultureNotFoundException>(options.ResolveCulture);
+
+        Assert.Equal(cultureName, exception.InvalidCultureName);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using CsvHelper;
 using EtlTool.Application.Extraction;
@@ -33,13 +34,20 @@ public sealed class CsvFileExtractorTests
             });
     }
 
-    [Fact]
-    public async Task ReadAsync_UsesLogicalRecordNumbersForQuotedMultilineFields()
+    [Theory]
+    [InlineData(CsvDelimiter.Comma, ",")]
+    [InlineData(CsvDelimiter.Semicolon, ";")]
+    [InlineData(CsvDelimiter.Tab, "\t")]
+    public async Task ReadAsync_UsesLogicalRecordNumbersForQuotedMultilineFields(
+        CsvDelimiter delimiter,
+        string separator)
     {
-        using var stream = CreateStream("Id,Notes\r\n1,\"first line\r\nsecond line\"\r\n2,plain");
+        using var stream = CreateStream(
+            $"Id{separator}Notes\r\n1{separator}\"first line\r\nsecond line\"\r\n2{separator}plain");
         var extractor = new CsvFileExtractor();
 
-        var rows = await ReadAllAsync(extractor.ReadAsync(stream, CreateOptions(), CancellationToken.None));
+        var rows = await ReadAllAsync(
+            extractor.ReadAsync(stream, CreateOptions(delimiter), CancellationToken.None));
 
         Assert.Equal([2L, 3L], rows.Select(row => row.SourceRowNumber));
         Assert.Equal(
@@ -47,16 +55,25 @@ public sealed class CsvFileExtractorTests
             Assert.IsType<string>(rows[0].Values["Notes"]));
     }
 
-    [Fact]
-    public async Task ReadAsync_ParsesQuotedDelimitersAndEscapedQuotes()
+    [Theory]
+    [InlineData(CsvDelimiter.Comma, ",")]
+    [InlineData(CsvDelimiter.Semicolon, ";")]
+    [InlineData(CsvDelimiter.Tab, "\t")]
+    public async Task ReadAsync_ParsesQuotedDelimitersAndEscapedQuotes(
+        CsvDelimiter delimiter,
+        string separator)
     {
-        using var stream = CreateStream("Id,Description\n1,\"Doe, Jane said \"\"hello\"\"\"");
+        using var stream = CreateStream(
+            $"Id{separator}Description\n1{separator}\"left{separator}right said \"\"hello\"\"\"");
         var extractor = new CsvFileExtractor();
 
-        var rows = await ReadAllAsync(extractor.ReadAsync(stream, CreateOptions(), CancellationToken.None));
+        var rows = await ReadAllAsync(
+            extractor.ReadAsync(stream, CreateOptions(delimiter), CancellationToken.None));
 
         var row = Assert.Single(rows);
-        Assert.Equal("Doe, Jane said \"hello\"", Assert.IsType<string>(row.Values["Description"]));
+        Assert.Equal(
+            $"left{separator}right said \"hello\"",
+            Assert.IsType<string>(row.Values["Description"]));
     }
 
     [Fact]
@@ -89,6 +106,95 @@ public sealed class CsvFileExtractorTests
         var row = Assert.Single(rows);
         Assert.Equal("left", Assert.IsType<string>(row.Values["A"]));
         Assert.Equal("right", Assert.IsType<string>(row.Values["B"]));
+    }
+
+    [Fact]
+    public async Task ReadAsync_ProducesEquivalentRowsAcrossSupportedDelimiters()
+    {
+        (CsvDelimiter Delimiter, string Separator, string CultureName)[] configurations =
+        [
+            (CsvDelimiter.Comma, ",", "en-US"),
+            (CsvDelimiter.Semicolon, ";", "tr-TR"),
+            (CsvDelimiter.Tab, "\t", "en-US")
+        ];
+
+        foreach (var configuration in configurations)
+        {
+            using var stream = CreateStream(
+                $"Id{configuration.Separator}Name{configuration.Separator}City\n" +
+                $"1{configuration.Separator}Taha{configuration.Separator}Istanbul\n" +
+                $"2{configuration.Separator}Ayse{configuration.Separator}Ankara");
+            var extractor = new CsvFileExtractor();
+
+            var rows = await ReadAllAsync(
+                extractor.ReadAsync(
+                    stream,
+                    CreateOptions(configuration.Delimiter, configuration.CultureName),
+                    CancellationToken.None));
+
+            Assert.Collection(
+                rows,
+                row => AssertRow(row, 2, "1", "Taha", "Istanbul"),
+                row => AssertRow(row, 3, "2", "Ayse", "Ankara"));
+        }
+    }
+
+    [Theory]
+    [InlineData(CsvDelimiter.Semicolon, ";", "tr-TR", "1,25", "31.12.2026")]
+    [InlineData(CsvDelimiter.Comma, ",", "en-US", "1.25", "12/31/2026")]
+    public async Task ReadAsync_AcceptsConfiguredCultureAndKeepsValuesAsRawText(
+        CsvDelimiter delimiter,
+        string separator,
+        string cultureName,
+        string amount,
+        string date)
+    {
+        using var stream = CreateStream(
+            $"Amount{separator}Date\n{amount}{separator}{date}");
+        var extractor = new CsvFileExtractor();
+
+        var rows = await ReadAllAsync(
+            extractor.ReadAsync(
+                stream,
+                CreateOptions(delimiter, cultureName),
+                CancellationToken.None));
+
+        var row = Assert.Single(rows);
+        Assert.Equal(amount, Assert.IsType<string>(row.Values["Amount"]));
+        Assert.Equal(date, Assert.IsType<string>(row.Values["Date"]));
+    }
+
+    [Fact]
+    public async Task ReadAsync_OmittedDelimiterRemainsCommaForSemicolonListSeparatorCulture()
+    {
+        using var stream = CreateStream("A,B\nleft,right");
+        var extractor = new CsvFileExtractor();
+
+        var rows = await ReadAllAsync(
+            extractor.ReadAsync(
+                stream,
+                CreateOptions(cultureName: "tr-TR"),
+                CancellationToken.None));
+
+        var row = Assert.Single(rows);
+        Assert.Equal("left", Assert.IsType<string>(row.Values["A"]));
+        Assert.Equal("right", Assert.IsType<string>(row.Values["B"]));
+    }
+
+    [Fact]
+    public async Task ReadAsync_RejectsInvalidCultureBeforeReading()
+    {
+        using var stream = new TrackingMemoryStream(Encoding.UTF8.GetBytes("A,B\n1,2"));
+        var extractor = new CsvFileExtractor();
+
+        await Assert.ThrowsAsync<CultureNotFoundException>(
+            () => ReadAllAsync(
+                extractor.ReadAsync(
+                    stream,
+                    CreateOptions(cultureName: "xx-XX"),
+                    CancellationToken.None)));
+
+        Assert.Equal(0, stream.BytesRead);
     }
 
     [Fact]
@@ -298,14 +404,34 @@ public sealed class CsvFileExtractorTests
         Assert.InRange(stream.BytesRead, 1, stream.Length - 1);
     }
 
-    private static SourceOptions CreateOptions(CsvDelimiter? delimiter = null)
+    private static SourceOptions CreateOptions(
+        CsvDelimiter? delimiter = null,
+        string cultureName = "")
     {
-        return new SourceOptions { Delimiter = delimiter };
+        return new SourceOptions
+        {
+            Delimiter = delimiter,
+            CultureName = cultureName
+        };
     }
 
     private static MemoryStream CreateStream(string content)
     {
         return new MemoryStream(Encoding.UTF8.GetBytes(content));
+    }
+
+    private static void AssertRow(
+        DataRow row,
+        long sourceRowNumber,
+        string id,
+        string name,
+        string city)
+    {
+        Assert.Equal(sourceRowNumber, row.SourceRowNumber);
+        Assert.Equal(["Id", "Name", "City"], row.Values.Keys);
+        Assert.Equal(id, Assert.IsType<string>(row.Values["Id"]));
+        Assert.Equal(name, Assert.IsType<string>(row.Values["Name"]));
+        Assert.Equal(city, Assert.IsType<string>(row.Values["City"]));
     }
 
     private static async Task<List<DataRow>> ReadAllAsync(IAsyncEnumerable<DataRow> rows)
