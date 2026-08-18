@@ -29,6 +29,9 @@
     <Content Include="..\test-data\clean.xlsx"
              Link="TestData\clean.xlsx"
              CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\test-data\performance-100k.csv"
+             Link="TestData\performance-100k.csv"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
