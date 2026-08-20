@@ -52,14 +52,14 @@ public sealed class PipelinesController : Controller
         await using var content = model.SourceFile.OpenReadStream();
         if (model.SourceType == SourceType.Xlsx)
         {
-            var stage = await _sourceInspectionService.StageXlsxAsync(content, model.SourceFile.FileName, cancellationToken);
+            var stage = await _sourceInspectionService.StageXlsxAsync(id, content, model.SourceFile.FileName, cancellationToken);
             return ApplyInspection(model, stage);
         }
         var options = CreateCsvOptions(pipeline, model.Delimiter);
         var inspection = await _sourceInspectionService.InspectCsvAsync(content, model.SourceFile.FileName, options, cancellationToken);
         var result = ApplyInspection(model, inspection);
         if (inspection.IsSuccess
-            && !await SaveSourceAsync(id, pipeline, SourceType.Csv, options, cancellationToken))
+            && !await SaveSourceAsync(id, pipeline, SourceType.Csv, options, inspection.DetectedSchema, cancellationToken))
         {
             return NotFound();
         }
@@ -79,12 +79,23 @@ public sealed class PipelinesController : Controller
             ModelState.AddModelError(nameof(model.WorksheetName), "Choose a worksheet.");
             return View("Source", model);
         }
-        var inspection = await _sourceInspectionService.InspectStagedXlsxAsync(stageId, model.WorksheetName, cancellationToken);
+        var options = new SourceOptions
+        {
+            WorksheetName = model.WorksheetName,
+            FirstRowIsHeader = true,
+            CultureName = pipeline.SourceOptions.CultureName,
+            DateFormat = pipeline.SourceOptions.DateFormat
+        };
+        var inspection = await _sourceInspectionService.InspectStagedXlsxAsync(
+            id,
+            stageId,
+            model.WorksheetName,
+            cancellationToken,
+            options);
         var result = ApplyInspection(model, inspection);
         if (inspection.IsSuccess)
         {
-            var options = new SourceOptions { WorksheetName = model.WorksheetName, FirstRowIsHeader = true, CultureName = pipeline.SourceOptions.CultureName, DateFormat = pipeline.SourceOptions.DateFormat };
-            if (!await SaveSourceAsync(id, pipeline, SourceType.Xlsx, options, cancellationToken))
+            if (!await SaveSourceAsync(id, pipeline, SourceType.Xlsx, options, inspection.DetectedSchema, cancellationToken))
             {
                 return NotFound();
             }
@@ -109,10 +120,23 @@ public sealed class PipelinesController : Controller
     private static bool IsSupportedDelimiter(CsvDelimiter delimiter) =>
         delimiter is CsvDelimiter.Comma or CsvDelimiter.Semicolon or CsvDelimiter.Tab;
 
-    private async Task<bool> SaveSourceAsync(Guid id, PipelineDefinition pipeline, SourceType type, SourceOptions options, CancellationToken ct)
+    private async Task<bool> SaveSourceAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        SourceType type,
+        SourceOptions options,
+        IReadOnlyList<SourceFieldDefinition> schema,
+        CancellationToken ct)
     {
         pipeline.SourceType = type;
         pipeline.SourceOptions = options;
+        pipeline.ExpectedSchema = schema
+            .Select(field => new SourceFieldDefinition
+            {
+                Name = field.Name,
+                DataType = field.DataType
+            })
+            .ToList();
         return await _pipelineService.UpdateAsync(id, pipeline, ct);
     }
 

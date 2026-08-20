@@ -18,7 +18,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
     [Fact]
     public async Task InspectCsvAsync_UsesDelimiterBoundsSampleAndCleansStoredFile()
     {
-        var content = "Id;Name\n" + string.Join("\n", Enumerable.Range(1, 101).Select(i => $"{i};Name{i}"));
+        var content = "Id;Name\n" + string.Join("\n", Enumerable.Range(1, 101).Select(i => i == 101 ? $"later;Name{i}" : $"{i};Name{i}"));
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
         var service = CreateService();
 
@@ -28,6 +28,9 @@ public sealed class SourceInspectionServiceTests : IDisposable
         Assert.Equal(["Id", "Name"], result.Columns);
         Assert.Equal(100, result.SampleRows.Count);
         Assert.Equal("Name1", result.SampleRows[0].Values["Name"]);
+        Assert.Equal(
+            [SourceFieldType.Integer, SourceFieldType.String],
+            result.DetectedSchema.Select(field => field.DataType));
         Assert.Empty(Directory.EnumerateFiles(_root));
     }
 
@@ -63,7 +66,116 @@ public sealed class SourceInspectionServiceTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Equal(["SecondId"], result.Columns);
         Assert.Equal(2d, result.SampleRows.Single().Values["SecondId"]);
+        Assert.Equal(SourceFieldType.Integer, result.DetectedSchema.Single().DataType);
         Assert.Empty(Directory.EnumerateFiles(_root));
+    }
+
+    [Fact]
+    public async Task StagedXlsx_CrossPipelineSelectionIsRejectedWithoutConsumingOwnerStage()
+    {
+        var ownerPipelineId = Guid.NewGuid();
+        var otherPipelineId = Guid.NewGuid();
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var service = CreateService();
+
+        var stage = await service.StageXlsxAsync(
+            ownerPipelineId,
+            stream,
+            "source.xlsx",
+            CancellationToken.None);
+        var storedPath = Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+
+        var rejected = await service.InspectStagedXlsxAsync(
+            otherPipelineId,
+            stage.StageId!.Value,
+            "Data",
+            CancellationToken.None);
+
+        Assert.False(rejected.IsSuccess);
+        Assert.Contains("different pipeline", rejected.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(storedPath));
+
+        var selected = await service.InspectStagedXlsxAsync(
+            ownerPipelineId,
+            stage.StageId.Value,
+            "Data",
+            CancellationToken.None);
+
+        Assert.True(selected.IsSuccess);
+        Assert.Equal(["Id"], selected.Columns);
+        Assert.False(File.Exists(storedPath));
+    }
+
+    [Fact]
+    public async Task StagedXlsx_MissingExpiredAndConsumedStagesReturnControlledFailure()
+    {
+        var pipelineId = Guid.NewGuid();
+        var service = CreateService();
+
+        var missing = await service.InspectStagedXlsxAsync(
+            pipelineId,
+            Guid.NewGuid(),
+            "Data",
+            CancellationToken.None);
+
+        Assert.False(missing.IsSuccess);
+        Assert.Contains("expired", missing.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        await using var expiredStream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var expiredStage = await service.StageXlsxAsync(pipelineId, expiredStream, "expired.xlsx", CancellationToken.None);
+        _clock.Advance(TimeSpan.FromMinutes(16));
+
+        var expired = await service.InspectStagedXlsxAsync(
+            pipelineId,
+            expiredStage.StageId!.Value,
+            "Data",
+            CancellationToken.None);
+
+        Assert.False(expired.IsSuccess);
+        Assert.Contains("expired", expired.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+
+        await using var consumedStream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var consumedStage = await service.StageXlsxAsync(pipelineId, consumedStream, "consumed.xlsx", CancellationToken.None);
+        var consumed = await service.InspectStagedXlsxAsync(
+            pipelineId,
+            consumedStage.StageId!.Value,
+            "Data",
+            CancellationToken.None);
+        var repeated = await service.InspectStagedXlsxAsync(
+            pipelineId,
+            consumedStage.StageId.Value,
+            "Data",
+            CancellationToken.None);
+
+        Assert.True(consumed.IsSuccess);
+        Assert.False(repeated.IsSuccess);
+        Assert.Contains("expired", repeated.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task CsvAndXlsxInspection_ReturnCompatibleSchemaSuggestions()
+    {
+        await using var csvStream = new MemoryStream(Encoding.UTF8.GetBytes("Id,Amount,Name\n1,1.25,Ada"));
+        await using var xlsxStream = Create(
+            Sheet(
+                "Data",
+                Row(Text(1, "Id"), Text(2, "Amount"), Text(3, "Name")),
+                Row(Number(1, 1), Number(2, 1.25), Text(3, "Ada"))));
+        var service = CreateService();
+
+        var csv = await service.InspectCsvAsync(
+            csvStream,
+            "source.csv",
+            new SourceOptions { CultureName = "en-US", Delimiter = CsvDelimiter.Comma },
+            CancellationToken.None);
+        var stage = await service.StageXlsxAsync(xlsxStream, "source.xlsx", CancellationToken.None);
+        var xlsx = await service.InspectStagedXlsxAsync(stage.StageId!.Value, "Data", CancellationToken.None);
+
+        Assert.Equal(
+            csv.DetectedSchema.Select(field => (field.Name, field.DataType)),
+            xlsx.DetectedSchema.Select(field => (field.Name, field.DataType)));
     }
 
     [Fact]

@@ -48,6 +48,7 @@ builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
+builder.Services.AddSingleton<SourceSchemaInferenceService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
 builder.Services.AddHostedService<SourceInspectionCleanupService>();

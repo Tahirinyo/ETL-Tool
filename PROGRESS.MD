@@ -17,6 +17,7 @@
 - Secure local upload storage, including application-controlled names, leaf-only filename metadata, a configurable private root, streaming copy, cancellation, partial-file cleanup, and filesystem integration coverage, has been implemented and verified.
 - Server-side upload validation, including extension/source-type agreement, configurable byte and data-row limits, zero-byte rejection, production-extractor row semantics, structured rejection results, and safe rejected-file cleanup, has been implemented and verified.
 - Pipeline-scoped CSV/XLSX source upload and inspection, including CSV delimiter binding, staged XLSX worksheet selection, continuous pending/registered/in-use upload ownership, failure-atomic per-stage expiry cleanup, primary-error-preserving orphan recovery, resilient periodic cleanup, source columns, bounded raw samples, temporary upload cleanup, and focused MVC/extraction coverage, has been implemented and verified.
+- Schema detection and basic type suggestion, including ordered source schemas, conservative `Unknown`/`String`/`Integer`/`Decimal`/`Date` inference over the bounded inspection sample, configured culture/date-format handling, native XLSX values, successful-pipeline schema persistence, and focused unit/integration coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -24,8 +25,8 @@
 
 ## Blocked
 
-- None.
+- Full integration-suite verification is environment-blocked: Docker/Testcontainers cannot access `npipe://./pipe/docker_engine`, and the existing web binding tests end their local HTTP responses prematurely. Task-specific source-inspection tests pass.
 
 ## Next
 
-- Plan schema detection and basic type suggestion for the Day 4 Developer A work.
+- Implement the Day 4 Developer A mapping application service (Task 4A.2).
