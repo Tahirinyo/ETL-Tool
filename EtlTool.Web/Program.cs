@@ -1,8 +1,11 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Uploads;
+using EtlTool.Application.Sources;
 using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Uploads;
+using EtlTool.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -45,6 +48,9 @@ builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
+builder.Services.AddSingleton<SourceInspectionService>();
+builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
+builder.Services.AddHostedService<SourceInspectionCleanupService>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 

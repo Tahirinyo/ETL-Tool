@@ -10,6 +10,35 @@ namespace EtlTool.Infrastructure.Extraction;
 
 public sealed class CsvFileExtractor : IFileExtractor
 {
+    public async Task<IReadOnlyList<string>> ReadHeadersAsync(
+        Stream stream,
+        SourceOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!stream.CanRead)
+        {
+            throw new ArgumentException("The input stream must be readable.", nameof(stream));
+        }
+
+        var configuration = new CsvConfiguration(options.ResolveCulture())
+        {
+            Delimiter = GetDelimiter(options.Delimiter), DetectColumnCountChanges = false,
+            DetectDelimiter = false, HasHeaderRecord = true, IgnoreBlankLines = true
+        };
+        using var textReader = new StreamReader(stream, Encoding.UTF8, true, 1024, leaveOpen: true);
+        using var csvReader = new CsvReader(textReader, configuration, leaveOpen: true);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!await ReadNextAsync(csvReader).ConfigureAwait(false))
+        {
+            throw new InvalidDataException("The CSV input must contain a header record.");
+        }
+        var headers = ReadHeaders(csvReader);
+        ValidateHeaders(headers);
+        return headers;
+    }
+
     public async IAsyncEnumerable<DataRow> ReadAsync(
         Stream stream,
         SourceOptions options,

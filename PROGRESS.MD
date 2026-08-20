@@ -16,6 +16,7 @@
 - The opt-in 100,000-row extraction experiment has verified incremental CSV/XLSX consumption, collectible emitted rows, stable post-initialization live memory, early disposal, cancellation, and cleanup without requiring production extractor changes.
 - Secure local upload storage, including application-controlled names, leaf-only filename metadata, a configurable private root, streaming copy, cancellation, partial-file cleanup, and filesystem integration coverage, has been implemented and verified.
 - Server-side upload validation, including extension/source-type agreement, configurable byte and data-row limits, zero-byte rejection, production-extractor row semantics, structured rejection results, and safe rejected-file cleanup, has been implemented and verified.
+- Pipeline-scoped CSV/XLSX source upload and inspection, including CSV delimiter binding, staged XLSX worksheet selection, continuous pending/registered/in-use upload ownership, failure-atomic per-stage expiry cleanup, primary-error-preserving orphan recovery, resilient periodic cleanup, source columns, bounded raw samples, temporary upload cleanup, and focused MVC/extraction coverage, has been implemented and verified.
 
 ## In Progress
 

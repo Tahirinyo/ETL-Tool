@@ -1,12 +1,14 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Web.Controllers;
 using EtlTool.Web.Models.Pipelines;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
 
 namespace EtlTool.UnitTests.Web.Controllers;
 
@@ -373,8 +375,154 @@ public sealed class PipelinesControllerTests
         Assert.Equal(nameof(PipelinesController.Delete), deleteActionName?.Name);
 
         var constructor = Assert.Single(typeof(PipelinesController).GetConstructors());
-        var parameter = Assert.Single(constructor.GetParameters());
-        Assert.Equal(typeof(IPipelineService), parameter.ParameterType);
+        var parameters = constructor.GetParameters();
+        Assert.Equal(typeof(IPipelineService), parameters[0].ParameterType);
+        Assert.Equal(typeof(ISourceInspectionService), parameters[1].ParameterType);
+    }
+
+    [Theory]
+    [InlineData(CsvDelimiter.Comma)]
+    [InlineData(CsvDelimiter.Semicolon)]
+    [InlineData(CsvDelimiter.Tab)]
+    public async Task InspectSource_CsvForwardsSupportedDelimiterAndSurfacesColumnsAndRows(CsvDelimiter delimiter)
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Import" };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+        var file = new FormFile(new MemoryStream(System.Text.Encoding.UTF8.GetBytes("Id;Name\n1;Ada")), 0, 13, "SourceFile", "customers.csv");
+
+        var result = await controller.InspectSource(id, new SourceUploadViewModel
+        {
+            SourceType = SourceType.Csv, Delimiter = delimiter, SourceFile = file
+        }, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<SourceUploadViewModel>(view.Model);
+        Assert.Equal(delimiter, inspection.CsvOptions!.Delimiter);
+        Assert.Equal(["Id", "Name"], model.Columns);
+        Assert.Single(model.SampleRows);
+        Assert.Equal(SourceType.Csv, pipeline.SourceType);
+    }
+
+    [Fact]
+    public async Task SelectWorksheet_ForwardsSelectedWorksheetAndPersistsOnlySuccessfulInspection()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Keep me", Description = "Unchanged" };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+        var stageId = Guid.NewGuid();
+
+        var result = await controller.SelectWorksheet(id, new SourceUploadViewModel
+        {
+            StageId = stageId, WorksheetName = "Second"
+        }, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<SourceUploadViewModel>(view.Model);
+        Assert.Equal(stageId, inspection.StageId);
+        Assert.Equal("Second", inspection.WorksheetName);
+        Assert.Equal(SourceType.Xlsx, pipeline.SourceType);
+        Assert.Equal("Second", pipeline.SourceOptions.WorksheetName);
+        Assert.Equal("Keep me", pipeline.Name);
+        Assert.Equal("Unchanged", pipeline.Description);
+        Assert.Equal(["SecondId"], model.Columns);
+    }
+
+    [Fact]
+    public async Task InspectSource_CsvReturnsNotFoundWhenPipelineDisappearsDuringSave()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Keep me", Description = "Unchanged" };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(false)
+        };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+        var file = new FormFile(new MemoryStream(System.Text.Encoding.UTF8.GetBytes("Id,Name\n1,Ada")), 0, 13, "SourceFile", "customers.csv");
+
+        var result = await controller.InspectSource(id, new SourceUploadViewModel
+        {
+            SourceType = SourceType.Csv, Delimiter = CsvDelimiter.Comma, SourceFile = file
+        }, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Equal(1, service.UpdateCallCount);
+        Assert.Equal("Keep me", pipeline.Name);
+        Assert.Equal("Unchanged", pipeline.Description);
+    }
+
+    [Fact]
+    public async Task SelectWorksheet_ReturnsNotFoundWhenPipelineDisappearsDuringSave()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Keep me", Description = "Unchanged" };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(false)
+        };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+
+        var result = await controller.SelectWorksheet(id, new SourceUploadViewModel
+        {
+            StageId = Guid.NewGuid(), WorksheetName = "Second"
+        }, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Equal(1, service.UpdateCallCount);
+        Assert.Equal("Keep me", pipeline.Name);
+        Assert.Equal("Unchanged", pipeline.Description);
+    }
+
+    [Fact]
+    public async Task InspectSource_MissingFileDoesNotInspectOrPersist()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Import" };
+        var service = new RecordingPipelineService { GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline) };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+
+        var result = await controller.InspectSource(id, new SourceUploadViewModel { SourceType = SourceType.Csv }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.False(controller.ModelState.IsValid);
+        Assert.Null(inspection.CsvOptions);
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task InspectSource_UnsupportedDelimiterDoesNotInspectOrPersist()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition { Id = id, Name = "Import" };
+        var service = new RecordingPipelineService { GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline) };
+        var inspection = new RecordingSourceInspectionService();
+        var controller = new PipelinesController(service, inspection);
+        var file = new FormFile(new MemoryStream([1]), 0, 1, "SourceFile", "customers.csv");
+
+        var result = await controller.InspectSource(id, new SourceUploadViewModel
+        { SourceType = SourceType.Csv, Delimiter = (CsvDelimiter)999, SourceFile = file }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.False(controller.ModelState.IsValid);
+        Assert.Null(inspection.CsvOptions);
+        Assert.Equal(0, service.UpdateCallCount);
     }
 
     [Fact]
@@ -527,6 +675,30 @@ public sealed class PipelinesControllerTests
 
             return DeleteHandler?.Invoke(id, cancellationToken)
                 ?? Task.FromResult(false);
+        }
+    }
+
+    private sealed class RecordingSourceInspectionService : ISourceInspectionService
+    {
+        public SourceOptions? CsvOptions { get; private set; }
+        public Guid? StageId { get; private set; }
+        public string? WorksheetName { get; private set; }
+        public Task<SourceInspectionResult> InspectCsvAsync(Stream content, string fileName, SourceOptions options, CancellationToken cancellationToken)
+        {
+            CsvOptions = options;
+            var row = new EtlTool.Application.Extraction.DataRow { SourceRowNumber = 2 };
+            row.Values["Id"] = "1"; row.Values["Name"] = "Ada";
+            return Task.FromResult(new SourceInspectionResult { SourceType = SourceType.Csv, Columns = ["Id", "Name"], SampleRows = [row] });
+        }
+        public Task<SourceInspectionResult> StageXlsxAsync(Stream content, string fileName, CancellationToken cancellationToken) =>
+            Task.FromResult(new SourceInspectionResult { SourceType = SourceType.Xlsx, StageId = Guid.NewGuid(), WorksheetNames = ["Data"] });
+        public Task<SourceInspectionResult> InspectStagedXlsxAsync(Guid stageId, string worksheetName, CancellationToken cancellationToken)
+        {
+            StageId = stageId;
+            WorksheetName = worksheetName;
+            var row = new EtlTool.Application.Extraction.DataRow { SourceRowNumber = 2 };
+            row.Values["SecondId"] = "2";
+            return Task.FromResult(new SourceInspectionResult { SourceType = SourceType.Xlsx, Columns = ["SecondId"], SampleRows = [row] });
         }
     }
 }

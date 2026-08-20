@@ -1,0 +1,73 @@
+@model SourceUploadViewModel
+
+@{
+    ViewData["Title"] = "Configure source";
+    var pipelineId = Context.Request.RouteValues["id"];
+}
+
+<h1>Configure source</h1>
+<p class="text-muted">Upload a CSV or modern Excel workbook to inspect its columns and first 100 rows.</p>
+
+<div class="row"><div class="col-lg-9">
+    <form asp-action="InspectSource" asp-route-id="@pipelineId" method="post" enctype="multipart/form-data">
+        <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+        <div class="mb-3">
+            <label asp-for="SourceFile" class="form-label">Source file</label>
+            <input asp-for="SourceFile" class="form-control" accept=".csv,.xlsx" />
+            <span asp-validation-for="SourceFile" class="text-danger"></span>
+        </div>
+        <div class="mb-3">
+            <label asp-for="SourceType" class="form-label">File type</label>
+            <select asp-for="SourceType" class="form-select" id="source-type">
+                <option value="Csv">CSV</option><option value="Xlsx">Excel (.xlsx)</option>
+            </select>
+        </div>
+        <div class="mb-3" id="delimiter-group">
+            <label asp-for="Delimiter" class="form-label">CSV delimiter</label>
+            <select asp-for="Delimiter" class="form-select">
+                <option value="Comma">Comma</option><option value="Semicolon">Semicolon</option><option value="Tab">Tab</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Upload and inspect</button>
+        <a class="btn btn-outline-secondary" asp-action="Edit" asp-route-id="@pipelineId">Back to pipeline</a>
+    </form>
+
+    @if (Model.StageId is not null && Model.WorksheetNames.Count > 0)
+    {
+        <hr />
+        <form asp-action="SelectWorksheet" asp-route-id="@pipelineId" method="post">
+            <input asp-for="StageId" type="hidden" />
+            <div class="mb-3">
+                <label asp-for="WorksheetName" class="form-label">Worksheet</label>
+                <select asp-for="WorksheetName" class="form-select">
+                    <option value="">Select a worksheet</option>
+                    @foreach (var worksheet in Model.WorksheetNames) { <option value="@worksheet">@worksheet</option> }
+                </select>
+                <span asp-validation-for="WorksheetName" class="text-danger"></span>
+            </div>
+            <button type="submit" class="btn btn-primary">Read worksheet</button>
+        </form>
+    }
+
+    @if (Model.Columns.Count > 0)
+    {
+        <hr /><h2 class="h4">Detected columns</h2>
+        <p>@string.Join(", ", Model.Columns)</p>
+        <h2 class="h4">Sample rows</h2>
+        <div class="table-responsive"><table class="table table-sm table-striped">
+            <thead><tr><th>Row</th>@foreach (var column in Model.Columns) { <th>@column</th> }</tr></thead>
+            <tbody>@foreach (var row in Model.SampleRows) { <tr><td>@row.SourceRowNumber</td>@foreach (var value in row.Values) { <td>@value</td> }</tr> }</tbody>
+        </table></div>
+        @if (Model.SampleRows.Count == 0) { <p class="text-muted">The source contains headers but no data rows.</p> }
+    }
+</div></div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+    <script>
+        const type = document.getElementById('source-type');
+        const delimiter = document.getElementById('delimiter-group');
+        const sync = () => delimiter.hidden = type.value !== 'Csv';
+        type.addEventListener('change', sync); sync();
+    </script>
+}

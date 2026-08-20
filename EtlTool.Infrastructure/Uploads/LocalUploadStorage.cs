@@ -8,6 +8,8 @@ public sealed class LocalUploadStorage : IUploadStorage
     private const int MaximumNameAttempts = 10;
 
     private readonly string _rootPath;
+    private readonly object _ownershipLock = new();
+    private readonly HashSet<string> _ownedStoredFileNames = new(StringComparer.Ordinal);
 
     public LocalUploadStorage(UploadStorageOptions options)
     {
@@ -53,7 +55,22 @@ public sealed class LocalUploadStorage : IUploadStorage
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(pendingUpload.PendingPath, pendingUpload.FinalPath, overwrite: false);
+            lock (_ownershipLock)
+            {
+                // Final-name publication and ownership acquisition are atomic with orphan deletion.
+                _ownedStoredFileNames.Add(pendingUpload.StoredFileName);
+
+                try
+                {
+                    File.Move(pendingUpload.PendingPath, pendingUpload.FinalPath, overwrite: false);
+                }
+                catch
+                {
+                    _ownedStoredFileNames.Remove(pendingUpload.StoredFileName);
+                    throw;
+                }
+            }
+
             pendingPath = null;
 
             return new StoredUpload(
@@ -110,7 +127,49 @@ public sealed class LocalUploadStorage : IUploadStorage
                 nameof(upload));
         }
 
-        File.Delete(expectedPath);
+        lock (_ownershipLock)
+        {
+            // The caller has finished using the upload; a failed delete leaves an unowned orphan
+            // that a later age-based cleanup pass can retry.
+            _ownedStoredFileNames.Remove(expectedStoredFileName);
+            File.Delete(expectedPath);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteExpiredAsync(
+        DateTimeOffset expiresBefore,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(_rootPath))
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(_rootPath, "*.upload", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fileName = Path.GetFileName(path);
+            if (!TryParseStoredFileName(fileName, out _))
+            {
+                continue;
+            }
+
+            lock (_ownershipLock)
+            {
+                if (_ownedStoredFileNames.Contains(fileName)
+                    || !File.Exists(path)
+                    || File.GetLastWriteTimeUtc(path) > expiresBefore.UtcDateTime)
+                {
+                    continue;
+                }
+
+                File.Delete(path);
+            }
+        }
+
         return Task.CompletedTask;
     }
 
