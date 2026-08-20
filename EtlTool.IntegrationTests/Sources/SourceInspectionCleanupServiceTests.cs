@@ -39,6 +39,7 @@ public sealed class SourceInspectionCleanupServiceTests : IDisposable
         await service.StartAsync(CancellationToken.None);
 
         Assert.Equal(1, storage.CleanupCallCount);
+        await timeProvider.TimerCreated.WaitAsync(TimeSpan.FromSeconds(5));
         timeProvider.Tick();
         await storage.SuccessfulCleanup.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await service.StopAsync(CancellationToken.None);
@@ -88,6 +89,10 @@ public sealed class SourceInspectionCleanupServiceTests : IDisposable
     private sealed class ManualTimerTimeProvider : TimeProvider
     {
         private ManualTimer? _timer;
+        private readonly TaskCompletionSource _timerCreated =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task TimerCreated => _timerCreated.Task;
 
         public override ITimer CreateTimer(
             TimerCallback callback,
@@ -97,6 +102,7 @@ public sealed class SourceInspectionCleanupServiceTests : IDisposable
         {
             var timer = new ManualTimer(callback, state);
             Volatile.Write(ref _timer, timer);
+            _timerCreated.TrySetResult();
             return timer;
         }
 
