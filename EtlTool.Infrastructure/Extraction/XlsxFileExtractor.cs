@@ -16,6 +16,46 @@ public sealed class XlsxFileExtractor : IFileExtractor
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
 
+    public async Task<IReadOnlyList<string>> ReadHeadersAsync(
+        Stream stream,
+        SourceOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrWhiteSpace(options.WorksheetName))
+        {
+            throw new ArgumentException("An XLSX worksheet name must be configured.", nameof(options));
+        }
+        await Task.CompletedTask.ConfigureAwait(false);
+        using var reader = CreateReader(stream);
+        if (!MoveToWorksheet(reader, options.WorksheetName, cancellationToken) || !Read(reader, cancellationToken))
+        {
+            throw new InvalidDataException($"The XLSX worksheet '{options.WorksheetName}' must contain a header row.");
+        }
+        return ReadHeaders(reader);
+    }
+
+    public async Task<IReadOnlyList<string>> GetWorksheetNamesAsync(
+        Stream stream,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead || !stream.CanSeek)
+        {
+            throw new ArgumentException("The XLSX input stream must be readable and seekable.", nameof(stream));
+        }
+        await Task.CompletedTask.ConfigureAwait(false);
+        using var reader = CreateReader(stream);
+        var names = new List<string>();
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            names.Add(reader.Name);
+        } while (TranslateFormatErrors(reader.NextResult));
+        return names;
+    }
+
     public async IAsyncEnumerable<DataRow> ReadAsync(
         Stream stream,
         SourceOptions options,

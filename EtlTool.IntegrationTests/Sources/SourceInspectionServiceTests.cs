@@ -1,0 +1,672 @@
+using System.Text;
+using EtlTool.Application.Sources;
+using EtlTool.Application.Uploads;
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.Sources;
+using EtlTool.Infrastructure.Uploads;
+using static EtlTool.IntegrationTests.Extraction.OpenXmlWorkbookFixture;
+
+namespace EtlTool.IntegrationTests.Sources;
+
+public sealed class SourceInspectionServiceTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"EtlTool-SourceInspection-{Guid.NewGuid():N}");
+    private readonly TestTimeProvider _clock = new(new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.Zero));
+
+    [Fact]
+    public async Task InspectCsvAsync_UsesDelimiterBoundsSampleAndCleansStoredFile()
+    {
+        var content = "Id;Name\n" + string.Join("\n", Enumerable.Range(1, 101).Select(i => $"{i};Name{i}"));
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+        var service = CreateService();
+
+        var result = await service.InspectCsvAsync(stream, "customers.csv", new SourceOptions { Delimiter = CsvDelimiter.Semicolon }, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(["Id", "Name"], result.Columns);
+        Assert.Equal(100, result.SampleRows.Count);
+        Assert.Equal("Name1", result.SampleRows[0].Values["Name"]);
+        Assert.Empty(Directory.EnumerateFiles(_root));
+    }
+
+    [Fact]
+    public async Task InspectCsvAsync_UndefinedDelimiterReturnsControlledFailureWithoutStoring()
+    {
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1"));
+        var service = CreateService();
+
+        var result = await service.InspectCsvAsync(
+            stream, "customers.csv", new SourceOptions { Delimiter = (CsvDelimiter)999 }, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("comma", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(_root));
+    }
+
+    [Fact]
+    public async Task StagedXlsx_SelectsRequestedWorksheetAndCleansStoredFile()
+    {
+        await using var stream = Create(
+            Sheet("First", Row(Text(1, "FirstId")), Row(Number(1, 1))),
+            Sheet("Second", Row(Text(1, "SecondId")), Row(Number(1, 2))));
+        var service = CreateService();
+
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+        Assert.True(stage.IsSuccess);
+        Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+
+        var result = await service.InspectStagedXlsxAsync(stage.StageId!.Value, "Second", CancellationToken.None);
+
+        Assert.Equal(["First", "Second"], stage.WorksheetNames);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(["SecondId"], result.Columns);
+        Assert.Equal(2d, result.SampleRows.Single().Values["SecondId"]);
+        Assert.Empty(Directory.EnumerateFiles(_root));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_IsProtectedFromOrphanCleanupAndBecomesSelectable()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var blockingStorage = new BlockingAfterStoreStorage(localStorage);
+        var service = CreateService(blockingStorage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var stagingTask = service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+
+        var upload = await blockingStorage.Stored.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        File.SetLastWriteTimeUtc(upload.StoredFilePath, _clock.GetUtcNow().AddMinutes(-16).UtcDateTime);
+
+        try
+        {
+            await service.PurgeExpiredAsync();
+            await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+            Assert.True(File.Exists(upload.StoredFilePath));
+        }
+        finally
+        {
+            blockingStorage.Continue.TrySetResult();
+        }
+
+        var stage = await stagingTask;
+        Assert.True(stage.IsSuccess);
+
+        var selected = await service.InspectStagedXlsxAsync(
+            stage.StageId!.Value,
+            "Data",
+            CancellationToken.None);
+
+        Assert.True(selected.IsSuccess);
+        Assert.False(File.Exists(upload.StoredFilePath));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_CancellationDeletesUploadAndPropagatesCancellation()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        using var cancellationSource = new CancellationTokenSource();
+        var storage = new CancelAfterStoreStorage(localStorage, cancellationSource);
+        var service = CreateService(storage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.StageXlsxAsync(stream, "source.xlsx", cancellationSource.Token));
+
+        Assert.NotNull(storage.StoredUpload);
+        Assert.False(File.Exists(storage.StoredUpload.StoredFilePath));
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_CancellationRemainsAuthoritativeWhenDeletionFails()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var failingDeletion = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        using var cancellationSource = new CancellationTokenSource();
+        var storage = new CancelAfterStoreStorage(failingDeletion, cancellationSource);
+        var service = CreateService(storage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.StageXlsxAsync(stream, "source.xlsx", cancellationSource.Token));
+
+        Assert.Contains(exception.Data.Values.Cast<object>(), value => value is IOException);
+        Assert.NotNull(failingDeletion.LastFailedUploadPath);
+        Assert.True(File.Exists(failingDeletion.LastFailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(failingDeletion.LastFailedUploadPath));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_MalformedWorkbookDeletesOwnedUploadAndReturnsFailure()
+    {
+        var service = CreateService();
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("not-an-xlsx-workbook"));
+
+        var result = await service.StageXlsxAsync(
+            stream,
+            "source.xlsx",
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("malformed", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_MalformedFailureRemainsAuthoritativeWhenDeletionFails()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var service = CreateService(storage);
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("not-an-xlsx-workbook"));
+
+        var result = await service.StageXlsxAsync(
+            stream,
+            "source.xlsx",
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("malformed", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(storage.LastFailedUploadPath);
+        Assert.True(File.Exists(storage.LastFailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(storage.LastFailedUploadPath));
+    }
+
+    [Fact]
+    public async Task PendingWorksheetDiscovery_SourceExceptionRemainsAuthoritativeWhenDeletionFails()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new MissingBeforeDiscoveryThenFailDeleteStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16));
+        var service = CreateService(storage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+
+        var exception = await Assert.ThrowsAsync<FileNotFoundException>(
+            () => service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None));
+
+        Assert.Contains(exception.Data.Values.Cast<object>(), value => value is IOException);
+        Assert.NotNull(storage.FailedUploadPath);
+        Assert.True(File.Exists(storage.FailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(storage.FailedUploadPath));
+    }
+
+    [Fact]
+    public async Task PurgeExpiredAsync_RemovesExpiredRegisteredStage()
+    {
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var service = CreateService();
+
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        await service.PurgeExpiredAsync();
+
+        Assert.True(stage.IsSuccess);
+        Assert.Empty(Directory.EnumerateFiles(_root));
+    }
+
+    [Fact]
+    public async Task PurgeExpiredAsync_FirstDeletionFailureDoesNotStrandLaterExpiredStages()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var service = CreateService(storage);
+        await using var firstStream = Create(Sheet("First", Row(Text(1, "Id")), Row(Number(1, 1))));
+        await using var secondStream = Create(Sheet("Second", Row(Text(1, "Id")), Row(Number(1, 2))));
+        var first = await service.StageXlsxAsync(firstStream, "first.xlsx", CancellationToken.None);
+        var second = await service.StageXlsxAsync(secondStream, "second.xlsx", CancellationToken.None);
+        _clock.Advance(TimeSpan.FromMinutes(16));
+
+        await Assert.ThrowsAsync<IOException>(service.PurgeExpiredAsync);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.Equal(2, storage.DeleteCallCount);
+        Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+        await service.PurgeExpiredAsync();
+
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task PurgeOrphanedUploadsAsync_RemovesExpiredGeneratedUploadAfterRestartAndPreservesUnrelatedFiles()
+    {
+        var storage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        await using var content = new MemoryStream([1, 2, 3]);
+        var orphan = await storage.StoreAsync(content, "source.xlsx", CancellationToken.None);
+        var unrelatedInsideRoot = Path.Combine(_root, "keep.txt");
+        var unrelatedOutsideRoot = $"{_root}-outside.upload";
+        await File.WriteAllTextAsync(unrelatedInsideRoot, "keep");
+        await File.WriteAllTextAsync(unrelatedOutsideRoot, "keep");
+        File.SetLastWriteTimeUtc(orphan.StoredFilePath, _clock.GetUtcNow().AddMinutes(-16).UtcDateTime);
+        var restartedStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var restartedService = CreateService(restartedStorage);
+
+        try
+        {
+            await restartedService.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+            Assert.False(File.Exists(orphan.StoredFilePath));
+            Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedInsideRoot));
+            Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedOutsideRoot));
+        }
+        finally
+        {
+            File.Delete(unrelatedOutsideRoot);
+        }
+    }
+
+    [Fact]
+    public async Task PeriodicCleanup_RemovesRestartOrphanAfterItExpires()
+    {
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var serviceBeforeRestart = CreateService();
+        var stage = await serviceBeforeRestart.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+        var storedPath = Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+        File.SetLastWriteTimeUtc(storedPath, _clock.GetUtcNow().UtcDateTime);
+        var serviceAfterRestart = CreateService();
+
+        await serviceAfterRestart.PurgeOrphanedUploadsAsync(CancellationToken.None);
+        Assert.True(File.Exists(storedPath));
+
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        await serviceAfterRestart.PurgeExpiredAsync();
+        await serviceAfterRestart.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.True(stage.IsSuccess);
+        Assert.False(File.Exists(storedPath));
+    }
+
+    [Fact]
+    public async Task PeriodicCleanup_PreservesRegisteredStageWhoseFileTimestampPredatesItsExpiry()
+    {
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var service = CreateService();
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+        var storedPath = Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+        File.SetLastWriteTimeUtc(storedPath, _clock.GetUtcNow().AddMinutes(-16).UtcDateTime);
+
+        await service.PurgeExpiredAsync();
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.True(stage.IsSuccess);
+        Assert.True(File.Exists(storedPath));
+
+        var selected = await service.InspectStagedXlsxAsync(stage.StageId!.Value, "Data", CancellationToken.None);
+        Assert.True(selected.IsSuccess);
+        Assert.False(File.Exists(storedPath));
+    }
+
+    [Fact]
+    public async Task PeriodicCleanup_PreservesUploadWhileStagedSelectionIsActivelyInspecting()
+    {
+        var storage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var csv = new CsvFileExtractor();
+        var xlsx = new XlsxFileExtractor();
+        IUploadValidationService validation = new UploadValidationService(
+            storage,
+            new UploadValidationOptions { MaxFileSizeBytes = 1024 * 1024, MaxDataRowCount = 100_000 },
+            csv,
+            xlsx);
+        var blockingValidation = new BlockingStoredValidationService(validation);
+        var service = new SourceInspectionService(blockingValidation, storage, csv, xlsx, _clock);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+        var storedPath = Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+
+        var inspectionTask = service.InspectStagedXlsxAsync(
+            stage.StageId!.Value,
+            "Data",
+            CancellationToken.None);
+        await blockingValidation.InspectionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        File.SetLastWriteTimeUtc(storedPath, _clock.GetUtcNow().AddMinutes(-16).UtcDateTime);
+
+        try
+        {
+            await service.PurgeExpiredAsync();
+            await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+            Assert.True(File.Exists(storedPath));
+        }
+        finally
+        {
+            blockingValidation.Continue.TrySetResult();
+        }
+
+        var result = await inspectionTask;
+        Assert.True(result.IsSuccess);
+        Assert.False(File.Exists(storedPath));
+    }
+
+    [Fact]
+    public async Task ActiveInspectionFailure_RemainsAuthoritativeWhenDeletionFailsAndOrphanIsRecoverable()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var csv = new CsvFileExtractor();
+        var xlsx = new XlsxFileExtractor();
+        IUploadValidationService validation = new UploadValidationService(
+            storage,
+            new UploadValidationOptions { MaxFileSizeBytes = 1024 * 1024, MaxDataRowCount = 100_000 },
+            csv,
+            xlsx);
+        var failingValidation = new FailingStoredValidationService(validation);
+        var service = new SourceInspectionService(failingValidation, storage, csv, xlsx, _clock);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<IOException>(
+            () => service.InspectStagedXlsxAsync(
+                stage.StageId!.Value,
+                "Data",
+                CancellationToken.None));
+
+        Assert.Same(failingValidation.InspectionFailure, exception);
+        Assert.Contains(exception.Data.Values.Cast<object>(), value => value is IOException);
+        Assert.NotNull(storage.LastFailedUploadPath);
+        Assert.True(File.Exists(storage.LastFailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(storage.LastFailedUploadPath));
+    }
+
+    [Fact]
+    public async Task ActiveInspectionValidationFailure_RemainsControlledWhenDeletionFails()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var service = CreateService(storage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+
+        var result = await service.InspectStagedXlsxAsync(
+            stage.StageId!.Value,
+            "Missing",
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("malformed", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(storage.LastFailedUploadPath);
+        Assert.True(File.Exists(storage.LastFailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(storage.LastFailedUploadPath));
+    }
+
+    [Fact]
+    public async Task SuccessfulInspection_StillSurfacesDeletionFailureAndLeavesRecoverableOrphan()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var service = CreateService(storage);
+        await using var stream = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+        var stage = await service.StageXlsxAsync(stream, "source.xlsx", CancellationToken.None);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => service.InspectStagedXlsxAsync(
+                stage.StageId!.Value,
+                "Data",
+                CancellationToken.None));
+
+        Assert.NotNull(storage.LastFailedUploadPath);
+        Assert.True(File.Exists(storage.LastFailedUploadPath));
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(storage.LastFailedUploadPath));
+    }
+
+    private SourceInspectionService CreateService(
+        IUploadStorage? storage = null,
+        IUploadValidationService? validation = null)
+    {
+        storage ??= new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var csv = new CsvFileExtractor();
+        var xlsx = new XlsxFileExtractor();
+        validation ??= new UploadValidationService(storage, new UploadValidationOptions
+        {
+            MaxFileSizeBytes = 1024 * 1024, MaxDataRowCount = 100_000
+        }, csv, xlsx);
+        return new SourceInspectionService(validation, storage, csv, xlsx, _clock);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+    }
+
+    private sealed class TestTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan duration) => _now = _now.Add(duration);
+    }
+
+    private sealed class BlockingAfterStoreStorage(IUploadStorage inner) : IUploadStorage
+    {
+        public TaskCompletionSource<StoredUpload> Stored { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Continue { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<StoredUpload> StoreAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken)
+        {
+            var upload = await inner.StoreAsync(content, originalFileName, cancellationToken);
+            Stored.TrySetResult(upload);
+            await Continue.Task.WaitAsync(cancellationToken);
+            return upload;
+        }
+
+        public Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken) =>
+            inner.DeleteAsync(upload, cancellationToken);
+
+        public Task DeleteExpiredAsync(DateTimeOffset expiresBefore, CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
+    }
+
+    private sealed class CancelAfterStoreStorage(
+        IUploadStorage inner,
+        CancellationTokenSource cancellationSource) : IUploadStorage
+    {
+        public StoredUpload? StoredUpload { get; private set; }
+
+        public async Task<StoredUpload> StoreAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken)
+        {
+            StoredUpload = await inner.StoreAsync(content, originalFileName, cancellationToken);
+            cancellationSource.Cancel();
+            return StoredUpload;
+        }
+
+        public Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken) =>
+            inner.DeleteAsync(upload, cancellationToken);
+
+        public Task DeleteExpiredAsync(DateTimeOffset expiresBefore, CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
+    }
+
+    private sealed class BlockingStoredValidationService(IUploadValidationService inner) : IUploadValidationService
+    {
+        public TaskCompletionSource InspectionStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Continue { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<XlsxWorksheetStageResult> StoreForWorksheetSelectionAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken) =>
+            inner.StoreForWorksheetSelectionAsync(content, originalFileName, cancellationToken);
+
+        public async Task<UploadValidationResult> ValidateStoredAsync(
+            StoredUpload upload,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken)
+        {
+            await using var activeRead = new FileStream(
+                upload.StoredFilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var buffer = new byte[1];
+            _ = await activeRead.ReadAsync(buffer, cancellationToken);
+            InspectionStarted.TrySetResult();
+            await Continue.Task.WaitAsync(cancellationToken);
+            return await inner.ValidateStoredAsync(upload, sourceType, sourceOptions, cancellationToken);
+        }
+
+        public Task<UploadValidationResult> StoreValidatedAsync(
+            Stream content,
+            string originalFileName,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken) =>
+            inner.StoreValidatedAsync(content, originalFileName, sourceType, sourceOptions, cancellationToken);
+    }
+
+    private sealed class FailingStoredValidationService(IUploadValidationService inner) : IUploadValidationService
+    {
+        public IOException InspectionFailure { get; } = new("Inspection read failed.");
+
+        public Task<XlsxWorksheetStageResult> StoreForWorksheetSelectionAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken) =>
+            inner.StoreForWorksheetSelectionAsync(content, originalFileName, cancellationToken);
+
+        public async Task<UploadValidationResult> ValidateStoredAsync(
+            StoredUpload upload,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken)
+        {
+            await using var stream = File.OpenRead(upload.StoredFilePath);
+            var buffer = new byte[1];
+            _ = await stream.ReadAsync(buffer, cancellationToken);
+            throw InspectionFailure;
+        }
+
+        public Task<UploadValidationResult> StoreValidatedAsync(
+            Stream content,
+            string originalFileName,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken) =>
+            inner.StoreValidatedAsync(content, originalFileName, sourceType, sourceOptions, cancellationToken);
+    }
+
+    private sealed class ReleaseThenFailStorage(
+        IUploadStorage inner,
+        DateTimeOffset orphanLastWriteTime,
+        int failureCount) : IUploadStorage
+    {
+        private int _remainingFailures = failureCount;
+
+        public int DeleteCallCount { get; private set; }
+        public string? LastFailedUploadPath { get; private set; }
+
+        public Task<StoredUpload> StoreAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken) =>
+            inner.StoreAsync(content, originalFileName, cancellationToken);
+
+        public async Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken)
+        {
+            DeleteCallCount++;
+
+            if (_remainingFailures-- <= 0)
+            {
+                await inner.DeleteAsync(upload, cancellationToken);
+                return;
+            }
+
+            var content = await File.ReadAllBytesAsync(upload.StoredFilePath, cancellationToken);
+            await inner.DeleteAsync(upload, cancellationToken);
+            await File.WriteAllBytesAsync(upload.StoredFilePath, content, CancellationToken.None);
+            File.SetLastWriteTimeUtc(upload.StoredFilePath, orphanLastWriteTime.UtcDateTime);
+            LastFailedUploadPath = upload.StoredFilePath;
+            throw new IOException("Simulated physical deletion failure after ownership release.");
+        }
+
+        public Task DeleteExpiredAsync(DateTimeOffset expiresBefore, CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
+    }
+
+    private sealed class MissingBeforeDiscoveryThenFailDeleteStorage(
+        IUploadStorage inner,
+        DateTimeOffset orphanLastWriteTime) : IUploadStorage
+    {
+        private byte[]? _storedContent;
+
+        public string? FailedUploadPath { get; private set; }
+
+        public async Task<StoredUpload> StoreAsync(
+            Stream content,
+            string originalFileName,
+            CancellationToken cancellationToken)
+        {
+            var upload = await inner.StoreAsync(content, originalFileName, cancellationToken);
+            _storedContent = await File.ReadAllBytesAsync(upload.StoredFilePath, cancellationToken);
+            File.Delete(upload.StoredFilePath);
+            return upload;
+        }
+
+        public async Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken)
+        {
+            await inner.DeleteAsync(upload, cancellationToken);
+            await File.WriteAllBytesAsync(
+                upload.StoredFilePath,
+                _storedContent ?? [],
+                CancellationToken.None);
+            File.SetLastWriteTimeUtc(upload.StoredFilePath, orphanLastWriteTime.UtcDateTime);
+            FailedUploadPath = upload.StoredFilePath;
+            throw new IOException("Simulated physical deletion failure after ownership release.");
+        }
+
+        public Task DeleteExpiredAsync(DateTimeOffset expiresBefore, CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
+    }
+}

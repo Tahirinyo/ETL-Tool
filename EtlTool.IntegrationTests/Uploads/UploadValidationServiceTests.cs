@@ -369,6 +369,27 @@ public sealed class UploadValidationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StoreForWorksheetSelectionAsync_CancellationAfterStorageDeletesFinalUpload()
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var localStorage = CreateStorage(rootPath);
+        using var cancellationSource = new CancellationTokenSource();
+        var storage = new CancelAfterStoreStorage(localStorage, cancellationSource);
+        var service = CreateService(storage);
+        using var content = Create(Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 1))));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.StoreForWorksheetSelectionAsync(
+                content,
+                "source.xlsx",
+                cancellationSource.Token));
+
+        Assert.True(storage.DeleteCalled);
+        Assert.Empty(Directory.EnumerateFiles(rootPath));
+        Assert.True(content.CanRead);
+    }
+
+    [Fact]
     public async Task StoreValidatedAsync_PreCancelledTokenCreatesNoStorage()
     {
         var (service, _, rootPath) = CreateService();
@@ -408,27 +429,32 @@ public sealed class UploadValidationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StoreValidatedAsync_CleanupFailureCarriesValidationAndCleanupFailures()
+    public async Task StoreValidatedAsync_CleanupFailurePreservesValidationResultAndLeavesRecoverableOrphan()
     {
         var rootPath = Path.Combine(_testDirectory, "uploads");
         var localStorage = CreateStorage(rootPath);
-        var cleanupFailure = new IOException("Cleanup failed.");
-        var storage = new DeleteFailingStorage(localStorage, cleanupFailure);
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            DateTimeOffset.UtcNow.AddMinutes(-16));
         var service = CreateService(storage);
         using var content = Csv("A,B\n1,bad\"value");
 
-        var exception = await Assert.ThrowsAsync<IOException>(
-            () => service.StoreValidatedAsync(
-                content,
-                "source.csv",
-                SourceType.Csv,
-                new SourceOptions(),
-                CancellationToken.None));
+        var result = await service.StoreValidatedAsync(
+            content,
+            "source.csv",
+            SourceType.Csv,
+            new SourceOptions(),
+            CancellationToken.None);
 
-        var failures = Assert.IsType<AggregateException>(exception.InnerException).InnerExceptions;
-        Assert.Contains(failures, failure => failure is InvalidDataException);
-        Assert.Contains(cleanupFailure, failures);
-        Assert.Single(Directory.EnumerateFiles(rootPath, "*.upload"));
+        AssertRejected(result, UploadValidationFailureCode.InvalidSourceFile);
+        Assert.NotNull(storage.FailedUploadPath);
+        Assert.True(File.Exists(storage.FailedUploadPath));
+
+        await localStorage.DeleteExpiredAsync(
+            DateTimeOffset.UtcNow.AddMinutes(-15),
+            CancellationToken.None);
+
+        Assert.False(File.Exists(storage.FailedUploadPath));
     }
 
     [Fact]
@@ -667,20 +693,39 @@ public sealed class UploadValidationServiceTests : IDisposable
             DeleteCalled = true;
             return inner.DeleteAsync(upload, cancellationToken);
         }
+
+        public Task DeleteExpiredAsync(
+            DateTimeOffset expiresBefore,
+            CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
     }
 
-    private sealed class DeleteFailingStorage(
+    private sealed class ReleaseThenFailStorage(
         IUploadStorage inner,
-        IOException cleanupFailure) : IUploadStorage
+        DateTimeOffset orphanLastWriteTime) : IUploadStorage
     {
+        public string? FailedUploadPath { get; private set; }
+
         public Task<StoredUpload> StoreAsync(
             Stream content,
             string originalFileName,
             CancellationToken cancellationToken) =>
             inner.StoreAsync(content, originalFileName, cancellationToken);
 
-        public Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken) =>
-            Task.FromException(cleanupFailure);
+        public async Task DeleteAsync(StoredUpload upload, CancellationToken cancellationToken)
+        {
+            var content = await File.ReadAllBytesAsync(upload.StoredFilePath, cancellationToken);
+            await inner.DeleteAsync(upload, cancellationToken);
+            await File.WriteAllBytesAsync(upload.StoredFilePath, content, CancellationToken.None);
+            File.SetLastWriteTimeUtc(upload.StoredFilePath, orphanLastWriteTime.UtcDateTime);
+            FailedUploadPath = upload.StoredFilePath;
+            throw new IOException("Simulated physical deletion failure after ownership release.");
+        }
+
+        public Task DeleteExpiredAsync(
+            DateTimeOffset expiresBefore,
+            CancellationToken cancellationToken) =>
+            inner.DeleteExpiredAsync(expiresBefore, cancellationToken);
     }
 
     private sealed class MissingFileStorage(string rootPath) : IUploadStorage
@@ -706,6 +751,11 @@ public sealed class UploadValidationServiceTests : IDisposable
             DeleteCalled = true;
             return Task.CompletedTask;
         }
+
+        public Task DeleteExpiredAsync(
+            DateTimeOffset expiresBefore,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }
 

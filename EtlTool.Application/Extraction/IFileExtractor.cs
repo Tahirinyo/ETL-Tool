@@ -11,6 +11,11 @@ namespace EtlTool.Application.Extraction;
 /// </remarks>
 public interface IFileExtractor
 {
+    Task<IReadOnlyList<string>> ReadHeadersAsync(
+        Stream stream,
+        SourceOptions options,
+        CancellationToken cancellationToken);
+
     IAsyncEnumerable<DataRow> ReadAsync(
         Stream stream,
         SourceOptions options,

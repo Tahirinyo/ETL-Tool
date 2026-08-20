@@ -178,6 +178,91 @@ public sealed class UploadValidationService : IUploadValidationService
         return UploadValidationResult.Accepted(storedUpload);
     }
 
+    public async Task<XlsxWorksheetStageResult> StoreForWorksheetSelectionAsync(
+        Stream content,
+        string originalFileName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(originalFileName);
+        string leafFileName;
+        try { leafFileName = UploadFileName.GetLeafName(originalFileName); }
+        catch (ArgumentException)
+        {
+            return XlsxWorksheetStageResult.Rejected(CreateFailure(UploadValidationFailureCode.InvalidFileName, "The original filename must contain a non-empty leaf filename."));
+        }
+        if (!string.Equals(Path.GetExtension(leafFileName), ".xlsx", StringComparison.OrdinalIgnoreCase))
+        {
+            return XlsxWorksheetStageResult.Rejected(CreateFailure(UploadValidationFailureCode.UnsupportedExtension, "Only .xlsx source files can be staged for worksheet selection."));
+        }
+        if (TryGetRemainingLength(content) is long length && (length == 0 || length > _options.MaxFileSizeBytes))
+        {
+            return XlsxWorksheetStageResult.Rejected(length == 0
+                ? CreateFailure(UploadValidationFailureCode.EmptyFile, "The source file cannot be empty.")
+                : CreateFileTooLargeFailure());
+        }
+
+        StoredUpload? upload = null;
+        try
+        {
+            using var limited = new SizeLimitedReadStream(content, _options.MaxFileSizeBytes);
+            upload = await _uploadStorage.StoreAsync(limited, leafFileName, cancellationToken).ConfigureAwait(false);
+            await using var stream = new FileStream(upload.StoredFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var worksheets = await _xlsxExtractor.GetWorksheetNamesAsync(stream, cancellationToken).ConfigureAwait(false);
+            if (worksheets.Count == 0)
+            {
+                throw new InvalidDataException("The XLSX workbook contains no worksheets.");
+            }
+            return XlsxWorksheetStageResult.Accepted(upload, worksheets);
+        }
+        catch (UploadSizeLimitExceededException exception)
+        {
+            if (upload is not null)
+            {
+                await DeleteAfterFailureAsync(upload, exception).ConfigureAwait(false);
+            }
+
+            return XlsxWorksheetStageResult.Rejected(CreateFileTooLargeFailure());
+        }
+        catch (InvalidDataException exception)
+        {
+            if (upload is not null)
+            {
+                await DeleteAfterFailureAsync(upload, exception).ConfigureAwait(false);
+            }
+
+            return XlsxWorksheetStageResult.Rejected(CreateFailure(UploadValidationFailureCode.InvalidSourceFile, "The source file is malformed or cannot be read."));
+        }
+        catch (Exception exception)
+        {
+            if (upload is not null)
+            {
+                await DeleteAfterFailureAsync(upload, exception).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+    }
+
+    public async Task<UploadValidationResult> ValidateStoredAsync(
+        StoredUpload upload,
+        SourceType sourceType,
+        SourceOptions sourceOptions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(upload);
+        ArgumentNullException.ThrowIfNull(sourceOptions);
+        try
+        {
+            var failure = await ValidateRowsAsync(upload, sourceType, sourceOptions, cancellationToken).ConfigureAwait(false);
+            return failure is null ? UploadValidationResult.Accepted(upload) : UploadValidationResult.Rejected(failure);
+        }
+        catch (InvalidDataException)
+        {
+            return UploadValidationResult.Rejected(CreateFailure(UploadValidationFailureCode.InvalidSourceFile, "The source file is malformed or cannot be read with the selected source options."));
+        }
+    }
+
     private async Task<UploadValidationFailure?> ValidateRowsAsync(
         StoredUpload storedUpload,
         SourceType sourceType,
@@ -240,13 +325,11 @@ public sealed class UploadValidationService : IUploadValidationService
         }
         catch (Exception cleanupException)
             when (cleanupException is IOException
-                or UnauthorizedAccessException
-                or ArgumentException
-                or InvalidOperationException)
+                or UnauthorizedAccessException)
         {
-            throw new IOException(
-                "Upload validation failed and the stored upload could not be removed.",
-                new AggregateException(validationException, cleanupException));
+            // Storage ownership is already released, so orphan cleanup can retry without
+            // replacing the validation failure that caused this cleanup.
+            validationException.Data["EtlTool.UploadCleanupFailure"] = cleanupException;
         }
     }
 

@@ -263,6 +263,53 @@ public sealed class LocalUploadStorageTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(rootPath));
     }
 
+    [Fact]
+    public async Task DeleteExpiredAsync_RemovesOnlyExpiredGeneratedFilesInsideStorageRoot()
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var storageBeforeRestart = CreateStorage(rootPath);
+        using var oldContent = new MemoryStream([1]);
+        using var recentContent = new MemoryStream([2]);
+        var expired = await storageBeforeRestart.StoreAsync(oldContent, "old.xlsx", CancellationToken.None);
+        var recent = await storageBeforeRestart.StoreAsync(recentContent, "recent.xlsx", CancellationToken.None);
+        var unrelatedInsideRoot = Path.Combine(rootPath, "notes.txt");
+        var invalidGeneratedName = Path.Combine(rootPath, $"{Guid.NewGuid():N}".ToUpperInvariant() + ".upload");
+        var unrelatedOutsideRoot = Path.Combine(_testDirectory, "unrelated.upload");
+        await File.WriteAllTextAsync(unrelatedInsideRoot, "keep");
+        await File.WriteAllTextAsync(invalidGeneratedName, "keep");
+        await File.WriteAllTextAsync(unrelatedOutsideRoot, "keep");
+        File.SetLastWriteTimeUtc(expired.StoredFilePath, DateTime.UtcNow.AddMinutes(-16));
+        File.SetLastWriteTimeUtc(invalidGeneratedName, DateTime.UtcNow.AddMinutes(-16));
+        var storageAfterRestart = CreateStorage(rootPath);
+
+        await storageAfterRestart.DeleteExpiredAsync(
+            DateTimeOffset.UtcNow.AddMinutes(-15),
+            CancellationToken.None);
+
+        Assert.False(File.Exists(expired.StoredFilePath));
+        Assert.True(File.Exists(recent.StoredFilePath));
+        Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedInsideRoot));
+        Assert.Equal("keep", await File.ReadAllTextAsync(invalidGeneratedName));
+        Assert.Equal("keep", await File.ReadAllTextAsync(unrelatedOutsideRoot));
+    }
+
+    [Fact]
+    public async Task DeleteExpiredAsync_PreservesOwnedUploadEvenWhenItsTimestampIsExpired()
+    {
+        var rootPath = Path.Combine(_testDirectory, "uploads");
+        var storage = CreateStorage(rootPath);
+        using var content = new MemoryStream([1]);
+        var upload = await storage.StoreAsync(content, "owned.xlsx", CancellationToken.None);
+        File.SetLastWriteTimeUtc(upload.StoredFilePath, DateTime.UtcNow.AddMinutes(-16));
+
+        await storage.DeleteExpiredAsync(
+            DateTimeOffset.UtcNow.AddMinutes(-15),
+            CancellationToken.None);
+
+        Assert.True(File.Exists(upload.StoredFilePath));
+        await storage.DeleteAsync(upload, CancellationToken.None);
+    }
+
     [Theory]
     [InlineData("source.upload")]
     [InlineData("../0123456789abcdef0123456789abcdef.upload")]
