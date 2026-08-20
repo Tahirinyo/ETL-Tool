@@ -18,6 +18,7 @@
 - Server-side upload validation, including extension/source-type agreement, configurable byte and data-row limits, zero-byte rejection, production-extractor row semantics, structured rejection results, and safe rejected-file cleanup, has been implemented and verified.
 - Pipeline-scoped CSV/XLSX source upload and inspection, including CSV delimiter binding, staged XLSX worksheet selection, continuous pending/registered/in-use upload ownership, failure-atomic per-stage expiry cleanup, primary-error-preserving orphan recovery, resilient periodic cleanup, source columns, bounded raw samples, temporary upload cleanup, and focused MVC/extraction coverage, has been implemented and verified.
 - Schema detection and basic type suggestion, including ordered source schemas, conservative `Unknown`/`String`/`Integer`/`Decimal`/`Date` inference over the bounded inspection sample, configured culture/date-format handling, native XLSX values, successful-pipeline schema persistence, and focused unit/integration coverage, has been implemented and verified.
+- Application-layer field mapping, including immutable prepared mapping plans, ordinal source/schema resolution, explicit configuration and missing-row failures, deterministic included-field ordering, and exact value/type preservation, has been implemented and verified with focused unit coverage.
 
 ## In Progress
 
@@ -29,4 +30,4 @@
 
 ## Next
 
-- Implement the Day 4 Developer A mapping application service (Task 4A.2).
+- Define and implement the next approved Day 4 mapping task.
