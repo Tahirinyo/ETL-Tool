@@ -15,6 +15,7 @@ public sealed class SourceInspectionService : ISourceInspectionService
     private readonly IUploadStorage _storage;
     private readonly CsvFileExtractor _csv;
     private readonly XlsxFileExtractor _xlsx;
+    private readonly SourceSchemaInferenceService _schemaInference;
     private readonly TimeProvider _timeProvider;
     private readonly object _stageLock = new();
     private readonly Dictionary<Guid, StagedUpload> _staged = [];
@@ -25,13 +26,15 @@ public sealed class SourceInspectionService : ISourceInspectionService
         IUploadStorage storage,
         CsvFileExtractor csv,
         XlsxFileExtractor xlsx,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        SourceSchemaInferenceService? schemaInference = null)
     {
         _validation = validation;
         _storage = storage;
         _csv = csv;
         _xlsx = xlsx;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _schemaInference = schemaInference ?? new SourceSchemaInferenceService();
     }
 
     public async Task<SourceInspectionResult> InspectCsvAsync(Stream content, string fileName, SourceOptions options, CancellationToken cancellationToken)
@@ -61,43 +64,77 @@ public sealed class SourceInspectionService : ISourceInspectionService
         }
     }
 
-    public async Task<SourceInspectionResult> StageXlsxAsync(Stream content, string fileName, CancellationToken cancellationToken)
+    public async Task<SourceInspectionResult> StageXlsxAsync(
+        Guid pipelineId,
+        Stream content,
+        string fileName,
+        CancellationToken cancellationToken)
     {
+        if (pipelineId == Guid.Empty)
+            return Failure(SourceType.Xlsx, "The pipeline identity is invalid.");
+
         await PurgeExpiredAsync();
         var result = await _validation.StoreForWorksheetSelectionAsync(content, fileName, cancellationToken);
         if (!result.IsValid) return Failure(SourceType.Xlsx, result.Failure!.Message);
         var id = Guid.NewGuid();
         lock (_stageLock)
         {
-            _staged[id] = new StagedUpload(result.Upload!, _timeProvider.GetUtcNow().Add(StageLifetime));
+            _staged[id] = new StagedUpload(
+                result.Upload!,
+                pipelineId,
+                _timeProvider.GetUtcNow().Add(StageLifetime));
         }
 
         return new SourceInspectionResult { SourceType = SourceType.Xlsx, StageId = id, WorksheetNames = result.WorksheetNames };
     }
 
-    public async Task<SourceInspectionResult> InspectStagedXlsxAsync(Guid stageId, string worksheetName, CancellationToken cancellationToken)
+    public async Task<SourceInspectionResult> InspectStagedXlsxAsync(
+        Guid pipelineId,
+        Guid stageId,
+        string worksheetName,
+        CancellationToken cancellationToken,
+        SourceOptions? sourceOptions = null)
     {
         await PurgeExpiredAsync();
         StagedUpload? staged = null;
-        if (stageId != Guid.Empty)
+        var belongsToDifferentPipeline = false;
+        if (pipelineId != Guid.Empty && stageId != Guid.Empty)
         {
             lock (_stageLock)
             {
-                if (_staged.Remove(stageId, out var registered))
+                if (_staged.TryGetValue(stageId, out var registered))
                 {
-                    _inspecting[stageId] = registered;
-                    staged = registered;
+                    if (registered.PipelineId != pipelineId)
+                    {
+                        belongsToDifferentPipeline = true;
+                    }
+                    else if (_staged.Remove(stageId))
+                    {
+                        _inspecting[stageId] = registered;
+                        staged = registered;
+                    }
                 }
             }
         }
 
         if (staged is null)
+        {
+            if (belongsToDifferentPipeline)
+                return Failure(SourceType.Xlsx, "The uploaded workbook was staged for a different pipeline.");
+
             return Failure(SourceType.Xlsx, "The uploaded workbook selection has expired. Upload the file again.");
+        }
         Exception? inspectionException = null;
         SourceInspectionResult? inspectionResult = null;
         try
         {
-            var options = new SourceOptions { WorksheetName = worksheetName };
+            var options = new SourceOptions
+            {
+                WorksheetName = worksheetName,
+                FirstRowIsHeader = true,
+                CultureName = sourceOptions?.CultureName ?? string.Empty,
+                DateFormat = sourceOptions?.DateFormat
+            };
             var validation = await _validation.ValidateStoredAsync(staged.Upload, SourceType.Xlsx, options, cancellationToken);
             inspectionResult = !validation.IsValid
                 ? Failure(SourceType.Xlsx, validation.Failure!.Message)
@@ -123,7 +160,7 @@ public sealed class SourceInspectionService : ISourceInspectionService
         }
     }
 
-    private static async Task<SourceInspectionResult> InspectAsync(StoredUpload upload, SourceType sourceType, SourceOptions options, IFileExtractor extractor, CancellationToken ct)
+    private async Task<SourceInspectionResult> InspectAsync(StoredUpload upload, SourceType sourceType, SourceOptions options, IFileExtractor extractor, CancellationToken ct)
     {
         await using var headersStream = File.OpenRead(upload.StoredFilePath);
         var columns = await extractor.ReadHeadersAsync(headersStream, options, ct);
@@ -134,7 +171,14 @@ public sealed class SourceInspectionService : ISourceInspectionService
             rows.Add(row);
             if (rows.Count == SampleSize) break;
         }
-        return new SourceInspectionResult { SourceType = sourceType, Columns = columns, SampleRows = rows };
+        var schema = _schemaInference.Infer(columns, rows, options, ct);
+        return new SourceInspectionResult
+        {
+            SourceType = sourceType,
+            Columns = columns,
+            SampleRows = rows,
+            DetectedSchema = schema
+        };
     }
 
     public async Task PurgeExpiredAsync()
@@ -221,5 +265,8 @@ public sealed class SourceInspectionService : ISourceInspectionService
     }
 
     private static SourceInspectionResult Failure(SourceType type, string message) => new() { SourceType = type, ErrorMessage = message };
-    private sealed record StagedUpload(StoredUpload Upload, DateTimeOffset ExpiresAt);
+    private sealed record StagedUpload(
+        StoredUpload Upload,
+        Guid PipelineId,
+        DateTimeOffset ExpiresAt);
 }
