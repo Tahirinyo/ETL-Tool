@@ -59,6 +59,7 @@ builder.Services.AddSingleton<ITransformationHandler, DefaultValueTransformation
 builder.Services.AddSingleton<ITransformationHandler, FindAndReplaceTransformationHandler>();
 builder.Services.AddSingleton<TransformationHandlerRegistry>();
 builder.Services.AddSingleton<TransformationEngine>();
+builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
 builder.Services.AddHostedService<SourceInspectionCleanupService>();
@@ -81,6 +82,7 @@ app.UseRouting();
 app.UseAuthorization();
 
 app.MapStaticAssets();
+app.MapControllers();
 
 app.MapControllerRoute(
     name: "default",

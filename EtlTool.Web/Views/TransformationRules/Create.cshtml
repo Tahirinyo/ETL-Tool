@@ -1,0 +1,18 @@
+@model TransformationRuleFormViewModel
+
+@{
+    ViewData["Title"] = "Add transformation";
+    var pipelineId = Context.Request.RouteValues["pipelineId"];
+}
+
+<h1>Add transformation</h1>
+
+<form asp-action="Create" asp-route-pipelineId="@pipelineId" method="post">
+    <partial name="_TransformationRuleForm" model="Model" />
+    <button type="submit" class="btn btn-primary">Add transformation</button>
+    <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
