@@ -221,6 +221,87 @@ public sealed class TransformationRuleServiceTests
     }
 
     [Fact]
+    public async Task ReorderAsync_NormalizesOrdersAndPreservesRuleAndAggregateState()
+    {
+        var first = Rule(20, TransformationType.Trim);
+        first.Configuration["Retained"] = "first";
+        var second = Rule(4, TransformationType.FindAndReplace);
+        second.Configuration["Find"] = "a";
+        second.Configuration["Replace"] = "b";
+        var third = Rule(9, TransformationType.SetDefaultValue);
+        third.Configuration["Value"] = "unknown";
+        var pipeline = Pipeline(rules: [first, second, third]);
+        pipeline.Description = "Keep me";
+        pipeline.ValidationRules = [new ValidationRule { Id = Guid.NewGuid(), Field = "name" }];
+        var repository = new RecordingRepository(pipeline);
+
+        var reordered = await CreateService(repository).ReorderAsync(
+            pipeline.Id,
+            [third.Id, first.Id, second.Id],
+            CancellationToken.None);
+
+        Assert.True(reordered);
+        var persisted = repository.UpdatedPipeline!;
+        Assert.Equal(Now, persisted.UpdatedAt);
+        Assert.Equal("Keep me", persisted.Description);
+        Assert.Same(pipeline.ValidationRules, persisted.ValidationRules);
+        Assert.Equal(1, persisted.TransformationRules.Single(rule => rule.Id == third.Id).Order);
+        Assert.Equal(2, persisted.TransformationRules.Single(rule => rule.Id == first.Id).Order);
+        Assert.Equal(3, persisted.TransformationRules.Single(rule => rule.Id == second.Id).Order);
+        Assert.Equal("first", persisted.TransformationRules.Single(rule => rule.Id == first.Id).Configuration["Retained"]);
+        Assert.Equal("a", persisted.TransformationRules.Single(rule => rule.Id == second.Id).Configuration["Find"]);
+        Assert.Equal("b", persisted.TransformationRules.Single(rule => rule.Id == second.Id).Configuration["Replace"]);
+        Assert.Equal("unknown", persisted.TransformationRules.Single(rule => rule.Id == third.Id).Configuration["Value"]);
+
+        var reloaded = await repository.GetByIdAsync(pipeline.Id, CancellationToken.None);
+        Assert.Equal(
+            [third.Id, first.Id, second.Id],
+            reloaded!.TransformationRules.OrderBy(rule => rule.Order).Select(rule => rule.Id));
+    }
+
+    [Fact]
+    public async Task ReorderAsync_RejectsDuplicateForeignAndIncompleteRuleSetsWithoutPersisting()
+    {
+        var first = Rule(1, TransformationType.Trim);
+        var second = Rule(2, TransformationType.ToLower);
+        var pipeline = Pipeline(rules: [first, second]);
+        var repository = new RecordingRepository(pipeline);
+        var service = CreateService(repository);
+
+        foreach (var sequence in new IReadOnlyList<Guid>[]
+        {
+            [first.Id, first.Id],
+            [first.Id, Guid.NewGuid()],
+            [first.Id],
+            [first.Id, Guid.Empty]
+        })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => service.ReorderAsync(
+                pipeline.Id,
+                sequence,
+                CancellationToken.None));
+            Assert.Null(repository.UpdatedPipeline);
+            Assert.Equal([1, 2], pipeline.TransformationRules.Select(rule => rule.Order));
+        }
+    }
+
+    [Fact]
+    public async Task ReorderAsync_ZeroAndOneRuleSequencesAreValidNoOpsAndMissingPipelineReturnsFalse()
+    {
+        var emptyPipeline = Pipeline();
+        var singleRule = Rule(20, TransformationType.Trim);
+        var singlePipeline = Pipeline(rules: [singleRule]);
+        var repository = new RecordingRepository(emptyPipeline, singlePipeline);
+        var service = CreateService(repository);
+
+        Assert.True(await service.ReorderAsync(emptyPipeline.Id, [], CancellationToken.None));
+        Assert.Null(repository.UpdatedPipeline);
+        Assert.True(await service.ReorderAsync(singlePipeline.Id, [singleRule.Id], CancellationToken.None));
+        Assert.Null(repository.UpdatedPipeline);
+        Assert.False(await service.ReorderAsync(Guid.NewGuid(), [], CancellationToken.None));
+    }
+
+    [Fact]
     public async Task CreateAsync_RejectsInvalidFieldAndDuplicateExistingOrders()
     {
         var pipeline = Pipeline(rules: [Rule(1, TransformationType.Trim), Rule(1, TransformationType.ToLower)]);
@@ -299,6 +380,7 @@ public sealed class TransformationRuleServiceTests
         public Task<bool> UpdateAsync(PipelineDefinition replacement, CancellationToken cancellationToken)
         {
             UpdatedPipeline = replacement;
+            _pipelines[replacement.Id] = replacement;
             return Task.FromResult(true);
         }
     }

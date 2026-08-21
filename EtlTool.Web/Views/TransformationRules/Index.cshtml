@@ -20,14 +20,28 @@
 }
 else
 {
-    <div class="row row-cols-1 row-cols-lg-2 g-3">
+    @if (Model.Rules.Count > 1)
+    {
+        <p class="text-muted">Drag a transformation card to change its execution order. Changes save when you drop the card.</p>
+        <form id="transformation-rule-reorder-form"
+              asp-action="Reorder"
+              asp-route-pipelineId="@Model.PipelineId"
+              method="post">
+            @Html.AntiForgeryToken()
+            <div id="transformation-rule-order-inputs"></div>
+        </form>
+    }
+
+    <div id="transformation-rule-list" class="row row-cols-1 row-cols-lg-2 g-3">
         @foreach (var rule in Model.Rules)
         {
-            <div class="col">
+            <div class="col"
+                 data-rule-id="@rule.Id"
+                 draggable="@(Model.Rules.Count > 1 ? "true" : "false")">
                 <article class="card h-100">
                     <div class="card-header d-flex justify-content-between align-items-start gap-2">
                         <h2 class="h5 mb-0">@rule.TypeLabel</h2>
-                        <span class="badge text-bg-secondary">Step @rule.Order</span>
+                        <span class="badge text-bg-secondary" data-step-label>Step @rule.Order</span>
                     </div>
                     <div class="card-body">
                         <dl class="row mb-0">
@@ -61,3 +75,62 @@ else
 }
 
 <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+
+@if (Model.Rules.Count > 1)
+{
+    @section Scripts {
+        <script>
+            (() => {
+                const list = document.getElementById("transformation-rule-list");
+                const form = document.getElementById("transformation-rule-reorder-form");
+                const inputs = document.getElementById("transformation-rule-order-inputs");
+                let draggedCard = null;
+
+                const cards = () => Array.from(list.querySelectorAll("[data-rule-id]"));
+
+                const updateStepLabels = () => {
+                    cards().forEach((card, index) => {
+                        card.querySelector("[data-step-label]").textContent = `Step ${index + 1}`;
+                    });
+                };
+
+                cards().forEach(card => {
+                    card.addEventListener("dragstart", event => {
+                        draggedCard = card;
+                        event.dataTransfer.effectAllowed = "move";
+                    });
+
+                    card.addEventListener("dragover", event => {
+                        event.preventDefault();
+                        if (card !== draggedCard) card.classList.add("opacity-50");
+                    });
+
+                    card.addEventListener("dragleave", () => card.classList.remove("opacity-50"));
+
+                    card.addEventListener("drop", event => {
+                        event.preventDefault();
+                        card.classList.remove("opacity-50");
+                        if (draggedCard === null || draggedCard === card) return;
+
+                        const placeAfter = event.clientY > card.getBoundingClientRect().top + card.offsetHeight / 2;
+                        list.insertBefore(draggedCard, placeAfter ? card.nextSibling : card);
+                        updateStepLabels();
+                        inputs.replaceChildren(...cards().map(card => {
+                            const input = document.createElement("input");
+                            input.type = "hidden";
+                            input.name = "OrderedRuleIds";
+                            input.value = card.dataset.ruleId;
+                            return input;
+                        }));
+                        form.requestSubmit();
+                    });
+
+                    card.addEventListener("dragend", () => {
+                        cards().forEach(card => card.classList.remove("opacity-50"));
+                        draggedCard = null;
+                    });
+                });
+            })();
+        </script>
+    }
+}

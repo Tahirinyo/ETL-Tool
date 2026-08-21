@@ -19,4 +19,9 @@ public interface ITransformationRuleService
         Guid pipelineId,
         Guid ruleId,
         CancellationToken cancellationToken);
+
+    Task<bool> ReorderAsync(
+        Guid pipelineId,
+        IReadOnlyList<Guid> orderedRuleIds,
+        CancellationToken cancellationToken);
 }

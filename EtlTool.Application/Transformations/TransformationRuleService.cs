@@ -86,6 +86,35 @@ public sealed class TransformationRuleService : ITransformationRuleService
         return await UpdatePipelineAsync(pipeline, rules, cancellationToken);
     }
 
+    public async Task<bool> ReorderAsync(
+        Guid pipelineId,
+        IReadOnlyList<Guid> orderedRuleIds,
+        CancellationToken cancellationToken)
+    {
+        ValidatePipelineId(pipelineId);
+        ArgumentNullException.ThrowIfNull(orderedRuleIds);
+
+        var pipeline = await _repository.GetByIdAsync(pipelineId, cancellationToken);
+        if (pipeline is null) return false;
+
+        ValidateExistingOrders(pipeline.TransformationRules);
+        ValidateReorderRequest(orderedRuleIds, pipeline.TransformationRules);
+
+        if (orderedRuleIds.Count < 2)
+        {
+            return true;
+        }
+
+        var rules = CopyRules(pipeline.TransformationRules);
+        var rulesById = rules.ToDictionary(rule => rule.Id);
+        for (var index = 0; index < orderedRuleIds.Count; index++)
+        {
+            rulesById[orderedRuleIds[index]].Order = index + 1;
+        }
+
+        return await UpdatePipelineAsync(pipeline, rules, cancellationToken);
+    }
+
     private async Task<bool> UpdatePipelineAsync(
         PipelineDefinition pipeline,
         List<TransformationRule> rules,
@@ -203,6 +232,25 @@ public sealed class TransformationRuleService : ITransformationRuleService
             throw new InvalidOperationException("A new transformation rule order cannot be assigned.");
         }
         return maximum + 1;
+    }
+
+    private static void ValidateReorderRequest(
+        IReadOnlyList<Guid> orderedRuleIds,
+        IReadOnlyCollection<TransformationRule> savedRules)
+    {
+        if (orderedRuleIds.Any(id => id == Guid.Empty))
+        {
+            throw new ArgumentException("Transformation rule identifiers cannot be empty.", nameof(orderedRuleIds));
+        }
+
+        if (orderedRuleIds.Count != savedRules.Count
+            || orderedRuleIds.Distinct().Count() != orderedRuleIds.Count
+            || !orderedRuleIds.All(id => savedRules.Any(rule => rule.Id == id)))
+        {
+            throw new ArgumentException(
+                "The transformation rule order must contain each rule in this pipeline exactly once.",
+                nameof(orderedRuleIds));
+        }
     }
 
     private static List<TransformationRule> CopyRules(IEnumerable<TransformationRule> rules) => rules

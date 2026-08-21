@@ -139,6 +139,34 @@ public sealed class TransformationRulesController : Controller
         return RedirectToAction(nameof(Index), new { pipelineId });
     }
 
+    [HttpPost("Reorder")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Reorder(
+        Guid pipelineId,
+        TransformationRuleReorderViewModel model,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return BadRequest(ModelState);
+
+        try
+        {
+            if (!await _ruleService.ReorderAsync(pipelineId, model.OrderedRuleIds, cancellationToken))
+            {
+                return NotFound();
+            }
+        }
+        catch (ArgumentException)
+        {
+            return BadRequest();
+        }
+        catch (InvalidOperationException)
+        {
+            return BadRequest();
+        }
+
+        return RedirectToAction(nameof(Index), new { pipelineId });
+    }
+
     private async Task<bool> PipelineExistsAsync(Guid pipelineId, CancellationToken cancellationToken) =>
         await _pipelineService.GetByIdAsync(pipelineId, cancellationToken) is not null;
 

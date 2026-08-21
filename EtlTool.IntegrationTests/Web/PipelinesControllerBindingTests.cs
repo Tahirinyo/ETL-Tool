@@ -335,5 +335,10 @@ public sealed class PipelinesControllerBindingTests
 
         public Task<bool> DeleteAsync(Guid pipelineId, Guid ruleId, CancellationToken cancellationToken) =>
             Task.FromResult(false);
+
+        public Task<bool> ReorderAsync(
+            Guid pipelineId,
+            IReadOnlyList<Guid> orderedRuleIds,
+            CancellationToken cancellationToken) => Task.FromResult(false);
     }
 }

@@ -102,6 +102,47 @@ public sealed class TransformationRulesControllerTests
     }
 
     [Fact]
+    public async Task Reorder_ValidPostPassesOrderedIdsAndRedirects()
+    {
+        var pipelineId = Guid.NewGuid();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var ruleService = new RecordingRuleService();
+        var controller = new TransformationRulesController(new RecordingPipelineService(), ruleService);
+
+        var result = await controller.Reorder(
+            pipelineId,
+            new TransformationRuleReorderViewModel { OrderedRuleIds = [second, first] },
+            CancellationToken.None);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(TransformationRulesController.Index), redirect.ActionName);
+        Assert.Equal([second, first], ruleService.ReorderInput);
+    }
+
+    [Fact]
+    public async Task Reorder_InvalidRequestAndMissingPipelineReturnBadRequestAndNotFound()
+    {
+        var invalidController = new TransformationRulesController(new RecordingPipelineService(), new RecordingRuleService());
+        invalidController.ModelState.AddModelError("OrderedRuleIds", "Invalid identifiers.");
+
+        var invalid = await invalidController.Reorder(
+            Guid.NewGuid(),
+            new TransformationRuleReorderViewModel(),
+            CancellationToken.None);
+
+        var missing = await new TransformationRulesController(
+            new RecordingPipelineService(),
+            new RecordingRuleService { ReorderResult = false }).Reorder(
+                Guid.NewGuid(),
+                new TransformationRuleReorderViewModel(),
+                CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(invalid);
+        Assert.IsType<NotFoundResult>(missing);
+    }
+
+    [Fact]
     public void PostActionsRequireAntiForgeryProtection()
     {
         var postActions = typeof(TransformationRulesController)
@@ -109,15 +150,17 @@ public sealed class TransformationRulesControllerTests
             .Where(method => method.GetCustomAttribute<HttpPostAttribute>() is not null)
             .ToList();
 
-        Assert.Equal(3, postActions.Count);
+        Assert.Equal(4, postActions.Count);
         Assert.All(postActions, action => Assert.NotNull(action.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>()));
     }
 
     private sealed class RecordingRuleService : ITransformationRuleService
     {
         public TransformationRuleInput? CreateInput { get; private set; }
+        public IReadOnlyList<Guid>? ReorderInput { get; private set; }
         public bool UpdateResult { get; init; } = true;
         public bool DeleteResult { get; init; } = true;
+        public bool ReorderResult { get; init; } = true;
 
         public Task<TransformationRule?> CreateAsync(Guid pipelineId, TransformationRuleInput input, CancellationToken cancellationToken)
         {
@@ -130,6 +173,12 @@ public sealed class TransformationRulesControllerTests
 
         public Task<bool> DeleteAsync(Guid pipelineId, Guid ruleId, CancellationToken cancellationToken) =>
             Task.FromResult(DeleteResult);
+
+        public Task<bool> ReorderAsync(Guid pipelineId, IReadOnlyList<Guid> orderedRuleIds, CancellationToken cancellationToken)
+        {
+            ReorderInput = orderedRuleIds;
+            return Task.FromResult(ReorderResult);
+        }
     }
 
     private sealed class RecordingPipelineService : IPipelineService
