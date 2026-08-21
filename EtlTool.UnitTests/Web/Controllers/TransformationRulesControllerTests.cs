@@ -13,6 +13,41 @@ namespace EtlTool.UnitTests.Web.Controllers;
 public sealed class TransformationRulesControllerTests
 {
     [Fact]
+    public async Task Index_MapsRulesInPersistedExecutionOrder()
+    {
+        var pipelineId = Guid.NewGuid();
+        var laterRule = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = TransformationType.ToLower,
+            Order = 20,
+            SourceField = "name"
+        };
+        var earlierRule = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = TransformationType.Trim,
+            Order = 2,
+            SourceField = "name"
+        };
+        var pipelineService = new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                TransformationRules = [laterRule, earlierRule]
+            }
+        };
+        var controller = new TransformationRulesController(pipelineService, new RecordingRuleService());
+
+        var result = await controller.Index(pipelineId, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRulesViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal([earlierRule.Id, laterRule.Id], model.Rules.Select(rule => rule.Id));
+        Assert.Equal([2, 20], model.Rules.Select(rule => rule.Order));
+    }
+
+    [Fact]
     public async Task Create_ValidPostMapsOnlyAllowedFieldsAndRedirects()
     {
         var pipelineId = Guid.NewGuid();
@@ -99,9 +134,12 @@ public sealed class TransformationRulesControllerTests
 
     private sealed class RecordingPipelineService : IPipelineService
     {
+        public PipelineDefinition? Pipeline { get; init; }
+
         public Task<PipelineDefinition> CreateAsync(PipelineDefinition pipeline, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PipelineDefinition?> GetByIdAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineDefinition?>(null);
+        public Task<PipelineDefinition?> GetByIdAsync(Guid id, CancellationToken cancellationToken) =>
+            Task.FromResult(Pipeline?.Id == id ? Pipeline : null);
         public Task<IReadOnlyList<PipelineDefinition>> ListAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> UpdateAsync(Guid id, PipelineDefinition pipeline, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
