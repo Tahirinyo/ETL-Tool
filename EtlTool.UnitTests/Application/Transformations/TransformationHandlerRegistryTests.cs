@@ -72,6 +72,22 @@ public sealed class TransformationHandlerRegistryTests
         Assert.Throws<KeyNotFoundException>(() => registry.Resolve(TransformationType.Trim));
     }
 
+    [Fact]
+    public void Composition_ResolvesConcreteTrimHandlerThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, TrimTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var handler = provider.GetRequiredService<TransformationHandlerRegistry>()
+            .Resolve(TransformationType.Trim);
+
+        Assert.IsType<TrimTransformationHandler>(handler);
+    }
+
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;
