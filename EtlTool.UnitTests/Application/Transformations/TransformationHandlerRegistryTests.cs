@@ -121,6 +121,22 @@ public sealed class TransformationHandlerRegistryTests
         Assert.IsType<DefaultValueTransformationHandler>(handler);
     }
 
+    [Fact]
+    public void Composition_ResolvesConcreteFindAndReplaceHandlerThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, FindAndReplaceTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var handler = provider.GetRequiredService<TransformationHandlerRegistry>()
+            .Resolve(TransformationType.FindAndReplace);
+
+        Assert.IsType<FindAndReplaceTransformationHandler>(handler);
+    }
+
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;
