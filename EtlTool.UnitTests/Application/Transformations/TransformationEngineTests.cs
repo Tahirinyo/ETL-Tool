@@ -174,6 +174,24 @@ public sealed class TransformationEngineTests
         Assert.Same(expected, actual);
     }
 
+    [Fact]
+    public void Apply_PreservesOrderSemanticsForTrimAndDefaultValueOnWhitespaceOnlyInput()
+    {
+        var trimThenDefault = Row(1, ("Name", "   "));
+        var defaultThenTrim = Row(1, ("Name", "   "));
+        var engine = Engine(new TrimTransformationHandler(), new DefaultValueTransformationHandler());
+
+        engine.Apply(
+            trimThenDefault,
+            [Rule(1, TransformationType.Trim, "Name"), Rule(2, TransformationType.SetDefaultValue, "Name", "Unknown")]);
+        engine.Apply(
+            defaultThenTrim,
+            [Rule(1, TransformationType.SetDefaultValue, "Name", "Unknown"), Rule(2, TransformationType.Trim, "Name")]);
+
+        Assert.Equal("Unknown", trimThenDefault.Values["Name"]);
+        Assert.Equal(string.Empty, defaultThenTrim.Values["Name"]);
+    }
+
     private static TransformationEngine Engine(params ITransformationHandler[] handlers) =>
         new(new TransformationHandlerRegistry(handlers));
 
@@ -187,6 +205,28 @@ public sealed class TransformationEngineTests
         Order = order,
         Type = type
     };
+
+    private static TransformationRule Rule(
+        int order,
+        TransformationType type,
+        string sourceField,
+        string? defaultValue = null)
+    {
+        var rule = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Order = order,
+            Type = type,
+            SourceField = sourceField
+        };
+
+        if (defaultValue is not null)
+        {
+            rule.Configuration["Value"] = defaultValue;
+        }
+
+        return rule;
+    }
 
     private static DataRow Row(
         long sourceRowNumber,

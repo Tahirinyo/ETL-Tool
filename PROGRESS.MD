@@ -24,6 +24,7 @@
 - Application-layer transformation handler registry and ordered engine, including explicit persisted-order execution, duplicate-order and ambiguous-registration rejection, handler preflight, sequential row composition, DI registration, and focused unit coverage, has been implemented and verified.
 - Trim transformation handling, including exact post-mapping field lookup, string-only leading/trailing whitespace removal, null/non-string preservation, invalid-field failures, DI/registry registration, and focused unit coverage, has been implemented and verified.
 - Upper and lower transformation handling, including invariant string casing, exact post-mapping field lookup, null/non-string preservation, invalid-field failures, DI/registry registration, Turkish-sensitive casing coverage, and focused unit coverage, has been implemented and verified.
+- Default Value transformation handling, including null/empty-string replacement only, whitespace and non-string preservation, ordinal configuration lookup, explicit invalid-configuration failures, DI/registry registration, and focused ordering coverage with Trim, has been implemented and verified.
 
 ## In Progress
 
