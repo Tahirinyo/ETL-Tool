@@ -105,6 +105,22 @@ public sealed class TransformationHandlerRegistryTests
         Assert.IsType<ToLowerTransformationHandler>(registry.Resolve(TransformationType.ToLower));
     }
 
+    [Fact]
+    public void Composition_ResolvesConcreteDefaultValueHandlerThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, DefaultValueTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var handler = provider.GetRequiredService<TransformationHandlerRegistry>()
+            .Resolve(TransformationType.SetDefaultValue);
+
+        Assert.IsType<DefaultValueTransformationHandler>(handler);
+    }
+
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;
