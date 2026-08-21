@@ -1,5 +1,6 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
+using EtlTool.Application.Mapping;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -12,12 +13,91 @@ public sealed class PipelinesController : Controller
 {
     private readonly IPipelineService _pipelineService;
     private readonly ISourceInspectionService? _sourceInspectionService;
+    private readonly FieldMappingService _fieldMappingService;
 
-    public PipelinesController(IPipelineService pipelineService, ISourceInspectionService? sourceInspectionService = null)
+    public PipelinesController(
+        IPipelineService pipelineService,
+        ISourceInspectionService? sourceInspectionService = null,
+        FieldMappingService? fieldMappingService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
         _sourceInspectionService = sourceInspectionService;
+        _fieldMappingService = fieldMappingService ?? new FieldMappingService();
+    }
+
+    public async Task<IActionResult> Mapping(Guid id, CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty) return NotFound();
+
+        var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
+        if (pipeline is null) return NotFound();
+
+        if (pipeline.ExpectedSchema.Count == 0)
+        {
+            ModelState.AddModelError(string.Empty, "Inspect a source schema before configuring fields.");
+            return View(new FieldMappingViewModel());
+        }
+
+        return View(CreateMappingModel(pipeline.ExpectedSchema));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Mapping(
+        [FromRoute] Guid id,
+        FieldMappingViewModel model,
+        CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty) return NotFound();
+
+        var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
+        if (pipeline is null) return NotFound();
+
+        if (pipeline.ExpectedSchema.Count == 0)
+        {
+            ModelState.AddModelError(string.Empty, "Inspect a source schema before configuring fields.");
+            return View(model);
+        }
+
+        if (!MatchesExpectedSchema(model.Fields, pipeline.ExpectedSchema))
+        {
+            ModelState.Clear();
+            ModelState.AddModelError(string.Empty, "The submitted mapping fields do not match the inspected source schema. Reload the page and try again.");
+            return View(CreateMappingModel(pipeline.ExpectedSchema));
+        }
+
+        ApplyTrustedFieldTypes(model, pipeline.ExpectedSchema);
+
+        if (!ModelState.IsValid) return View(model);
+
+        var configuration = new PipelineDefinition
+        {
+            ExpectedSchema = pipeline.ExpectedSchema
+                .Select(field => new SourceFieldDefinition { Name = field.Name, DataType = field.DataType })
+                .ToList(),
+            FieldMappings = model.Fields
+                .Select(field => new FieldMapping
+                {
+                    SourceField = field.SourceField,
+                    TargetField = field.TargetField ?? string.Empty,
+                    IsIncluded = field.IsIncluded
+                })
+                .ToList()
+        };
+
+        try
+        {
+            _fieldMappingService.Prepare(configuration);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return View(model);
+        }
+
+        model.IsValidated = true;
+        return View(model);
     }
 
     public async Task<IActionResult> Source(Guid id, CancellationToken cancellationToken)
@@ -110,6 +190,46 @@ public sealed class PipelinesController : Controller
         Delimiter = pipeline.SourceOptions.Delimiter ?? CsvDelimiter.Comma,
         WorksheetName = pipeline.SourceOptions.WorksheetName
     };
+
+    private static FieldMappingViewModel CreateMappingModel(
+        IReadOnlyList<SourceFieldDefinition> schema) => new()
+    {
+        Fields = schema.Select(field => new FieldMappingFieldViewModel
+        {
+            SourceField = field.Name,
+            TargetField = field.Name,
+            DataType = field.DataType,
+            IsIncluded = true
+        }).ToList()
+    };
+
+    private static bool MatchesExpectedSchema(
+        IReadOnlyList<FieldMappingFieldViewModel> fields,
+        IReadOnlyList<SourceFieldDefinition> schema)
+    {
+        if (fields.Count != schema.Count) return false;
+
+        for (var index = 0; index < schema.Count; index++)
+        {
+            if (!string.Equals(fields[index].SourceField, schema[index].Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ApplyTrustedFieldTypes(
+        FieldMappingViewModel model,
+        IReadOnlyList<SourceFieldDefinition> schema)
+    {
+        var count = Math.Min(model.Fields.Count, schema.Count);
+        for (var index = 0; index < count; index++)
+        {
+            model.Fields[index].DataType = schema[index].DataType;
+        }
+    }
 
     private static SourceOptions CreateCsvOptions(PipelineDefinition pipeline, CsvDelimiter delimiter) => new()
     {
