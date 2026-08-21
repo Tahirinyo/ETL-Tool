@@ -1,0 +1,40 @@
+@model TransformationRuleFormViewModel
+
+<div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+
+<div class="mb-3">
+    <label asp-for="Type" class="form-label">Transformation type</label>
+    <select asp-for="Type" class="form-select">
+        <option value="Unspecified">Select a type</option>
+        <option value="Trim">Trim</option>
+        <option value="ToUpper">To upper</option>
+        <option value="ToLower">To lower</option>
+        <option value="SetDefaultValue">Set default value</option>
+        <option value="FindAndReplace">Find and replace</option>
+    </select>
+    <span asp-validation-for="Type" class="text-danger"></span>
+</div>
+
+<div class="mb-3">
+    <label asp-for="SourceField" class="form-label">Mapped output field</label>
+    <input asp-for="SourceField" class="form-control" />
+    <span asp-validation-for="SourceField" class="text-danger"></span>
+</div>
+
+<div class="mb-3">
+    <label asp-for="DefaultValue" class="form-label">Default value</label>
+    <input asp-for="DefaultValue" class="form-control" />
+    <span asp-validation-for="DefaultValue" class="text-danger"></span>
+</div>
+
+<div class="mb-3">
+    <label asp-for="Find" class="form-label">Find value</label>
+    <input asp-for="Find" class="form-control" />
+    <span asp-validation-for="Find" class="text-danger"></span>
+</div>
+
+<div class="mb-3">
+    <label asp-for="Replace" class="form-label">Replace value</label>
+    <input asp-for="Replace" class="form-control" />
+    <span asp-validation-for="Replace" class="text-danger"></span>
+</div>
