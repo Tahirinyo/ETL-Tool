@@ -21,6 +21,7 @@
 - Application-layer field mapping, including immutable prepared mapping plans, ordinal source/schema resolution, explicit configuration and missing-row failures, deterministic included-field ordering, and exact value/type preservation, has been implemented and verified with focused unit coverage.
 - Field select, exclude, and rename MVC UI, including trusted-schema submission validation, reuse of application mapping validation, explicitly unsaved confirmation, and focused controller coverage, has been implemented and verified.
 - Field-mapping persistence, including detached aggregate replacement, authoritative-schema reload, saved-state feedback, validation-safe failure behavior, and focused controller coverage, has been implemented and verified.
+- Application-layer transformation handler registry and ordered engine, including explicit persisted-order execution, duplicate-order and ambiguous-registration rejection, handler preflight, sequential row composition, DI registration, and focused unit coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -32,4 +33,4 @@
 
 ## Next
 
-- Define and implement the next approved ETL pipeline task.
+- Define and implement the next approved transformation-handler task.
