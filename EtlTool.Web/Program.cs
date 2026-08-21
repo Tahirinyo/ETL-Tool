@@ -1,6 +1,7 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
+using EtlTool.Application.Mapping;
 using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
@@ -49,6 +50,7 @@ builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
 builder.Services.AddSingleton<SourceSchemaInferenceService>();
+builder.Services.AddSingleton<FieldMappingService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
 builder.Services.AddHostedService<SourceInspectionCleanupService>();

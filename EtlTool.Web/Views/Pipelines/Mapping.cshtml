@@ -1,0 +1,65 @@
+@model FieldMappingViewModel
+
+@{
+    ViewData["Title"] = "Configure fields";
+    var pipelineId = Context.Request.RouteValues["id"];
+}
+
+<h1>Configure fields</h1>
+<p class="text-muted">Choose the source fields to keep and set the MongoDB output field name for each retained field.</p>
+
+@if (Model.IsValidated)
+{
+    <div class="alert alert-success" role="status">
+        This mapping configuration is valid but has not been saved. Saving mappings is part of the next step.
+    </div>
+}
+
+<form asp-action="Mapping" asp-route-id="@pipelineId" method="post">
+    <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Keep</th>
+                    <th scope="col">Source field</th>
+                    <th scope="col">Suggested type</th>
+                    <th scope="col">Output field name</th>
+                </tr>
+            </thead>
+            <tbody>
+            @for (var index = 0; index < Model.Fields.Count; index++)
+            {
+                <tr>
+                    <td>
+                        <input asp-for="Fields[index].SourceField" type="hidden" />
+                        <input asp-for="Fields[index].IsIncluded" class="form-check-input js-field-included" />
+                    </td>
+                    <td>@Model.Fields[index].SourceField</td>
+                    <td>@Model.Fields[index].DataType</td>
+                    <td>
+                        <input asp-for="Fields[index].TargetField" class="form-control js-target-field" />
+                        <span asp-validation-for="Fields[index].TargetField" class="text-danger"></span>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Validate mapping</button>
+    <a class="btn btn-outline-secondary" asp-action="Source" asp-route-id="@pipelineId">Back to source</a>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+    <script>
+        document.querySelectorAll('.js-field-included').forEach((included) => {
+            const target = included.closest('tr').querySelector('.js-target-field');
+            const sync = () => target.disabled = !included.checked;
+            included.addEventListener('change', sync);
+            sync();
+        });
+    </script>
+}

@@ -9,6 +9,7 @@ using EtlTool.Web.Controllers;
 using EtlTool.Web.Models.Pipelines;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace EtlTool.UnitTests.Web.Controllers;
 
@@ -672,6 +673,378 @@ public sealed class PipelinesControllerTests
         Assert.Contains(
             validationResults,
             result => result.MemberNames.Contains(nameof(PipelineFormViewModel.Name)));
+    }
+
+    [Fact]
+    public async Task Mapping_GetBuildsIncludedRowsFromInspectedSchema()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+
+        var result = await new PipelinesController(service).Mapping(id, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<FieldMappingViewModel>(view.Model);
+        Assert.Collection(
+            model.Fields,
+            field =>
+            {
+                Assert.Equal("Id", field.SourceField);
+                Assert.Equal("Id", field.TargetField);
+                Assert.Equal(SourceFieldType.Integer, field.DataType);
+                Assert.True(field.IsIncluded);
+            },
+            field =>
+            {
+                Assert.Equal("Email", field.SourceField);
+                Assert.Equal("Email", field.TargetField);
+                Assert.Equal(SourceFieldType.String, field.DataType);
+                Assert.True(field.IsIncluded);
+            });
+    }
+
+    [Fact]
+    public async Task Mapping_GetWithoutInspectedSchemaReturnsConfigurationError()
+    {
+        var id = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(new PipelineDefinition
+            {
+                Id = id,
+                Name = "Customer import"
+            })
+        };
+        var controller = new PipelinesController(service);
+
+        var result = await controller.Mapping(id, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.IsType<FieldMappingViewModel>(view.Model);
+        Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+            error.ErrorMessage.Contains("Inspect a source schema", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Mapping_GetUnknownPipelineReturnsNotFound()
+    {
+        var controller = new PipelinesController(new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(null)
+        });
+
+        var result = await controller.Mapping(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task Mapping_PostValidConfigurationIsValidatedButNotPersisted()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ],
+            FieldMappings = [new FieldMapping { SourceField = "Existing", TargetField = "existing" }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var model = new FieldMappingViewModel
+        {
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "customerId", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Email", TargetField = null, IsIncluded = false }
+            ]
+        };
+
+        var result = await new PipelinesController(service).Mapping(id, model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var returned = Assert.IsType<FieldMappingViewModel>(view.Model);
+        Assert.True(returned.IsValidated);
+        Assert.Equal("customerId", returned.Fields[0].TargetField);
+        Assert.False(returned.Fields[1].IsIncluded);
+        Assert.Equal(SourceFieldType.Integer, returned.Fields[0].DataType);
+        Assert.Equal(SourceFieldType.String, returned.Fields[1].DataType);
+        Assert.Equal(0, service.UpdateCallCount);
+        Assert.Collection(pipeline.FieldMappings, mapping =>
+        {
+            Assert.Equal("Existing", mapping.SourceField);
+            Assert.Equal("existing", mapping.TargetField);
+        });
+    }
+
+    [Fact]
+    public async Task Mapping_PostRebuildsAuthoritativeRowsForTamperedSourceFieldsWithoutPersisting()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var controller = new PipelinesController(service);
+        var model = new FieldMappingViewModel
+        {
+            Fields = [new FieldMappingFieldViewModel { SourceField = "Unexpected", TargetField = "Id" }]
+        };
+        controller.ModelState.SetModelValue(
+            "Fields[0].SourceField",
+            new ValueProviderResult("Unexpected"));
+
+        var result = await controller.Mapping(id, model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.False(model.IsValidated);
+        var returned = Assert.IsType<FieldMappingViewModel>(view.Model);
+        Assert.Collection(
+            returned.Fields,
+            field =>
+            {
+                Assert.Equal("Id", field.SourceField);
+                Assert.Equal("Id", field.TargetField);
+                Assert.Equal(SourceFieldType.Integer, field.DataType);
+            },
+            field =>
+            {
+                Assert.Equal("Email", field.SourceField);
+                Assert.Equal("Email", field.TargetField);
+                Assert.Equal(SourceFieldType.String, field.DataType);
+            });
+        Assert.DoesNotContain("Fields[0].SourceField", controller.ModelState.Keys);
+        Assert.Equal("Id", returned.Fields[0].TargetField);
+        Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+            error.ErrorMessage.Contains("do not match", StringComparison.Ordinal));
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Mapping_PostRejectsMissingExpectedSourceField()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var controller = new PipelinesController(service);
+
+        var result = await controller.Mapping(
+            id,
+            new FieldMappingViewModel
+            {
+                Fields = [new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "id" }]
+            },
+            CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+            error.ErrorMessage.Contains("do not match", StringComparison.Ordinal));
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Mapping_PostRejectsDuplicateAndReorderedSourceFields()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var controller = new PipelinesController(service);
+
+        foreach (var fields in new[]
+        {
+            new List<FieldMappingFieldViewModel>
+            {
+                new() { SourceField = "Id", TargetField = "first" },
+                new() { SourceField = "Id", TargetField = "second" }
+            },
+            new List<FieldMappingFieldViewModel>
+            {
+                new() { SourceField = "Email", TargetField = "email" },
+                new() { SourceField = "Id", TargetField = "id" }
+            }
+        })
+        {
+            controller.ModelState.Clear();
+            var result = await controller.Mapping(
+                id,
+                new FieldMappingViewModel { Fields = fields },
+                CancellationToken.None);
+
+            Assert.IsType<ViewResult>(result);
+            Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+                error.ErrorMessage.Contains("do not match", StringComparison.Ordinal));
+        }
+
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Theory]
+    [InlineData("empty-target")]
+    [InlineData("all-excluded")]
+    public async Task Mapping_PostSurfacesApplicableMappingServiceFailures(string caseName)
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var controller = new PipelinesController(service);
+        var field = new FieldMappingFieldViewModel
+        {
+            SourceField = "Id",
+            IsIncluded = caseName != "all-excluded",
+            TargetField = caseName == "empty-target" ? "" : null
+        };
+
+        var result = await controller.Mapping(
+            id,
+            new FieldMappingViewModel { Fields = [field] },
+            CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.False(controller.ModelState.IsValid);
+        Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+            error.ErrorMessage.Contains(
+                caseName == "empty-target" ? "empty target field" : "At least one active field mapping",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Mapping_PostAllowsExcludedFieldWithEmptyTarget()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+
+        var result = await new PipelinesController(service).Mapping(
+            id,
+            new FieldMappingViewModel
+            {
+                Fields =
+                [
+                    new FieldMappingFieldViewModel { SourceField = "Id", IsIncluded = true, TargetField = "id" },
+                    new FieldMappingFieldViewModel { SourceField = "Email", IsIncluded = false, TargetField = null }
+                ]
+            },
+            CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.True(Assert.IsType<FieldMappingViewModel>(view.Model).IsValidated);
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Mapping_PostSurfacesExistingMappingValidationErrors()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Customer import",
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline)
+        };
+        var controller = new PipelinesController(service);
+        var model = new FieldMappingViewModel
+        {
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "duplicate" },
+                new FieldMappingFieldViewModel { SourceField = "Email", TargetField = "duplicate" }
+            ]
+        };
+
+        var result = await controller.Mapping(id, model, CancellationToken.None);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.False(model.IsValidated);
+        var returned = Assert.IsType<FieldMappingViewModel>(view.Model);
+        Assert.Equal("duplicate", returned.Fields[0].TargetField);
+        Assert.Equal("duplicate", returned.Fields[1].TargetField);
+        Assert.True(returned.Fields[0].IsIncluded);
+        Assert.True(returned.Fields[1].IsIncluded);
+        Assert.Contains(controller.ModelState[string.Empty]!.Errors, error =>
+            error.ErrorMessage.Contains("used by more than one active mapping", StringComparison.Ordinal));
+        Assert.Equal(0, service.UpdateCallCount);
     }
 
     private static MethodInfo FindAction(string name, int parameterCount)
