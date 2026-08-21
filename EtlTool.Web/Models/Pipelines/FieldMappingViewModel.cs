@@ -7,7 +7,7 @@ public sealed class FieldMappingViewModel
 {
     public List<FieldMappingFieldViewModel> Fields { get; set; } = [];
 
-    public bool IsValidated { get; set; }
+    public bool IsSaved { get; set; }
 }
 
 public sealed class FieldMappingFieldViewModel
