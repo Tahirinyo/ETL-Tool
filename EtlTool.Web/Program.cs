@@ -53,6 +53,8 @@ builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>
 builder.Services.AddSingleton<SourceSchemaInferenceService>();
 builder.Services.AddSingleton<FieldMappingService>();
 builder.Services.AddSingleton<ITransformationHandler, TrimTransformationHandler>();
+builder.Services.AddSingleton<ITransformationHandler, ToUpperTransformationHandler>();
+builder.Services.AddSingleton<ITransformationHandler, ToLowerTransformationHandler>();
 builder.Services.AddSingleton<TransformationHandlerRegistry>();
 builder.Services.AddSingleton<TransformationEngine>();
 builder.Services.AddSingleton<SourceInspectionService>();
