@@ -20,6 +20,7 @@
 - Schema detection and basic type suggestion, including ordered source schemas, conservative `Unknown`/`String`/`Integer`/`Decimal`/`Date` inference over the bounded inspection sample, configured culture/date-format handling, native XLSX values, successful-pipeline schema persistence, and focused unit/integration coverage, has been implemented and verified.
 - Application-layer field mapping, including immutable prepared mapping plans, ordinal source/schema resolution, explicit configuration and missing-row failures, deterministic included-field ordering, and exact value/type preservation, has been implemented and verified with focused unit coverage.
 - Field select, exclude, and rename MVC UI, including trusted-schema submission validation, reuse of application mapping validation, explicitly unsaved confirmation, and focused controller coverage, has been implemented and verified.
+- Field-mapping persistence, including detached aggregate replacement, authoritative-schema reload, saved-state feedback, validation-safe failure behavior, and focused controller coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -31,4 +32,4 @@
 
 ## Next
 
-- Define and implement Task 4B.2 mapping persistence.
+- Define and implement the next approved ETL pipeline task.

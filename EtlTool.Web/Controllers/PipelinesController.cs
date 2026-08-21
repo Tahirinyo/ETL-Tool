@@ -39,7 +39,13 @@ public sealed class PipelinesController : Controller
             return View(new FieldMappingViewModel());
         }
 
-        return View(CreateMappingModel(pipeline.ExpectedSchema));
+        var model = CreateMappingModel(pipeline, out var mappingError);
+        if (mappingError is not null)
+        {
+            ModelState.AddModelError(string.Empty, mappingError);
+        }
+
+        return View(model);
     }
 
     [HttpPost]
@@ -64,26 +70,26 @@ public sealed class PipelinesController : Controller
         {
             ModelState.Clear();
             ModelState.AddModelError(string.Empty, "The submitted mapping fields do not match the inspected source schema. Reload the page and try again.");
-            return View(CreateMappingModel(pipeline.ExpectedSchema));
+            return View(CreateMappingModel(pipeline, out _));
         }
 
         ApplyTrustedFieldTypes(model, pipeline.ExpectedSchema);
 
         if (!ModelState.IsValid) return View(model);
 
+        var fieldMappings = model.Fields
+            .Select(field => new FieldMapping
+            {
+                SourceField = field.SourceField,
+                TargetField = field.TargetField ?? string.Empty,
+                IsIncluded = field.IsIncluded
+            })
+            .ToList();
+
         var configuration = new PipelineDefinition
         {
-            ExpectedSchema = pipeline.ExpectedSchema
-                .Select(field => new SourceFieldDefinition { Name = field.Name, DataType = field.DataType })
-                .ToList(),
-            FieldMappings = model.Fields
-                .Select(field => new FieldMapping
-                {
-                    SourceField = field.SourceField,
-                    TargetField = field.TargetField ?? string.Empty,
-                    IsIncluded = field.IsIncluded
-                })
-                .ToList()
+            ExpectedSchema = CopySchema(pipeline.ExpectedSchema),
+            FieldMappings = fieldMappings
         };
 
         try
@@ -96,7 +102,13 @@ public sealed class PipelinesController : Controller
             return View(model);
         }
 
-        model.IsValidated = true;
+        var replacement = CopyPipelineWithMappings(pipeline, fieldMappings);
+        if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
+        {
+            return NotFound();
+        }
+
+        model.IsSaved = true;
         return View(model);
     }
 
@@ -191,7 +203,61 @@ public sealed class PipelinesController : Controller
         WorksheetName = pipeline.SourceOptions.WorksheetName
     };
 
-    private static FieldMappingViewModel CreateMappingModel(
+    private FieldMappingViewModel CreateMappingModel(
+        PipelineDefinition pipeline,
+        out string? mappingError)
+    {
+        mappingError = null;
+        var schema = pipeline.ExpectedSchema;
+        var mappings = pipeline.FieldMappings;
+
+        if (mappings is null)
+        {
+            mappingError = "The saved mapping configuration is invalid. Review and save the mapping again.";
+            return CreateDefaultMappingModel(schema);
+        }
+
+        if (mappings.Count > 0)
+        {
+            if (MatchesExpectedSchema(mappings, schema))
+            {
+                try
+                {
+                    _fieldMappingService.Prepare(new PipelineDefinition
+                    {
+                        ExpectedSchema = CopySchema(schema),
+                        FieldMappings = mappings.Select(mapping => new FieldMapping
+                        {
+                            SourceField = mapping.SourceField,
+                            TargetField = mapping.TargetField,
+                            IsIncluded = mapping.IsIncluded
+                        }).ToList()
+                    });
+
+                    return new FieldMappingViewModel
+                    {
+                        Fields = schema.Select((field, index) => new FieldMappingFieldViewModel
+                        {
+                            SourceField = field.Name,
+                            TargetField = mappings[index].TargetField,
+                            DataType = field.DataType,
+                            IsIncluded = mappings[index].IsIncluded
+                        }).ToList()
+                    };
+                }
+                catch (InvalidOperationException)
+                {
+                    // Fall through to authoritative defaults below.
+                }
+            }
+
+            mappingError = "The saved mapping configuration is invalid. Review and save the mapping again.";
+        }
+
+        return CreateDefaultMappingModel(schema);
+    }
+
+    private static FieldMappingViewModel CreateDefaultMappingModel(
         IReadOnlyList<SourceFieldDefinition> schema) => new()
     {
         Fields = schema.Select(field => new FieldMappingFieldViewModel
@@ -202,6 +268,24 @@ public sealed class PipelinesController : Controller
             IsIncluded = true
         }).ToList()
     };
+
+    private static bool MatchesExpectedSchema(
+        IReadOnlyList<FieldMapping> mappings,
+        IReadOnlyList<SourceFieldDefinition> schema)
+    {
+        if (mappings.Count != schema.Count) return false;
+
+        for (var index = 0; index < schema.Count; index++)
+        {
+            if (mappings[index] is null
+                || !string.Equals(mappings[index].SourceField, schema[index].Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool MatchesExpectedSchema(
         IReadOnlyList<FieldMappingFieldViewModel> fields,
@@ -230,6 +314,31 @@ public sealed class PipelinesController : Controller
             model.Fields[index].DataType = schema[index].DataType;
         }
     }
+
+    private static List<SourceFieldDefinition> CopySchema(
+        IReadOnlyList<SourceFieldDefinition> schema) => schema
+        .Select(field => new SourceFieldDefinition { Name = field.Name, DataType = field.DataType })
+        .ToList();
+
+    private static PipelineDefinition CopyPipelineWithMappings(
+        PipelineDefinition pipeline,
+        List<FieldMapping> fieldMappings) => new()
+    {
+        Id = pipeline.Id,
+        Name = pipeline.Name,
+        Description = pipeline.Description,
+        SourceType = pipeline.SourceType,
+        SourceOptions = pipeline.SourceOptions,
+        ExpectedSchema = pipeline.ExpectedSchema,
+        FieldMappings = fieldMappings,
+        TransformationRules = pipeline.TransformationRules,
+        ValidationRules = pipeline.ValidationRules,
+        DestinationDatabase = pipeline.DestinationDatabase,
+        DestinationCollection = pipeline.DestinationCollection,
+        UpsertKeyField = pipeline.UpsertKeyField,
+        CreatedAt = pipeline.CreatedAt,
+        UpdatedAt = pipeline.UpdatedAt
+    };
 
     private static SourceOptions CreateCsvOptions(PipelineDefinition pipeline, CsvDelimiter delimiter) => new()
     {

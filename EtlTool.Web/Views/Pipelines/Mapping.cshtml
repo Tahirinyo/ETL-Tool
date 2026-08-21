@@ -8,10 +8,10 @@
 <h1>Configure fields</h1>
 <p class="text-muted">Choose the source fields to keep and set the MongoDB output field name for each retained field.</p>
 
-@if (Model.IsValidated)
+@if (Model.IsSaved)
 {
     <div class="alert alert-success" role="status">
-        This mapping configuration is valid but has not been saved. Saving mappings is part of the next step.
+        The mapping configuration has been saved.
     </div>
 }
 
@@ -48,7 +48,7 @@
         </table>
     </div>
 
-    <button type="submit" class="btn btn-primary">Validate mapping</button>
+    <button type="submit" class="btn btn-primary">Save mapping</button>
     <a class="btn btn-outline-secondary" asp-action="Source" asp-route-id="@pipelineId">Back to source</a>
 </form>
 
