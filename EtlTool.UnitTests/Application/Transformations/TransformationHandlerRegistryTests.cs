@@ -88,6 +88,23 @@ public sealed class TransformationHandlerRegistryTests
         Assert.IsType<TrimTransformationHandler>(handler);
     }
 
+    [Fact]
+    public void Composition_ResolvesConcreteCaseHandlersThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, ToUpperTransformationHandler>();
+        services.AddSingleton<ITransformationHandler, ToLowerTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var registry = provider.GetRequiredService<TransformationHandlerRegistry>();
+
+        Assert.IsType<ToUpperTransformationHandler>(registry.Resolve(TransformationType.ToUpper));
+        Assert.IsType<ToLowerTransformationHandler>(registry.Resolve(TransformationType.ToLower));
+    }
+
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;
