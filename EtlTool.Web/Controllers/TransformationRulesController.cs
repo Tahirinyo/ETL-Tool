@@ -31,7 +31,10 @@ public sealed class TransformationRulesController : Controller
         return View(new TransformationRulesViewModel
         {
             PipelineId = pipelineId,
-            Rules = pipeline.TransformationRules.OrderBy(rule => rule.Order).ToList()
+            Rules = pipeline.TransformationRules
+                .OrderBy(rule => rule.Order)
+                .Select(TransformationRuleCardViewModel.FromRule)
+                .ToList()
         });
     }
 
