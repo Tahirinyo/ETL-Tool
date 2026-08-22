@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Text.RegularExpressions;
 
 namespace EtlTool.IntegrationTests.Web;
 
@@ -36,16 +37,26 @@ public sealed class PipelinesControllerBindingTests
         var html = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Contains($"href=\"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Edit\"", html);
-        var deleteFormStart = html.IndexOf(
-            $"<form action=\"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Delete\"",
-            StringComparison.Ordinal);
-        Assert.NotEqual(-1, deleteFormStart);
-        var deleteFormEnd = html.IndexOf("</form>", deleteFormStart, StringComparison.Ordinal);
+        var editAction = $"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Edit";
+        Assert.Matches(
+            $"<a\\b(?=[^>]*\\shref=\"{Regex.Escape(editAction)}\")[^>]*>",
+            html);
+
+        var deleteAction = $"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Delete";
+        var deleteFormStart = Regex.Match(
+            html,
+            $"<form\\b(?=[^>]*\\saction=\"{Regex.Escape(deleteAction)}\")(?=[^>]*\\smethod=\"post\")[^>]*>",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        Assert.True(deleteFormStart.Success, "The rule-specific delete POST form was not rendered.");
+        var deleteFormEnd = html.IndexOf("</form>", deleteFormStart.Index, StringComparison.Ordinal);
         Assert.NotEqual(-1, deleteFormEnd);
-        var deleteForm = html[deleteFormStart..deleteFormEnd];
-        Assert.Contains("method=\"post\"", deleteForm);
-        Assert.Equal(1, CountOccurrences(deleteForm, "name=\"__RequestVerificationToken\""));
+        var deleteForm = html[deleteFormStart.Index..deleteFormEnd];
+        Assert.Single(
+            Regex.Matches(
+                    deleteForm,
+                    "<input\\b(?=[^>]*\\sname=\"__RequestVerificationToken\")[^>]*>",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                .Cast<Match>());
     }
 
     [Fact]
@@ -199,19 +210,6 @@ public sealed class PipelinesControllerBindingTests
             Id = Guid.NewGuid(),
             Name = name
         };
-    }
-
-    private static int CountOccurrences(string value, string substring)
-    {
-        var count = 0;
-        var startIndex = 0;
-        while ((startIndex = value.IndexOf(substring, startIndex, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            startIndex += substring.Length;
-        }
-
-        return count;
     }
 
     private sealed class BindingTestHost : IAsyncDisposable
