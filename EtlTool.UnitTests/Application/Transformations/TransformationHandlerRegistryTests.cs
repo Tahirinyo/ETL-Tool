@@ -138,11 +138,12 @@ public sealed class TransformationHandlerRegistryTests
     }
 
     [Fact]
-    public void Composition_ResolvesConcreteNumericHandlersThroughRegistry()
+    public void Composition_ResolvesConcreteConversionHandlersThroughRegistry()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ITransformationHandler, ConvertToIntegerTransformationHandler>();
         services.AddSingleton<ITransformationHandler, ConvertToDecimalTransformationHandler>();
+        services.AddSingleton<ITransformationHandler, ConvertToDateTransformationHandler>();
         services.AddSingleton<TransformationHandlerRegistry>();
         services.AddSingleton<TransformationEngine>();
         using var provider = services.BuildServiceProvider(
@@ -154,6 +155,8 @@ public sealed class TransformationHandlerRegistryTests
             registry.Resolve(TransformationType.ConvertToInteger));
         Assert.IsType<ConvertToDecimalTransformationHandler>(
             registry.Resolve(TransformationType.ConvertToDecimal));
+        Assert.IsType<ConvertToDateTransformationHandler>(
+            registry.Resolve(TransformationType.ConvertToDate));
     }
 
     private sealed class StubHandler(TransformationType type) : ITransformationHandler

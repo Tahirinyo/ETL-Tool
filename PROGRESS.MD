@@ -29,6 +29,7 @@
 - Persisted drag-and-drop transformation-rule ordering, including native MVC card dragging, anti-forgery-protected ordered-ID submission, exact pipeline-rule-set validation, one-based order normalization, aggregate-preserving persistence, and focused service/controller coverage, has been implemented and verified.
 - String conversion transformation handling, including invariant native-scalar formatting, null/string preservation, unsupported-value failures, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
 - Integer and decimal conversion transformation handling, including explicit pipeline/source-culture parsing, `long`/`decimal` outputs, checked range and integrality rules, null preservation, row-level conversion failures, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
+- Date conversion transformation handling, including explicit pipeline/source-culture and exact-format parsing, `DateTime` output, native-date and null preservation, offset rejection, failure-atomic row updates, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -40,4 +41,4 @@
 
 ## Next
 
-- Select the next approved Day 6 transformation task after numeric conversion.
+- Select the next approved Day 6 transformation task after date conversion.

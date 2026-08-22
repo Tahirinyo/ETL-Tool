@@ -257,6 +257,63 @@ public sealed class TransformationEngineTests
     }
 
     [Fact]
+    public void Apply_PassesPipelineDateFormatToDateHandler()
+    {
+        var row = Row(5, ("OccurredAt", "31.12.2026"));
+        var engine = Engine(new ConvertToDateTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [Rule(1, TransformationType.ConvertToDate, "OccurredAt")],
+            Options("tr-TR", "dd.MM.yyyy"));
+
+        Assert.Same(row, result);
+        Assert.Equal(
+            new DateTime(2026, 12, 31),
+            Assert.IsType<DateTime>(result.Values["OccurredAt"]));
+    }
+
+    [Fact]
+    public void Apply_ResolvesDateFormatIndependentlyForEachExecution()
+    {
+        var engine = Engine(new ConvertToDateTransformationHandler());
+        var turkishRow = Row(6, ("OccurredAt", "31.12.2026"));
+        var usRow = Row(7, ("OccurredAt", "2026/12/31"));
+        var rules = new[] { Rule(1, TransformationType.ConvertToDate, "OccurredAt") };
+
+        engine.Apply(turkishRow, rules, Options("tr-TR", "dd.MM.yyyy"));
+        engine.Apply(usRow, rules, Options("en-US", "yyyy/MM/dd"));
+
+        Assert.Equal(
+            new DateTime(2026, 12, 31),
+            Assert.IsType<DateTime>(turkishRow.Values["OccurredAt"]));
+        Assert.Equal(
+            new DateTime(2026, 12, 31),
+            Assert.IsType<DateTime>(usRow.Values["OccurredAt"]));
+    }
+
+    [Fact]
+    public void Apply_ComposesFindAndReplaceAndDateConversionByPersistedOrder()
+    {
+        var row = Row(6, ("OccurredAt", "31/12/2026"));
+        var replace = Rule(10, TransformationType.FindAndReplace, "OccurredAt");
+        replace.Configuration["Find"] = "/";
+        replace.Configuration["Replace"] = ".";
+        var engine = Engine(
+            new FindAndReplaceTransformationHandler(),
+            new ConvertToDateTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [Rule(20, TransformationType.ConvertToDate, "OccurredAt"), replace],
+            Options("tr-TR", "dd.MM.yyyy"));
+
+        Assert.Equal(
+            new DateTime(2026, 12, 31),
+            Assert.IsType<DateTime>(result.Values["OccurredAt"]));
+    }
+
+    [Fact]
     public void Apply_RejectsInvalidSourceCultureBeforeExecutingHandlers()
     {
         var invocationCount = 0;
@@ -296,10 +353,13 @@ public sealed class TransformationEngineTests
     private static TransformationEngine Engine(params ITransformationHandler[] handlers) =>
         new(new TransformationHandlerRegistry(handlers));
 
-    private static SourceOptions Options(string cultureName = "en-US") => new()
-    {
-        CultureName = cultureName
-    };
+    private static SourceOptions Options(
+        string cultureName = "en-US",
+        string? dateFormat = null) => new()
+        {
+            CultureName = cultureName,
+            DateFormat = dateFormat
+        };
 
     private static RecordingHandler Handler(
         TransformationType type,

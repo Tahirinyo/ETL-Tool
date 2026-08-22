@@ -58,9 +58,18 @@ public sealed class TransformationEngine
 
         foreach (var step in executionSteps)
         {
-            currentRow = step.Handler is ISourceCultureTransformationHandler cultureAwareHandler
-                ? cultureAwareHandler.Apply(currentRow, step.Rule, sourceCulture)
-                : step.Handler.Apply(currentRow, step.Rule);
+            currentRow = step.Handler switch
+            {
+                ISourceDateFormatTransformationHandler dateFormatAwareHandler =>
+                    dateFormatAwareHandler.Apply(
+                        currentRow,
+                        step.Rule,
+                        sourceCulture,
+                        sourceOptions.DateFormat),
+                ISourceCultureTransformationHandler cultureAwareHandler =>
+                    cultureAwareHandler.Apply(currentRow, step.Rule, sourceCulture),
+                _ => step.Handler.Apply(currentRow, step.Rule)
+            };
 
             currentRow = currentRow
                 ?? throw new InvalidOperationException(

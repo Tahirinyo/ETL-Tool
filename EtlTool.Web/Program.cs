@@ -58,6 +58,7 @@ builder.Services.AddSingleton<ITransformationHandler, ToLowerTransformationHandl
 builder.Services.AddSingleton<ITransformationHandler, ConvertToStringTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, ConvertToIntegerTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, ConvertToDecimalTransformationHandler>();
+builder.Services.AddSingleton<ITransformationHandler, ConvertToDateTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, DefaultValueTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, FindAndReplaceTransformationHandler>();
 builder.Services.AddSingleton<TransformationHandlerRegistry>();
