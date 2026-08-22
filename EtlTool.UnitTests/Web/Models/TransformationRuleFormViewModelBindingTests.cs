@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Primitives;
@@ -48,6 +49,7 @@ public sealed class TransformationRuleFormViewModelBindingTests
         var results = Validate(new TransformationRuleFormViewModel
         {
             Type = TransformationType.Deduplicate,
+            SourceField = null,
             SelectedFields = ["email", "company"]
         });
 
@@ -55,9 +57,66 @@ public sealed class TransformationRuleFormViewModelBindingTests
     }
 
     [Fact]
+    public void Validate_RequiresSourceFieldForFieldBasedTransformation()
+    {
+        var results = Validate(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Trim,
+            SourceField = null
+        });
+
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(TransformationRuleFormViewModel.SourceField)));
+    }
+
+    [Fact]
+    public void SourceField_IsNotImplicitlyRequiredByMvc()
+    {
+        var services = new ServiceCollection();
+        services.AddControllersWithViews();
+        using var provider = services.BuildServiceProvider();
+        var metadataProvider = provider.GetRequiredService<IModelMetadataProvider>();
+        var sourceField = metadataProvider
+            .GetMetadataForType(typeof(TransformationRuleFormViewModel))
+            .Properties
+            .Single(property => property.PropertyName == nameof(TransformationRuleFormViewModel.SourceField));
+
+        Assert.False(sourceField.IsRequired);
+    }
+
+    [Fact]
+    public void MvcValidation_AllowsDeduplicationWithoutSourceField()
+    {
+        var modelState = ValidateWithMvc(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Deduplicate,
+            SourceField = null,
+            SelectedFields = ["customerId", "email"]
+        });
+
+        Assert.True(modelState.IsValid);
+    }
+
+    [Fact]
+    public void MvcValidation_RequiresSourceFieldForFieldBasedTransformation()
+    {
+        var modelState = ValidateWithMvc(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Trim,
+            SourceField = null
+        });
+
+        Assert.Contains(nameof(TransformationRuleFormViewModel.SourceField), modelState.Keys);
+        Assert.False(modelState.IsValid);
+    }
+
+    [Fact]
     public void Validate_RequiresDeduplicationFieldSelection()
     {
-        var results = Validate(new TransformationRuleFormViewModel { Type = TransformationType.Deduplicate });
+        var results = Validate(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Deduplicate,
+            SourceField = null
+        });
 
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(TransformationRuleFormViewModel.SelectedFields)));
     }
@@ -154,6 +213,24 @@ public sealed class TransformationRuleFormViewModelBindingTests
 
         await binder.BindModelAsync(bindingContext);
         return Assert.IsType<TransformationRuleFormViewModel>(bindingContext.Result.Model);
+    }
+
+    private static ModelStateDictionary ValidateWithMvc(TransformationRuleFormViewModel model)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddControllersWithViews();
+        using var provider = services.BuildServiceProvider();
+        var modelState = new ModelStateDictionary();
+        var actionContext = new ActionContext(
+            new DefaultHttpContext { RequestServices = provider },
+            new RouteData(),
+            new ActionDescriptor(),
+            modelState);
+        var validator = provider.GetRequiredService<IObjectModelValidator>();
+
+        validator.Validate(actionContext, validationState: null, prefix: string.Empty, model);
+        return modelState;
     }
 
     private static IReadOnlyList<ValidationResult> Validate(TransformationRuleFormViewModel model)

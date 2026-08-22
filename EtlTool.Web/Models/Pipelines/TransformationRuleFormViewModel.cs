@@ -7,7 +7,7 @@ public sealed class TransformationRuleFormViewModel : IValidatableObject
 {
     public TransformationType Type { get; set; }
 
-    public string SourceField { get; set; } = string.Empty;
+    public string? SourceField { get; set; }
 
     public List<string> AvailableMappedFields { get; set; } = [];
 

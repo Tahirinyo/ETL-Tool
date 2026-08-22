@@ -106,7 +106,7 @@ public sealed class TransformationRulesControllerTests
         var model = new TransformationRuleFormViewModel
         {
             Type = TransformationType.Deduplicate,
-            SourceField = "ignored",
+            SourceField = null,
             SelectedFields = ["email", "company"],
             DefaultValue = "ignored"
         };
@@ -192,7 +192,7 @@ public sealed class TransformationRulesControllerTests
 
         var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
         Assert.Equal(["email"], model.SelectedFields);
-        Assert.Empty(model.SourceField);
+        Assert.Equal(string.Empty, model.SourceField);
     }
 
     [Fact]

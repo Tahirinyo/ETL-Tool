@@ -1,5 +1,6 @@
 @model TransformationRuleFormViewModel
 @using EtlTool.Domain.Enums
+@using System.Text.Json
 
 <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
 
@@ -24,7 +25,7 @@
 
 <div class="mb-3" data-transformation-section="source-field">
     <label asp-for="SourceField" class="form-label">Mapped output field</label>
-    <select asp-for="SourceField" class="form-select">
+    <select asp-for="SourceField" class="form-select" data-transformation-source-field data-initial-reference="@Model.SourceField">
         <option value="">Select a mapped output field</option>
         @foreach (var field in Model.AvailableMappedFields)
         {
@@ -72,7 +73,7 @@
 
 <div class="mb-3" data-transformation-section="deduplicate">
     <label asp-for="SelectedFields" class="form-label">Deduplicate mapped output fields</label>
-    <select asp-for="SelectedFields" class="form-select" multiple size="5">
+    <select asp-for="SelectedFields" class="form-select" multiple size="5" data-transformation-deduplication-fields data-initial-references="@JsonSerializer.Serialize(Model.SelectedFields)">
         @foreach (var field in Model.AvailableMappedFields)
         {
             <option value="@field">@field</option>
@@ -86,6 +87,109 @@
     (() => {
         const type = document.querySelector("[data-transformation-type]");
         if (type === null) return;
+
+        const form = type.closest("form");
+        const sourceField = document.querySelector("[data-transformation-source-field]");
+        const deduplicationFields = document.querySelector("[data-transformation-deduplication-fields]");
+        if (form === null || sourceField === null || deduplicationFields === null) return;
+
+        const sourceFieldTypes = new Set([
+            "Trim",
+            "ToUpper",
+            "ToLower",
+            "ConvertToString",
+            "ConvertToInteger",
+            "ConvertToDecimal",
+            "ConvertToDate",
+            "SetDefaultValue",
+            "FilterRow",
+            "FindAndReplace"
+        ]);
+        const sourceFieldMessage = "Choose a mapped output field.";
+        const unavailableSourceFieldMessage = "The selected mapped output field is no longer available.";
+        const deduplicationRequiredMessage = "Choose at least one deduplication field.";
+        const unavailableDeduplicationFieldMessage = "One or more selected deduplication fields are no longer available.";
+        let sourceFieldHasChanged = false;
+        let deduplicationFieldsHaveChanged = false;
+
+        const readInitialDeduplicationFields = () => {
+            try {
+                const fields = JSON.parse(deduplicationFields.dataset.initialReferences || "[]");
+                return Array.isArray(fields) ? fields : [];
+            } catch {
+                return [];
+            }
+        };
+        const availableMappedFields = () => new Set(
+            Array.from(sourceField.options)
+                .map(option => option.value)
+                .filter(value => value !== ""));
+        const selectedDeduplicationFields = () => Array.from(deduplicationFields.selectedOptions)
+            .map(option => option.value);
+        const validationMessageFor = control => document.querySelector(
+            `[data-valmsg-for="${control.name}"]`);
+        const setReferenceError = (control, message) => {
+            const validationMessage = validationMessageFor(control);
+            control.classList.add("is-invalid");
+            control.setAttribute("aria-invalid", "true");
+            if (validationMessage === null) return;
+
+            validationMessage.textContent = message;
+            validationMessage.classList.remove("field-validation-valid");
+            validationMessage.classList.add("field-validation-error");
+            validationMessage.dataset.transformationReferenceMessage = "true";
+        };
+        const clearReferenceError = control => {
+            const validationMessage = validationMessageFor(control);
+            if (validationMessage?.dataset.transformationReferenceMessage !== "true") return;
+
+            control.classList.remove("is-invalid");
+            control.removeAttribute("aria-invalid");
+            validationMessage.textContent = "";
+            validationMessage.classList.remove("field-validation-error");
+            validationMessage.classList.add("field-validation-valid");
+            delete validationMessage.dataset.transformationReferenceMessage;
+        };
+        const validateReferences = () => {
+            const availableFields = availableMappedFields();
+            let isValid = true;
+
+            if (sourceFieldTypes.has(type.value)) {
+                const selectedField = sourceFieldHasChanged
+                    ? sourceField.value
+                    : sourceField.dataset.initialReference || sourceField.value;
+                if (selectedField === "") {
+                    setReferenceError(sourceField, sourceFieldMessage);
+                    isValid = false;
+                } else if (!availableFields.has(selectedField)) {
+                    setReferenceError(sourceField, unavailableSourceFieldMessage);
+                    isValid = false;
+                } else {
+                    clearReferenceError(sourceField);
+                }
+            } else {
+                clearReferenceError(sourceField);
+            }
+
+            if (type.value === "Deduplicate") {
+                const selectedFields = deduplicationFieldsHaveChanged
+                    ? selectedDeduplicationFields()
+                    : readInitialDeduplicationFields();
+                if (selectedFields.length === 0) {
+                    setReferenceError(deduplicationFields, deduplicationRequiredMessage);
+                    isValid = false;
+                } else if (selectedFields.some(field => !availableFields.has(field))) {
+                    setReferenceError(deduplicationFields, unavailableDeduplicationFieldMessage);
+                    isValid = false;
+                } else {
+                    clearReferenceError(deduplicationFields);
+                }
+            } else {
+                clearReferenceError(deduplicationFields);
+            }
+
+            return isValid;
+        };
 
         const sections = {
             "source-field": document.querySelectorAll('[data-transformation-section="source-field"]'),
@@ -121,13 +225,28 @@
                 elements.forEach(element => element.querySelectorAll("input, select").forEach(control => {
                     if (control.multiple) {
                         Array.from(control.options).forEach(option => option.selected = false);
+                        deduplicationFieldsHaveChanged = true;
                     } else {
                         control.value = "";
+                        if (control === sourceField) sourceFieldHasChanged = true;
                     }
                 }));
             });
             update();
+            validateReferences();
+        });
+        sourceField.addEventListener("change", () => {
+            sourceFieldHasChanged = true;
+            validateReferences();
+        });
+        deduplicationFields.addEventListener("change", () => {
+            deduplicationFieldsHaveChanged = true;
+            validateReferences();
+        });
+        form.addEventListener("submit", event => {
+            if (!validateReferences()) event.preventDefault();
         });
         update();
+        validateReferences();
     })();
 </script>
