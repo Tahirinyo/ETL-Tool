@@ -138,6 +138,25 @@ public sealed class TransformationHandlerRegistryTests
     }
 
     [Fact]
+    public void Composition_ResolvesStatelessDeduplicationHandlerThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, DeduplicateTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var handler = provider.GetRequiredService<TransformationHandlerRegistry>()
+            .Resolve(TransformationType.Deduplicate);
+
+        Assert.IsType<DeduplicateTransformationHandler>(handler);
+        Assert.Throws<InvalidOperationException>(() => handler.Apply(
+            new DataRow(),
+            new TransformationRule { Type = TransformationType.Deduplicate }));
+    }
+
+    [Fact]
     public void Composition_ResolvesConcreteTypedHandlersThroughRegistry()
     {
         var services = new ServiceCollection();

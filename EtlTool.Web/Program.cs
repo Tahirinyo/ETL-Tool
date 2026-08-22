@@ -62,6 +62,7 @@ builder.Services.AddSingleton<ITransformationHandler, ConvertToDateTransformatio
 builder.Services.AddSingleton<ITransformationHandler, ConditionalFilterTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, DefaultValueTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, FindAndReplaceTransformationHandler>();
+builder.Services.AddSingleton<ITransformationHandler, DeduplicateTransformationHandler>();
 builder.Services.AddSingleton<TransformationHandlerRegistry>();
 builder.Services.AddSingleton<TransformationEngine>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();

@@ -9,4 +9,5 @@ public sealed record TransformationRuleInput(
     string? Find,
     string? Replace,
     FilterOperator FilterOperator = FilterOperator.Unspecified,
-    string? FilterValue = null);
+    string? FilterValue = null,
+    IReadOnlyList<string>? SelectedFields = null);

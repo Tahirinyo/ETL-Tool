@@ -17,9 +17,14 @@ public sealed class TransformationResult
 
     public bool IsFiltered => Status == TransformationResultStatus.Filtered;
 
+    public bool IsDuplicate => Status == TransformationResultStatus.Duplicate;
+
     public static TransformationResult Transformed(DataRow row) =>
         new(row, TransformationResultStatus.Transformed);
 
     public static TransformationResult Filtered(DataRow row) =>
         new(row, TransformationResultStatus.Filtered);
+
+    public static TransformationResult Duplicate(DataRow row) =>
+        new(row, TransformationResultStatus.Duplicate);
 }

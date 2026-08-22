@@ -1,5 +1,6 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Transformations;
@@ -20,15 +21,25 @@ public sealed class TransformationEngine
         SourceOptions sourceOptions)
     {
         ArgumentNullException.ThrowIfNull(mappedRow);
+
+        var execution = CreateExecution(rules, sourceOptions);
+        if (execution.ContainsDeduplication)
+        {
+            throw new InvalidOperationException(
+                "Deduplication rules require a reusable transformation execution created with CreateExecution.");
+        }
+
+        return execution.Apply(mappedRow);
+    }
+
+    public TransformationExecution CreateExecution(
+        IReadOnlyCollection<TransformationRule> rules,
+        SourceOptions sourceOptions)
+    {
         ArgumentNullException.ThrowIfNull(rules);
         ArgumentNullException.ThrowIfNull(sourceOptions);
 
         var sourceCulture = sourceOptions.ResolveCulture();
-
-        if (rules.Count == 0)
-        {
-            return TransformationResult.Transformed(mappedRow);
-        }
 
         var orders = new HashSet<int>();
         var materializedRules = rules.ToArray();
@@ -51,42 +62,31 @@ public sealed class TransformationEngine
 
         var executionSteps = materializedRules
             .OrderBy(rule => rule.Order)
-            .Select(rule => new ExecutionStep(rule, _handlerRegistry.Resolve(rule.Type)))
+            .Select(CreateExecutionStep)
             .ToArray();
 
-        var currentRow = mappedRow;
-        var currentResult = TransformationResult.Transformed(mappedRow);
-
-        foreach (var step in executionSteps)
-        {
-            currentResult = step.Handler switch
-            {
-                ISourceDateFormatTransformationHandler dateFormatAwareHandler =>
-                    dateFormatAwareHandler.Apply(
-                        currentRow,
-                        step.Rule,
-                        sourceCulture,
-                        sourceOptions.DateFormat),
-                ISourceCultureTransformationHandler cultureAwareHandler =>
-                    cultureAwareHandler.Apply(currentRow, step.Rule, sourceCulture),
-                _ => step.Handler.Apply(currentRow, step.Rule)
-            };
-
-            currentResult = currentResult
-                ?? throw new InvalidOperationException(
-                    $"Transformation handler for type '{step.Handler.Type}' returned no result.");
-
-            currentRow = currentResult.Row;
-            if (currentResult.IsFiltered)
-            {
-                return currentResult;
-            }
-        }
-
-        return currentResult;
+        return new TransformationExecution(
+            executionSteps,
+            sourceCulture,
+            sourceOptions.DateFormat);
     }
 
-    private readonly record struct ExecutionStep(
-        TransformationRule Rule,
-        ITransformationHandler Handler);
+    private TransformationExecutionStep CreateExecutionStep(TransformationRule rule)
+    {
+        var handler = _handlerRegistry.Resolve(rule.Type);
+        DeduplicationRuleExecutionState? deduplicationState = null;
+
+        if (rule.Type == TransformationType.Deduplicate)
+        {
+            if (handler is not DeduplicateTransformationHandler deduplicationHandler)
+            {
+                throw new InvalidOperationException(
+                    "The registered deduplication transformation handler does not support execution-scoped state.");
+            }
+
+            deduplicationState = deduplicationHandler.CreateExecutionState(rule);
+        }
+
+        return new TransformationExecutionStep(rule, handler, deduplicationState);
+    }
 }

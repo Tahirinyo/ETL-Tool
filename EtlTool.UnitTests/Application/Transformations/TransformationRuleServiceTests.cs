@@ -74,6 +74,83 @@ public sealed class TransformationRuleServiceTests
         Assert.Same(created, repository.UpdatedPipeline!.TransformationRules.Last());
     }
 
+    [Fact]
+    public async Task CreateAsync_DeduplicatePersistsOrderedSelectedFieldsAndNoSourceField()
+    {
+        var pipeline = Pipeline(rules: [Rule(4, TransformationType.Trim)]);
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "Region",
+            TargetField = "region",
+            IsIncluded = true
+        });
+        var repository = new RecordingRepository(pipeline);
+
+        var created = await CreateService(repository).CreateAsync(
+            pipeline.Id,
+            new TransformationRuleInput(
+                TransformationType.Deduplicate,
+                SourceField: "ignored",
+                DefaultValue: null,
+                Find: null,
+                Replace: null,
+                SelectedFields: ["name", "region"]),
+            CancellationToken.None);
+
+        Assert.NotNull(created);
+        Assert.Equal(5, created.Order);
+        Assert.Null(created.SourceField);
+        Assert.Equal(["Fields"], created.Configuration.Keys);
+        Assert.Equal("[\"name\",\"region\"]", created.Configuration["Fields"]);
+        Assert.Same(created, repository.UpdatedPipeline!.TransformationRules.Last());
+    }
+
+    [Fact]
+    public async Task CreateAsync_DeduplicateRejectsInvalidOrUnavailableSelectedFields()
+    {
+        var pipeline = Pipeline();
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "NameAlias",
+            TargetField = "Name",
+            IsIncluded = true
+        });
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "Hidden",
+            TargetField = "hidden",
+            IsIncluded = false
+        });
+        var repository = new RecordingRepository(pipeline);
+
+        foreach (var selectedFields in new IReadOnlyList<string>?[]
+        {
+            null,
+            [],
+            [""],
+            [" "],
+            [null!],
+            ["name", "name"],
+            ["NAME"],
+            ["hidden"],
+            ["missing"]
+        })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).CreateAsync(
+                pipeline.Id,
+                new TransformationRuleInput(
+                    TransformationType.Deduplicate,
+                    SourceField: null,
+                    DefaultValue: null,
+                    Find: null,
+                    Replace: null,
+                    SelectedFields: selectedFields),
+                CancellationToken.None));
+        }
+
+        Assert.Null(repository.UpdatedPipeline);
+    }
+
     [Theory]
     [InlineData(TransformationType.Trim)]
     [InlineData(TransformationType.ToUpper)]
@@ -99,7 +176,6 @@ public sealed class TransformationRuleServiceTests
 
     [Theory]
     [InlineData(TransformationType.Unspecified)]
-    [InlineData(TransformationType.Deduplicate)]
     [InlineData((TransformationType)999)]
     public async Task CreateAsync_RejectsUnsupportedTransformationTypes(TransformationType type)
     {
@@ -225,6 +301,53 @@ public sealed class TransformationRuleServiceTests
         Assert.Equal("", persisted.Configuration["Replace"]);
         Assert.Equal("Keep me", repository.UpdatedPipeline.Description);
         Assert.Same(pipeline.ValidationRules, repository.UpdatedPipeline.ValidationRules);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DeduplicateReplacesSingleFieldAndObsoleteConfiguration()
+    {
+        var existing = Rule(7, TransformationType.FindAndReplace);
+        existing.Configuration["Find"] = "a";
+        existing.Configuration["Replace"] = "b";
+        var pipeline = Pipeline(rules: [existing]);
+        var repository = new RecordingRepository(pipeline);
+        var service = CreateService(repository);
+
+        Assert.True(await service.UpdateAsync(
+            pipeline.Id,
+            existing.Id,
+            new TransformationRuleInput(
+                TransformationType.Deduplicate,
+                SourceField: "ignored",
+                DefaultValue: null,
+                Find: null,
+                Replace: null,
+                SelectedFields: ["name"]),
+            CancellationToken.None));
+
+        var deduplicate = Assert.Single(repository.UpdatedPipeline!.TransformationRules);
+        Assert.Equal(existing.Id, deduplicate.Id);
+        Assert.Equal(7, deduplicate.Order);
+        Assert.Null(deduplicate.SourceField);
+        Assert.Equal(new[] { "Fields" }, deduplicate.Configuration.Keys);
+        Assert.Equal("[\"name\"]", deduplicate.Configuration["Fields"]);
+
+        Assert.True(await service.UpdateAsync(
+            pipeline.Id,
+            existing.Id,
+            new TransformationRuleInput(
+                TransformationType.Trim,
+                "name",
+                null,
+                null,
+                null),
+            CancellationToken.None));
+
+        var trim = Assert.Single(repository.UpdatedPipeline!.TransformationRules);
+        Assert.Equal(existing.Id, trim.Id);
+        Assert.Equal(7, trim.Order);
+        Assert.Equal("name", trim.SourceField);
+        Assert.Empty(trim.Configuration);
     }
 
     [Fact]

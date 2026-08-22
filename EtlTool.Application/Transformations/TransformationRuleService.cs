@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EtlTool.Application.Pipelines;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
@@ -12,6 +13,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
     private const string ReplaceKey = "Replace";
     private const string FilterOperatorKey = "Operator";
     private const string FilterValueKey = "Value";
+    private const string DeduplicationFieldsKey = "Fields";
 
     private readonly IPipelineDefinitionRepository _repository;
     private readonly TimeProvider _timeProvider;
@@ -149,9 +151,23 @@ public sealed class TransformationRuleService : ITransformationRuleService
         int order)
     {
         ValidateType(input.Type);
-        ValidateSourceField(input.SourceField, pipeline.FieldMappings);
 
         var configuration = new Dictionary<string, string>(StringComparer.Ordinal);
+        var sourceField = input.SourceField;
+
+        if (input.Type == TransformationType.Deduplicate)
+        {
+            var selectedFields = ValidateDeduplicationFields(
+                input.SelectedFields,
+                pipeline.FieldMappings);
+            configuration[DeduplicationFieldsKey] = JsonSerializer.Serialize(selectedFields);
+            sourceField = null;
+        }
+        else
+        {
+            ValidateSourceField(input.SourceField, pipeline.FieldMappings);
+        }
+
         switch (input.Type)
         {
             case TransformationType.SetDefaultValue:
@@ -189,7 +205,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
             Id = Guid.NewGuid(),
             Type = input.Type,
             Order = order,
-            SourceField = input.SourceField,
+            SourceField = sourceField,
             Configuration = configuration
         };
     }
@@ -205,7 +221,8 @@ public sealed class TransformationRuleService : ITransformationRuleService
             and not TransformationType.ConvertToDate
             and not TransformationType.FilterRow
             and not TransformationType.SetDefaultValue
-            and not TransformationType.FindAndReplace)
+            and not TransformationType.FindAndReplace
+            and not TransformationType.Deduplicate)
         {
             throw new ArgumentException("The transformation type is not supported.", nameof(type));
         }
@@ -248,6 +265,52 @@ public sealed class TransformationRuleService : ITransformationRuleService
             throw new InvalidOperationException("A new transformation rule order cannot be assigned.");
         }
         return maximum + 1;
+    }
+
+    private static string[] ValidateDeduplicationFields(
+        IReadOnlyList<string>? selectedFields,
+        IReadOnlyList<FieldMapping> mappings)
+    {
+        if (selectedFields is not { Count: > 0 })
+        {
+            throw new ArgumentException(
+                "At least one deduplication field is required.",
+                nameof(selectedFields));
+        }
+
+        var validatedFields = new string[selectedFields.Count];
+        var uniqueFields = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var index = 0; index < selectedFields.Count; index++)
+        {
+            var field = selectedFields[index];
+            if (string.IsNullOrWhiteSpace(field))
+            {
+                throw new ArgumentException(
+                    "Deduplication field names cannot be empty or whitespace.",
+                    nameof(selectedFields));
+            }
+
+            if (!uniqueFields.Add(field))
+            {
+                throw new ArgumentException(
+                    $"Deduplication field '{field}' is selected more than once.",
+                    nameof(selectedFields));
+            }
+
+            if (mappings is null || !mappings.Any(mapping => mapping is not null
+                && mapping.IsIncluded
+                && string.Equals(mapping.TargetField, field, StringComparison.Ordinal)))
+            {
+                throw new ArgumentException(
+                    $"Deduplication field '{field}' must be an included mapped output field.",
+                    nameof(selectedFields));
+            }
+
+            validatedFields[index] = field;
+        }
+
+        return validatedFields;
     }
 
     private static void ValidateFilterOperator(FilterOperator filterOperator)

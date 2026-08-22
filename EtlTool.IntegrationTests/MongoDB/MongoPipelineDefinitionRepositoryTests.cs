@@ -235,6 +235,17 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
                     Type = TransformationType.ToLower,
                     Order = 2,
                     SourceField = "email"
+                },
+                new TransformationRule
+                {
+                    Id = Guid.NewGuid(),
+                    Type = TransformationType.Deduplicate,
+                    Order = 3,
+                    SourceField = null,
+                    Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["Fields"] = "[\"customer_id\",\"email\"]"
+                    }
                 }
             ],
             ValidationRules =
