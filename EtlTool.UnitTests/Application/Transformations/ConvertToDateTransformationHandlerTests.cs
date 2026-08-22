@@ -18,7 +18,7 @@ public sealed class ConvertToDateTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("OccurredAt"), Culture("tr-TR"), "dd.MM.yyyy");
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(timestamp, Assert.IsType<DateTime>(row.Values["OccurredAt"]));
         Assert.Equal(DateTimeKind.Utc, ((DateTime)row.Values["OccurredAt"]!).Kind);
     }
@@ -401,7 +401,7 @@ public sealed class ConvertToDateTransformationHandlerTests
 
         Assert.Same(
             nullRow,
-            _handler.Apply(nullRow, Rule("OccurredAt"), Culture("en-US"), dateFormat: null));
+            _handler.Apply(nullRow, Rule("OccurredAt"), Culture("en-US"), dateFormat: null).Row);
         _handler.Apply(row, Rule("occurredAt"), Culture("tr-TR"), dateFormat: null);
 
         Assert.Null(nullRow.Values["OccurredAt"]);

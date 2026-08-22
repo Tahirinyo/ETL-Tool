@@ -20,7 +20,7 @@ public sealed class ConvertToStringTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Value"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(input, Assert.IsType<string>(row.Values["Value"]));
     }
 
@@ -80,10 +80,10 @@ public sealed class ConvertToStringTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("value"));
 
-        Assert.Equal(27, result.SourceRowNumber);
-        Assert.Equal(7, Assert.IsType<int>(result.Values["Value"]));
-        Assert.Equal("8", Assert.IsType<string>(result.Values["value"]));
-        Assert.Equal(new DateTime(2026, 8, 21), Assert.IsType<DateTime>(result.Values["Other"]));
+        Assert.Equal(27, result.Row.SourceRowNumber);
+        Assert.Equal(7, Assert.IsType<int>(result.Row.Values["Value"]));
+        Assert.Equal("8", Assert.IsType<string>(result.Row.Values["value"]));
+        Assert.Equal(new DateTime(2026, 8, 21), Assert.IsType<DateTime>(result.Row.Values["Other"]));
     }
 
     [Fact]

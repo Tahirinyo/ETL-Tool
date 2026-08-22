@@ -63,14 +63,14 @@ public sealed class TransformationEngineTests
             [Rule(1, TransformationType.Trim), Rule(2, TransformationType.ToLower)],
             Options());
 
-        Assert.NotSame(source, result);
+        Assert.NotSame(source, result.Row);
         Assert.Same(firstOutput, secondInput);
-        Assert.Same(secondInput, result);
-        Assert.Equal(12, result.SourceRowNumber);
-        Assert.Equal("Grace", result.Values["Name"]);
-        Assert.Equal(42L, result.Values["Unchanged"]);
-        Assert.Equal(true, result.Values["Processed"]);
-        Assert.Equal(["Name", "Unchanged", "Processed"], result.Values.Keys);
+        Assert.Same(secondInput, result.Row);
+        Assert.Equal(12, result.Row.SourceRowNumber);
+        Assert.Equal("Grace", result.Row.Values["Name"]);
+        Assert.Equal(42L, result.Row.Values["Unchanged"]);
+        Assert.Equal(true, result.Row.Values["Processed"]);
+        Assert.Equal(["Name", "Unchanged", "Processed"], result.Row.Values.Keys);
     }
 
     [Fact]
@@ -81,9 +81,10 @@ public sealed class TransformationEngineTests
 
         var result = engine.Apply(row, [], Options());
 
-        Assert.Same(row, result);
-        Assert.Equal(3, result.SourceRowNumber);
-        Assert.Equal("Ada", result.Values["Name"]);
+        Assert.Same(row, result.Row);
+        Assert.Equal(TransformationResultStatus.Transformed, result.Status);
+        Assert.Equal(3, result.Row.SourceRowNumber);
+        Assert.Equal("Ada", result.Row.Values["Name"]);
     }
 
     [Fact]
@@ -217,8 +218,8 @@ public sealed class TransformationEngineTests
             ],
             Options());
 
-        Assert.Same(row, result);
-        Assert.Equal("42", Assert.IsType<string>(result.Values["Code"]));
+        Assert.Same(row, result.Row);
+        Assert.Equal("42", Assert.IsType<string>(result.Row.Values["Code"]));
     }
 
     [Fact]
@@ -232,8 +233,8 @@ public sealed class TransformationEngineTests
             [Rule(1, TransformationType.ConvertToDecimal, "Amount")],
             Options("tr-TR"));
 
-        Assert.Same(row, result);
-        Assert.Equal(1234.50m, Assert.IsType<decimal>(result.Values["Amount"]));
+        Assert.Same(row, result.Row);
+        Assert.Equal(1234.50m, Assert.IsType<decimal>(result.Row.Values["Amount"]));
     }
 
     [Fact]
@@ -267,10 +268,10 @@ public sealed class TransformationEngineTests
             [Rule(1, TransformationType.ConvertToDate, "OccurredAt")],
             Options("tr-TR", "dd.MM.yyyy"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(
             new DateTime(2026, 12, 31),
-            Assert.IsType<DateTime>(result.Values["OccurredAt"]));
+            Assert.IsType<DateTime>(result.Row.Values["OccurredAt"]));
     }
 
     [Fact]
@@ -310,7 +311,7 @@ public sealed class TransformationEngineTests
 
         Assert.Equal(
             new DateTime(2026, 12, 31),
-            Assert.IsType<DateTime>(result.Values["OccurredAt"]));
+            Assert.IsType<DateTime>(result.Row.Values["OccurredAt"]));
     }
 
     [Fact]
@@ -347,7 +348,53 @@ public sealed class TransformationEngineTests
             ],
             Options("en-US"));
 
-        Assert.Equal("42", Assert.IsType<string>(result.Values["Code"]));
+        Assert.Equal("42", Assert.IsType<string>(result.Row.Values["Code"]));
+    }
+
+    [Fact]
+    public void Apply_FilterObservesCurrentOrderedValueAndStopsLaterTransformations()
+    {
+        var row = Row(8, ("Name", " Ada "));
+        var filter = Rule(20, TransformationType.FilterRow, "Name");
+        filter.Configuration["Operator"] = FilterOperator.Equals.ToString();
+        filter.Configuration["Value"] = "Ada";
+        var engine = Engine(
+            new TrimTransformationHandler(),
+            new ConditionalFilterTransformationHandler(),
+            new ToLowerTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [
+                Rule(30, TransformationType.ToLower, "Name"),
+                filter,
+                Rule(10, TransformationType.Trim, "Name")
+            ],
+            Options("en-US"));
+
+        Assert.Equal(TransformationResultStatus.Filtered, result.Status);
+        Assert.Same(row, result.Row);
+        Assert.Equal("Ada", row.Values["Name"]);
+    }
+
+    [Fact]
+    public void Apply_NonMatchingFilterContinuesWithLaterTransformations()
+    {
+        var row = Row(9, ("Name", "Ada"));
+        var filter = Rule(10, TransformationType.FilterRow, "Name");
+        filter.Configuration["Operator"] = FilterOperator.Equals.ToString();
+        filter.Configuration["Value"] = "Grace";
+        var engine = Engine(
+            new ConditionalFilterTransformationHandler(),
+            new ToUpperTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [filter, Rule(20, TransformationType.ToUpper, "Name")],
+            Options("en-US"));
+
+        Assert.Equal(TransformationResultStatus.Transformed, result.Status);
+        Assert.Equal("ADA", row.Values["Name"]);
     }
 
     private static TransformationEngine Engine(params ITransformationHandler[] handlers) =>
@@ -414,6 +461,10 @@ public sealed class TransformationEngineTests
     {
         public TransformationType Type { get; } = type;
 
-        public DataRow Apply(DataRow row, TransformationRule rule) => apply(row, rule);
+        public TransformationResult Apply(DataRow row, TransformationRule rule)
+        {
+            var result = apply(row, rule);
+            return result is null ? null! : TransformationResult.Transformed(result);
+        }
     }
 }

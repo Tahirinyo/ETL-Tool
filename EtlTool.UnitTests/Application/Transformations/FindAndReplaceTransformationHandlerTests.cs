@@ -28,7 +28,7 @@ public sealed class FindAndReplaceTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name", find, replace));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(expected, row.Values["Name"]);
         Assert.Equal(42L, Assert.IsType<long>(row.Values["Other"]));
     }
@@ -100,10 +100,10 @@ public sealed class FindAndReplaceTransformationHandlerTests
 
         var result = _handler.Apply(row, rule);
 
-        Assert.Equal(27, result.SourceRowNumber);
-        Assert.Equal("Foo", result.Values["Name"]);
-        Assert.Equal("bar", result.Values["name"]);
-        Assert.Equal(7, result.Values["Other"]);
+        Assert.Equal(27, result.Row.SourceRowNumber);
+        Assert.Equal("Foo", result.Row.Values["Name"]);
+        Assert.Equal("bar", result.Row.Values["name"]);
+        Assert.Equal(7, result.Row.Values["Other"]);
     }
 
     [Fact]

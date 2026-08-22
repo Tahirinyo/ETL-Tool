@@ -69,7 +69,7 @@ public sealed class ConvertToIntegerTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Value"), Culture("en-US"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(expected, Assert.IsType<long>(row.Values["Value"]));
     }
 
@@ -184,7 +184,7 @@ public sealed class ConvertToIntegerTransformationHandlerTests
         var nullRow = Row(10, ("Value", null));
         var row = Row(11, ("Value", "7"), ("value", "8"), ("Other", 9m));
 
-        Assert.Same(nullRow, _handler.Apply(nullRow, Rule("Value"), Culture("en-US")));
+        Assert.Same(nullRow, _handler.Apply(nullRow, Rule("Value"), Culture("en-US")).Row);
         _handler.Apply(row, Rule("value"), Culture("en-US"));
 
         Assert.Null(nullRow.Values["Value"]);

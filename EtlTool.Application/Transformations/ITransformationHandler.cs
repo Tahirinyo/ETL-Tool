@@ -8,5 +8,5 @@ public interface ITransformationHandler
 {
     TransformationType Type { get; }
 
-    DataRow Apply(DataRow row, TransformationRule rule);
+    TransformationResult Apply(DataRow row, TransformationRule rule);
 }

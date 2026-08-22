@@ -11,7 +11,7 @@ public sealed class FindAndReplaceTransformationHandler : ITransformationHandler
 
     public TransformationType Type => TransformationType.FindAndReplace;
 
-    public DataRow Apply(DataRow row, TransformationRule rule)
+    public TransformationResult Apply(DataRow row, TransformationRule rule)
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(rule);
@@ -48,7 +48,7 @@ public sealed class FindAndReplaceTransformationHandler : ITransformationHandler
             row.Values[rule.SourceField] = text.Replace(find, replace, StringComparison.Ordinal);
         }
 
-        return row;
+        return TransformationResult.Transformed(row);
     }
 
     private static bool TryGetConfigurationValue(

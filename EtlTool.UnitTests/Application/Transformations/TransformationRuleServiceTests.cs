@@ -48,6 +48,32 @@ public sealed class TransformationRuleServiceTests
         Assert.Equal(["Find", "Replace"], created.Configuration.Keys.OrderBy(key => key));
     }
 
+    [Fact]
+    public async Task CreateAsync_FilterRowPersistsExactOperatorAndEmptyValue()
+    {
+        var pipeline = Pipeline(rules: [Rule(4, TransformationType.Trim)]);
+        var repository = new RecordingRepository(pipeline);
+
+        var created = await CreateService(repository).CreateAsync(
+            pipeline.Id,
+            new TransformationRuleInput(
+                TransformationType.FilterRow,
+                "name",
+                DefaultValue: "ignored",
+                Find: "ignored",
+                Replace: "ignored",
+                FilterOperator: FilterOperator.GreaterThanOrEqual,
+                FilterValue: ""),
+            CancellationToken.None);
+
+        Assert.NotNull(created);
+        Assert.Equal(5, created.Order);
+        Assert.Equal("GreaterThanOrEqual", created.Configuration["Operator"]);
+        Assert.Equal("", created.Configuration["Value"]);
+        Assert.Equal(["Operator", "Value"], created.Configuration.Keys.OrderBy(key => key));
+        Assert.Same(created, repository.UpdatedPipeline!.TransformationRules.Last());
+    }
+
     [Theory]
     [InlineData(TransformationType.Trim)]
     [InlineData(TransformationType.ToUpper)]
@@ -73,7 +99,6 @@ public sealed class TransformationRuleServiceTests
 
     [Theory]
     [InlineData(TransformationType.Unspecified)]
-    [InlineData(TransformationType.FilterRow)]
     [InlineData(TransformationType.Deduplicate)]
     [InlineData((TransformationType)999)]
     public async Task CreateAsync_RejectsUnsupportedTransformationTypes(TransformationType type)
@@ -84,6 +109,50 @@ public sealed class TransformationRuleServiceTests
         await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).CreateAsync(
             pipeline.Id,
             new TransformationRuleInput(type, "name", null, null, null),
+            CancellationToken.None));
+
+        Assert.Null(repository.UpdatedPipeline);
+    }
+
+    [Theory]
+    [InlineData(FilterOperator.Unspecified)]
+    [InlineData((FilterOperator)999)]
+    public async Task CreateAsync_RejectsUnsupportedFilterOperator(FilterOperator filterOperator)
+    {
+        var pipeline = Pipeline();
+        var repository = new RecordingRepository(pipeline);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).CreateAsync(
+            pipeline.Id,
+            new TransformationRuleInput(
+                TransformationType.FilterRow,
+                "name",
+                null,
+                null,
+                null,
+                filterOperator,
+                "value"),
+            CancellationToken.None));
+
+        Assert.Null(repository.UpdatedPipeline);
+    }
+
+    [Fact]
+    public async Task CreateAsync_RejectsMissingFilterValue()
+    {
+        var pipeline = Pipeline();
+        var repository = new RecordingRepository(pipeline);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).CreateAsync(
+            pipeline.Id,
+            new TransformationRuleInput(
+                TransformationType.FilterRow,
+                "name",
+                null,
+                null,
+                null,
+                FilterOperator.Equals,
+                FilterValue: null),
             CancellationToken.None));
 
         Assert.Null(repository.UpdatedPipeline);

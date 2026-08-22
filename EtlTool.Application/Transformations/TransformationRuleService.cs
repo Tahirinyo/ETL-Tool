@@ -10,6 +10,8 @@ public sealed class TransformationRuleService : ITransformationRuleService
     private const string DefaultValueKey = "Value";
     private const string FindKey = "Find";
     private const string ReplaceKey = "Replace";
+    private const string FilterOperatorKey = "Operator";
+    private const string FilterValueKey = "Value";
 
     private readonly IPipelineDefinitionRepository _repository;
     private readonly TimeProvider _timeProvider;
@@ -171,6 +173,15 @@ public sealed class TransformationRuleService : ITransformationRuleService
                 configuration[FindKey] = input.Find;
                 configuration[ReplaceKey] = input.Replace;
                 break;
+            case TransformationType.FilterRow:
+                ValidateFilterOperator(input.FilterOperator);
+                if (input.FilterValue is null)
+                {
+                    throw new ArgumentException("A filter comparison value is required.", nameof(input));
+                }
+                configuration[FilterOperatorKey] = input.FilterOperator.ToString();
+                configuration[FilterValueKey] = input.FilterValue;
+                break;
         }
 
         return new TransformationRule
@@ -192,6 +203,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
             and not TransformationType.ConvertToInteger
             and not TransformationType.ConvertToDecimal
             and not TransformationType.ConvertToDate
+            and not TransformationType.FilterRow
             and not TransformationType.SetDefaultValue
             and not TransformationType.FindAndReplace)
         {
@@ -236,6 +248,16 @@ public sealed class TransformationRuleService : ITransformationRuleService
             throw new InvalidOperationException("A new transformation rule order cannot be assigned.");
         }
         return maximum + 1;
+    }
+
+    private static void ValidateFilterOperator(FilterOperator filterOperator)
+    {
+        if (!Enum.IsDefined(filterOperator) || filterOperator == FilterOperator.Unspecified)
+        {
+            throw new ArgumentException(
+                "The filter operator is not supported.",
+                nameof(filterOperator));
+        }
     }
 
     private static void ValidateReorderRequest(

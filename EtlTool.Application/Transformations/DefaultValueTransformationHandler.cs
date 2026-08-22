@@ -10,7 +10,7 @@ public sealed class DefaultValueTransformationHandler : ITransformationHandler
 
     public TransformationType Type => TransformationType.SetDefaultValue;
 
-    public DataRow Apply(DataRow row, TransformationRule rule)
+    public TransformationResult Apply(DataRow row, TransformationRule rule)
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(rule);
@@ -40,6 +40,6 @@ public sealed class DefaultValueTransformationHandler : ITransformationHandler
             row.Values[rule.SourceField] = defaultValue;
         }
 
-        return row;
+        return TransformationResult.Transformed(row);
     }
 }

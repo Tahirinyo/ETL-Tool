@@ -65,7 +65,7 @@ public sealed class ConvertToDecimalTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Value"), Culture("en-US"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(expected, Assert.IsType<decimal>(row.Values["Value"]));
     }
 
@@ -162,7 +162,7 @@ public sealed class ConvertToDecimalTransformationHandlerTests
         var nullRow = Row(8, ("Value", null));
         var row = Row(9, ("Value", "7.5"), ("value", "8.5"), ("Other", 9L));
 
-        Assert.Same(nullRow, _handler.Apply(nullRow, Rule("Value"), Culture("en-US")));
+        Assert.Same(nullRow, _handler.Apply(nullRow, Rule("Value"), Culture("en-US")).Row);
         _handler.Apply(row, Rule("value"), Culture("en-US"));
 
         Assert.Null(nullRow.Values["Value"]);

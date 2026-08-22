@@ -6,7 +6,7 @@ namespace EtlTool.Application.Transformations;
 
 public interface ISourceDateFormatTransformationHandler : ISourceCultureTransformationHandler
 {
-    DataRow Apply(
+    TransformationResult Apply(
         DataRow row,
         TransformationRule rule,
         CultureInfo sourceCulture,

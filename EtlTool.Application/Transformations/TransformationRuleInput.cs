@@ -7,4 +7,6 @@ public sealed record TransformationRuleInput(
     string? SourceField,
     string? DefaultValue,
     string? Find,
-    string? Replace);
+    string? Replace,
+    FilterOperator FilterOperator = FilterOperator.Unspecified,
+    string? FilterValue = null);

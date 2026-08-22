@@ -14,7 +14,7 @@ public sealed class TransformationEngine
         _handlerRegistry = handlerRegistry;
     }
 
-    public DataRow Apply(
+    public TransformationResult Apply(
         DataRow mappedRow,
         IReadOnlyCollection<TransformationRule> rules,
         SourceOptions sourceOptions)
@@ -27,7 +27,7 @@ public sealed class TransformationEngine
 
         if (rules.Count == 0)
         {
-            return mappedRow;
+            return TransformationResult.Transformed(mappedRow);
         }
 
         var orders = new HashSet<int>();
@@ -55,10 +55,11 @@ public sealed class TransformationEngine
             .ToArray();
 
         var currentRow = mappedRow;
+        var currentResult = TransformationResult.Transformed(mappedRow);
 
         foreach (var step in executionSteps)
         {
-            currentRow = step.Handler switch
+            currentResult = step.Handler switch
             {
                 ISourceDateFormatTransformationHandler dateFormatAwareHandler =>
                     dateFormatAwareHandler.Apply(
@@ -71,12 +72,18 @@ public sealed class TransformationEngine
                 _ => step.Handler.Apply(currentRow, step.Rule)
             };
 
-            currentRow = currentRow
+            currentResult = currentResult
                 ?? throw new InvalidOperationException(
-                    $"Transformation handler for type '{step.Handler.Type}' returned no row.");
+                    $"Transformation handler for type '{step.Handler.Type}' returned no result.");
+
+            currentRow = currentResult.Row;
+            if (currentResult.IsFiltered)
+            {
+                return currentResult;
+            }
         }
 
-        return currentRow;
+        return currentResult;
     }
 
     private readonly record struct ExecutionStep(

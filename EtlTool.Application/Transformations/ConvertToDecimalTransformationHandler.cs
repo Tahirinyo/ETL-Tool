@@ -9,11 +9,11 @@ public sealed class ConvertToDecimalTransformationHandler : ISourceCultureTransf
 {
     public TransformationType Type => TransformationType.ConvertToDecimal;
 
-    public DataRow Apply(DataRow row, TransformationRule rule) =>
+    public TransformationResult Apply(DataRow row, TransformationRule rule) =>
         throw new InvalidOperationException(
             "The convert to decimal transformation requires the pipeline source culture.");
 
-    public DataRow Apply(
+    public TransformationResult Apply(
         DataRow row,
         TransformationRule rule,
         CultureInfo sourceCulture)
@@ -36,7 +36,7 @@ public sealed class ConvertToDecimalTransformationHandler : ISourceCultureTransf
 
         if (value is null)
         {
-            return row;
+            return TransformationResult.Transformed(row);
         }
 
         var converted = value switch
@@ -57,7 +57,7 @@ public sealed class ConvertToDecimalTransformationHandler : ISourceCultureTransf
         };
 
         row.Values[rule.SourceField] = converted;
-        return row;
+        return TransformationResult.Transformed(row);
     }
 
     private static decimal ConvertText(

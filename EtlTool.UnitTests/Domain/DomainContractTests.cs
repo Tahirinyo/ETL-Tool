@@ -22,6 +22,17 @@ public sealed class DomainContractTests
         Assert.Equal(
             [
                 "Unspecified:0",
+                "Equals:1",
+                "NotEquals:2",
+                "GreaterThan:3",
+                "GreaterThanOrEqual:4",
+                "LessThan:5",
+                "LessThanOrEqual:6"
+            ],
+            GetEnumContract<FilterOperator>());
+        Assert.Equal(
+            [
+                "Unspecified:0",
                 "Trim:1",
                 "ToUpper:2",
                 "ToLower:3",

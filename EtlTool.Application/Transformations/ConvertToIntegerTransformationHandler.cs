@@ -9,11 +9,11 @@ public sealed class ConvertToIntegerTransformationHandler : ISourceCultureTransf
 {
     public TransformationType Type => TransformationType.ConvertToInteger;
 
-    public DataRow Apply(DataRow row, TransformationRule rule) =>
+    public TransformationResult Apply(DataRow row, TransformationRule rule) =>
         throw new InvalidOperationException(
             "The convert to integer transformation requires the pipeline source culture.");
 
-    public DataRow Apply(
+    public TransformationResult Apply(
         DataRow row,
         TransformationRule rule,
         CultureInfo sourceCulture)
@@ -36,7 +36,7 @@ public sealed class ConvertToIntegerTransformationHandler : ISourceCultureTransf
 
         if (value is null)
         {
-            return row;
+            return TransformationResult.Transformed(row);
         }
 
         var converted = value switch
@@ -57,7 +57,7 @@ public sealed class ConvertToIntegerTransformationHandler : ISourceCultureTransf
         };
 
         row.Values[rule.SourceField] = converted;
-        return row;
+        return TransformationResult.Transformed(row);
     }
 
     private static long ConvertText(

@@ -8,7 +8,7 @@ public sealed class TrimTransformationHandler : ITransformationHandler
 {
     public TransformationType Type => TransformationType.Trim;
 
-    public DataRow Apply(DataRow row, TransformationRule rule)
+    public TransformationResult Apply(DataRow row, TransformationRule rule)
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(rule);
@@ -30,6 +30,6 @@ public sealed class TrimTransformationHandler : ITransformationHandler
             row.Values[rule.SourceField] = text.Trim();
         }
 
-        return row;
+        return TransformationResult.Transformed(row);
     }
 }

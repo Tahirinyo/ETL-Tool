@@ -9,7 +9,7 @@ public sealed class ConvertToStringTransformationHandler : ITransformationHandle
 {
     public TransformationType Type => TransformationType.ConvertToString;
 
-    public DataRow Apply(DataRow row, TransformationRule rule)
+    public TransformationResult Apply(DataRow row, TransformationRule rule)
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(rule);
@@ -28,13 +28,13 @@ public sealed class ConvertToStringTransformationHandler : ITransformationHandle
 
         if (value is null or string)
         {
-            return row;
+            return TransformationResult.Transformed(row);
         }
 
         if (value is bool boolean)
         {
             row.Values[rule.SourceField] = boolean.ToString();
-            return row;
+            return TransformationResult.Transformed(row);
         }
 
         if (value is IFormattable formattable && IsSupportedFormattableValue(value))
@@ -42,7 +42,7 @@ public sealed class ConvertToStringTransformationHandler : ITransformationHandle
             row.Values[rule.SourceField] = formattable.ToString(null, CultureInfo.InvariantCulture)
                 ?? throw new InvalidOperationException(
                     $"The convert to string transformation field '{rule.SourceField}' in row {row.SourceRowNumber} produced no string value.");
-            return row;
+            return TransformationResult.Transformed(row);
         }
 
         throw new InvalidOperationException(

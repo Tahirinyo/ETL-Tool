@@ -21,7 +21,7 @@ public sealed class TrimTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(expected, row.Values["Name"]);
         Assert.Equal(42L, row.Values["Other"]);
     }
@@ -69,11 +69,11 @@ public sealed class TrimTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name"));
 
-        Assert.Equal(27, result.SourceRowNumber);
-        Assert.Equal("Ada", result.Values["Name"]);
-        Assert.Equal(originalValues[1], new KeyValuePair<string, object?>("Count", result.Values["Count"]));
-        Assert.True(result.Values.ContainsKey("Missing"));
-        Assert.Null(result.Values["Missing"]);
+        Assert.Equal(27, result.Row.SourceRowNumber);
+        Assert.Equal("Ada", result.Row.Values["Name"]);
+        Assert.Equal(originalValues[1], new KeyValuePair<string, object?>("Count", result.Row.Values["Count"]));
+        Assert.True(result.Row.Values.ContainsKey("Missing"));
+        Assert.Null(result.Row.Values["Missing"]);
     }
 
     [Fact]

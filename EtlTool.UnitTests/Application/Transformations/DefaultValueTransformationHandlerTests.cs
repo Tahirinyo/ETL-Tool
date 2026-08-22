@@ -18,7 +18,7 @@ public sealed class DefaultValueTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name", "Unknown"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal("Unknown", row.Values["Name"]);
     }
 
@@ -87,10 +87,10 @@ public sealed class DefaultValueTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name", "Unknown"));
 
-        Assert.Equal(27, result.SourceRowNumber);
-        Assert.Equal("Unknown", result.Values["Name"]);
-        Assert.Equal(7L, Assert.IsType<long>(result.Values["Count"]));
-        Assert.Equal(timestamp, Assert.IsType<DateTime>(result.Values["CreatedAt"]));
+        Assert.Equal(27, result.Row.SourceRowNumber);
+        Assert.Equal("Unknown", result.Row.Values["Name"]);
+        Assert.Equal(7L, Assert.IsType<long>(result.Row.Values["Count"]));
+        Assert.Equal(timestamp, Assert.IsType<DateTime>(result.Row.Values["CreatedAt"]));
     }
 
     [Fact]

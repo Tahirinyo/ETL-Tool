@@ -138,12 +138,13 @@ public sealed class TransformationHandlerRegistryTests
     }
 
     [Fact]
-    public void Composition_ResolvesConcreteConversionHandlersThroughRegistry()
+    public void Composition_ResolvesConcreteTypedHandlersThroughRegistry()
     {
         var services = new ServiceCollection();
         services.AddSingleton<ITransformationHandler, ConvertToIntegerTransformationHandler>();
         services.AddSingleton<ITransformationHandler, ConvertToDecimalTransformationHandler>();
         services.AddSingleton<ITransformationHandler, ConvertToDateTransformationHandler>();
+        services.AddSingleton<ITransformationHandler, ConditionalFilterTransformationHandler>();
         services.AddSingleton<TransformationHandlerRegistry>();
         services.AddSingleton<TransformationEngine>();
         using var provider = services.BuildServiceProvider(
@@ -157,12 +158,15 @@ public sealed class TransformationHandlerRegistryTests
             registry.Resolve(TransformationType.ConvertToDecimal));
         Assert.IsType<ConvertToDateTransformationHandler>(
             registry.Resolve(TransformationType.ConvertToDate));
+        Assert.IsType<ConditionalFilterTransformationHandler>(
+            registry.Resolve(TransformationType.FilterRow));
     }
 
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;
 
-        public DataRow Apply(DataRow row, TransformationRule rule) => row;
+        public TransformationResult Apply(DataRow row, TransformationRule rule) =>
+            TransformationResult.Transformed(row);
     }
 }

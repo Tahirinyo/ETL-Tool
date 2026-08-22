@@ -22,7 +22,7 @@ public sealed class ToUpperTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("Name"));
 
-        Assert.Same(row, result);
+        Assert.Same(row, result.Row);
         Assert.Equal(expected, row.Values["Name"]);
         Assert.Equal(42L, row.Values["Other"]);
     }
@@ -49,10 +49,10 @@ public sealed class ToUpperTransformationHandlerTests
 
         var result = _handler.Apply(row, Rule("name"));
 
-        Assert.Equal(27, result.SourceRowNumber);
-        Assert.Equal("Ada", result.Values["Name"]);
-        Assert.Equal("ALIAS", result.Values["name"]);
-        Assert.Equal(7, result.Values["Other"]);
+        Assert.Equal(27, result.Row.SourceRowNumber);
+        Assert.Equal("Ada", result.Row.Values["Name"]);
+        Assert.Equal("ALIAS", result.Row.Values["name"]);
+        Assert.Equal(7, result.Row.Values["Other"]);
     }
 
     [Fact]
