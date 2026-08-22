@@ -332,6 +332,85 @@ public sealed class TransformationEngineTests
         Assert.Equal(0, invocationCount);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Apply_UsesInvariantCultureForOmittedCultureAcrossNumericAndDateConsumers(
+        string? cultureName)
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("tr-TR");
+            CultureInfo.CurrentUICulture = CultureInfo.CurrentCulture;
+            var row = Row(
+                6,
+                ("Amount", "1,234.5"),
+                ("OccurredAt", "12/31/2026"));
+            var amountFilter = Rule(2, TransformationType.FilterRow, "Amount");
+            amountFilter.Configuration["Operator"] = FilterOperator.GreaterThan.ToString();
+            amountFilter.Configuration["Value"] = "2,000.0";
+            var dateFilter = Rule(4, TransformationType.FilterRow, "OccurredAt");
+            dateFilter.Configuration["Operator"] = FilterOperator.GreaterThan.ToString();
+            dateFilter.Configuration["Value"] = "12/31/2027";
+            var engine = Engine(
+                new ConvertToDecimalTransformationHandler(),
+                new ConvertToDateTransformationHandler(),
+                new ConditionalFilterTransformationHandler());
+
+            var result = engine.Apply(
+                row,
+                [
+                    Rule(1, TransformationType.ConvertToDecimal, "Amount"),
+                    amountFilter,
+                    Rule(3, TransformationType.ConvertToDate, "OccurredAt"),
+                    dateFilter
+                ],
+                Options(cultureName, "MM/dd/yyyy"));
+
+            Assert.Equal(TransformationResultStatus.Transformed, result.Status);
+            Assert.Equal(1234.5m, Assert.IsType<decimal>(row.Values["Amount"]));
+            Assert.Equal(
+                new DateTime(2026, 12, 31),
+                Assert.IsType<DateTime>(row.Values["OccurredAt"]));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUiCulture;
+        }
+    }
+
+    [Fact]
+    public void Apply_InvalidCultureStopsRealCultureAwareHandlersBeforeRowMutation()
+    {
+        var row = Row(
+            7,
+            ("Amount", "1.5"),
+            ("OccurredAt", "12/31/2026"));
+        var originalValues = row.Values.ToArray();
+        var filter = Rule(3, TransformationType.FilterRow, "Amount");
+        filter.Configuration["Operator"] = FilterOperator.Equals.ToString();
+        filter.Configuration["Value"] = "1.5";
+        var engine = Engine(
+            new ConvertToDecimalTransformationHandler(),
+            new ConvertToDateTransformationHandler(),
+            new ConditionalFilterTransformationHandler());
+
+        Assert.Throws<CultureNotFoundException>(() => engine.Apply(
+            row,
+            [
+                Rule(1, TransformationType.ConvertToDecimal, "Amount"),
+                Rule(2, TransformationType.ConvertToDate, "OccurredAt"),
+                filter
+            ],
+            Options("not-a-real-culture", "MM/dd/yyyy")));
+
+        Assert.Equal(originalValues, row.Values);
+    }
+
     [Fact]
     public void Apply_ComposesNumericAndStringConversionsByPersistedOrder()
     {
@@ -401,10 +480,10 @@ public sealed class TransformationEngineTests
         new(new TransformationHandlerRegistry(handlers));
 
     private static SourceOptions Options(
-        string cultureName = "en-US",
+        string? cultureName = "en-US",
         string? dateFormat = null) => new()
         {
-            CultureName = cultureName,
+            CultureName = cultureName!,
             DateFormat = dateFormat
         };
 

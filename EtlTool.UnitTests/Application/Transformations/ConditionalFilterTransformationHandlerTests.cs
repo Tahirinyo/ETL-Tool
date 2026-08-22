@@ -277,21 +277,135 @@ public sealed class ConditionalFilterTransformationHandlerTests
     }
 
     [Theory]
-    [InlineData("31.12", null)]
-    [InlineData("31.02.2026", "dd.MM.yyyy")]
-    [InlineData("2026-12-31T12:00:00Z", null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-number")]
+    [InlineData("1.5")]
+    [InlineData("0.00000000000000000000000000001")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    public void Apply_ClassifiesInvalidInt64ComparisonAsFormatFailureWithoutMutatingRow(
+        string comparisonValue)
+    {
+        var row = Row(13, ("Amount", 10L));
+
+        var exception = Assert.Throws<FormatException>(() => _handler.Apply(
+            row,
+            Rule("Amount", FilterOperator.Equals, comparisonValue),
+            Culture("en-US"),
+            dateFormat: null));
+
+        Assert.IsType<FormatException>(exception.InnerException);
+        Assert.Equal(10L, row.Values["Amount"]);
+    }
+
+    [Theory]
+    [InlineData("9223372036854775808")]
+    [InlineData("-9223372036854775809")]
+    public void Apply_ClassifiesOutOfRangeInt64ComparisonAsOverflowWithoutMutatingRow(
+        string comparisonValue)
+    {
+        var row = Row(14, ("Amount", 10L));
+
+        var exception = Assert.Throws<OverflowException>(() => _handler.Apply(
+            row,
+            Rule("Amount", FilterOperator.Equals, comparisonValue),
+            Culture("en-US"),
+            dateFormat: null));
+
+        Assert.IsType<OverflowException>(exception.InnerException);
+        Assert.Equal(10L, row.Values["Amount"]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-number")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    public void Apply_ClassifiesInvalidDecimalComparisonAsFormatFailureWithoutMutatingRow(
+        string comparisonValue)
+    {
+        var row = Row(15, ("Amount", 10.5m));
+
+        var exception = Assert.Throws<FormatException>(() => _handler.Apply(
+            row,
+            Rule("Amount", FilterOperator.Equals, comparisonValue),
+            Culture("en-US"),
+            dateFormat: null));
+
+        Assert.IsType<FormatException>(exception.InnerException);
+        Assert.Equal(10.5m, row.Values["Amount"]);
+    }
+
+    [Theory]
+    [InlineData("79228162514264337593543950336")]
+    [InlineData("0.00000000000000000000000000001")]
+    [InlineData("1.00000000000000000000000000001")]
+    public void Apply_ClassifiesUnrepresentableDecimalComparisonAsOverflowWithoutMutatingRow(
+        string comparisonValue)
+    {
+        var row = Row(16, ("Amount", 10.5m));
+
+        var exception = Assert.Throws<OverflowException>(() => _handler.Apply(
+            row,
+            Rule("Amount", FilterOperator.Equals, comparisonValue),
+            Culture("en-US"),
+            dateFormat: null));
+
+        Assert.IsType<OverflowException>(exception.InnerException);
+        Assert.Equal(10.5m, row.Values["Amount"]);
+    }
+
+    [Theory]
+    [InlineData("not-a-date", "en-US", null)]
+    [InlineData("02/30/2026", "en-US", "MM/dd/yyyy")]
+    [InlineData("12/31", "en-US", null)]
+    [InlineData("12:30", "en-US", null)]
+    [InlineData("2026-12-31", "en-US", "MM/dd/yyyy")]
+    [InlineData("12/31", "en-US", "MM/dd")]
+    [InlineData("12/31 yyyy", "en-US", "MM/dd 'yyyy'")]
+    [InlineData("12/31 y", "en-US", "MM/dd \\y")]
+    [InlineData("2026-12-31", "en-US", "yyyy-MM-dd '")]
+    [InlineData("2026-12-31T12:00:00Z", "en-US", null)]
+    [InlineData("2026-12-31T12:00:00+03:00", "en-US", null)]
+    [InlineData("12/31/2026 22:15:16.12345678", "en-US", null)]
     public void Apply_RejectsInvalidDateComparisonWithoutMutatingRow(
         string comparisonValue,
+        string cultureName,
         string? dateFormat)
     {
-        var row = Row(13, ("OccurredAt", new DateTime(2026, 12, 31)));
+        var original = new DateTime(2026, 12, 31);
+        var row = Row(17, ("OccurredAt", original));
 
         Assert.Throws<FormatException>(() => _handler.Apply(
             row,
             Rule("OccurredAt", FilterOperator.Equals, comparisonValue),
-            Culture("tr-TR"),
+            Culture(cultureName),
             dateFormat));
-        Assert.Equal(new DateTime(2026, 12, 31), row.Values["OccurredAt"]);
+        Assert.Equal(original, row.Values["OccurredAt"]);
+    }
+
+    [Fact]
+    public void Apply_UsesConfiguredNonGregorianCalendarForDateComparison()
+    {
+        var sourceCulture = Culture("ar-SA");
+        Assert.True(DateTime.TryParseExact(
+            "01/01/48",
+            "dd/MM/yy",
+            sourceCulture,
+            DateTimeStyles.AllowWhiteSpaces,
+            out var expected));
+        var row = Row(18, ("OccurredAt", expected));
+
+        var result = _handler.Apply(
+            row,
+            Rule("OccurredAt", FilterOperator.Equals, "01/01/48"),
+            sourceCulture,
+            "dd/MM/yy");
+
+        Assert.True(result.IsFiltered);
+        Assert.Equal(expected, row.Values["OccurredAt"]);
     }
 
     [Fact]

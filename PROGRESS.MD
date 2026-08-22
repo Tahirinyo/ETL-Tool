@@ -32,6 +32,7 @@
 - Date conversion transformation handling, including explicit pipeline/source-culture and exact-format parsing, `DateTime` output, native-date and null preservation, offset rejection, failure-atomic row updates, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
 - Conditional filter transformation handling, including explicit transformed/filtered outcomes, filter-on-match short-circuiting, ordinal string and typed `long`/`decimal`/`DateTime` comparisons, source-culture/date-format parsing, null/non-mutation semantics, application rule-service support, DI/registry integration, and focused unit coverage, has been implemented and verified.
 - Selected-field deduplication, including explicit `Duplicate` outcomes, execution-scoped typed composite-key state, tentative commit/rollback semantics, ordered transformed-value evaluation, rule-service and DI support, and MongoDB `Fields` configuration round-trip coverage, has been implemented and verified.
+- Culture/date parsing error consistency, including preserved format-versus-overflow taxonomy for numeric filter comparisons, deterministic shared date-parser parity, invariant/invalid-culture execution behavior, failure atomicity, and focused cross-consumer regression coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -43,4 +44,4 @@
 
 ## Next
 
-- Select the next approved Day 6 transformation task after conditional filtering.
+- Select the next approved MVP task.

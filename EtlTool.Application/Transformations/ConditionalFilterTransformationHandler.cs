@@ -117,9 +117,13 @@ public sealed class ConditionalFilterTransformationHandler : ISourceDateFormatTr
 
             return parsed.ToInt64();
         }
-        catch (Exception exception) when (exception is FormatException or OverflowException)
+        catch (FormatException exception)
         {
             throw InvalidNumericComparison(rule, row, sourceCulture, "Int64", exception);
+        }
+        catch (OverflowException exception)
+        {
+            throw NumericComparisonOutOfRange(rule, row, sourceCulture, "Int64", exception);
         }
     }
 
@@ -133,9 +137,13 @@ public sealed class ConditionalFilterTransformationHandler : ISourceDateFormatTr
         {
             return ExactNumericText.Parse(comparisonText, sourceCulture).ToDecimal();
         }
-        catch (Exception exception) when (exception is FormatException or OverflowException)
+        catch (FormatException exception)
         {
             throw InvalidNumericComparison(rule, row, sourceCulture, "Decimal", exception);
+        }
+        catch (OverflowException exception)
+        {
+            throw NumericComparisonOutOfRange(rule, row, sourceCulture, "Decimal", exception);
         }
     }
 
@@ -146,6 +154,15 @@ public sealed class ConditionalFilterTransformationHandler : ISourceDateFormatTr
         string targetType,
         Exception innerException) => new(
             $"The conditional filter comparison value for field '{rule.SourceField}' in row {row.SourceRowNumber} is not a valid {targetType} value for culture '{sourceCulture.Name}'.",
+            innerException);
+
+    private static OverflowException NumericComparisonOutOfRange(
+        TransformationRule rule,
+        DataRow row,
+        CultureInfo sourceCulture,
+        string targetType,
+        Exception innerException) => new(
+            $"The conditional filter comparison value for field '{rule.SourceField}' in row {row.SourceRowNumber} cannot be represented exactly as a {targetType} value for culture '{sourceCulture.Name}'.",
             innerException);
 
     private static bool IsMatch(int comparison, FilterOperator filterOperator) => filterOperator switch
