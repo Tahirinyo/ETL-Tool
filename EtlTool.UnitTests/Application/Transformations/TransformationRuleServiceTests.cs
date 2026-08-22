@@ -351,6 +351,69 @@ public sealed class TransformationRuleServiceTests
     }
 
     [Fact]
+    public async Task UpdateAsync_RejectsUnavailableMappedSourceFieldWithoutPersisting()
+    {
+        var existing = Rule(7, TransformationType.FindAndReplace);
+        existing.SourceField = "renamedName";
+        existing.Configuration["Find"] = "a";
+        existing.Configuration["Replace"] = "b";
+        var pipeline = Pipeline(rules: [existing]);
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Name", TargetField = "renamedName", IsIncluded = true },
+            new FieldMapping { SourceField = "Hidden", TargetField = "hidden", IsIncluded = false }
+        ];
+        var repository = new RecordingRepository(pipeline);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).UpdateAsync(
+            pipeline.Id,
+            existing.Id,
+            new TransformationRuleInput(TransformationType.Trim, "Name", null, null, null),
+            CancellationToken.None));
+
+        Assert.Null(repository.UpdatedPipeline);
+        var saved = Assert.Single(pipeline.TransformationRules);
+        Assert.Same(existing, saved);
+        Assert.Equal(TransformationType.FindAndReplace, saved.Type);
+        Assert.Equal("renamedName", saved.SourceField);
+        Assert.Equal("a", saved.Configuration["Find"]);
+        Assert.Equal("b", saved.Configuration["Replace"]);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DeduplicateRejectsUnavailableSelectedFieldWithoutPersisting()
+    {
+        var existing = Rule(7, TransformationType.Trim);
+        var pipeline = Pipeline(rules: [existing]);
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "Hidden",
+            TargetField = "hidden",
+            IsIncluded = false
+        });
+        var repository = new RecordingRepository(pipeline);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => CreateService(repository).UpdateAsync(
+            pipeline.Id,
+            existing.Id,
+            new TransformationRuleInput(
+                TransformationType.Deduplicate,
+                SourceField: null,
+                DefaultValue: null,
+                Find: null,
+                Replace: null,
+                SelectedFields: ["name", "hidden"]),
+            CancellationToken.None));
+
+        Assert.Null(repository.UpdatedPipeline);
+        var saved = Assert.Single(pipeline.TransformationRules);
+        Assert.Same(existing, saved);
+        Assert.Equal(TransformationType.Trim, saved.Type);
+        Assert.Equal("name", saved.SourceField);
+        Assert.Empty(saved.Configuration);
+    }
+
+    [Fact]
     public async Task UpdateAsync_TypeChangeRemovesObsoleteConfigurationAndRejectsWrongRuleOwnership()
     {
         var existing = Rule(7, TransformationType.FindAndReplace);

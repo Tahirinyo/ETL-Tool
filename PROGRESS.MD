@@ -34,6 +34,7 @@
 - Selected-field deduplication, including explicit `Duplicate` outcomes, execution-scoped typed composite-key state, tentative commit/rollback semantics, ordered transformed-value evaluation, rule-service and DI support, and MongoDB `Fields` configuration round-trip coverage, has been implemented and verified.
 - Culture/date parsing error consistency, including preserved format-versus-overflow taxonomy for numeric filter comparisons, deterministic shared date-parser parity, invariant/invalid-culture execution behavior, failure atomicity, and focused cross-consumer regression coverage, has been implemented and verified.
 - Task 6B.2 client-side transformation reference validation, including mapped-output SourceField validation, Deduplicate SelectedFields validation, stale-reference feedback, type-change cleanup, submit blocking, and the nullable Deduplicate SourceField form-contract regression fix, has been implemented and verified.
+- Task 6B.3 server-side transformation-reference validation regression coverage, including rejected non-Deduplicate and Deduplicate updates without persistence, preservation of prior valid rules, and MVC create/edit error redisplay with authoritative mapped-field choices, has been implemented and verified by focused and full unit suites.
 
 ## In Progress
 
@@ -41,7 +42,7 @@
 
 ## Blocked
 
-- None.
+- Full solution integration verification is limited in this environment: Testcontainers cannot access Docker at `npipe://./pipe/docker_engine`, and the two `PipelinesControllerBindingTests.TransformationPost_OmittedRequiredValueDoesNotCallRuleService` cases end their local HTTP response before antiforgery-token retrieval completes.
 
 ## Next
 

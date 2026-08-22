@@ -166,6 +166,45 @@ public sealed class TransformationRulesControllerTests
     }
 
     [Fact]
+    public async Task Create_ReferenceValidationRejectionRedisplaysPostedForm()
+    {
+        var pipelineId = Guid.NewGuid();
+        var ruleService = new RecordingRuleService
+        {
+            CreateException = new ArgumentException(
+                "The source field must be an included mapped output field.")
+        };
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings =
+                [
+                    new() { SourceField = "Name", TargetField = "renamedName", IsIncluded = true },
+                    new() { SourceField = "Hidden", TargetField = "hidden", IsIncluded = false }
+                ]
+            }
+        }, ruleService);
+        var posted = new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Trim,
+            SourceField = "Name"
+        };
+
+        var result = await controller.Create(pipelineId, posted, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Same(posted, model);
+        Assert.Equal(TransformationType.Trim, model.Type);
+        Assert.Equal("Name", model.SourceField);
+        Assert.Equal(["renamedName"], model.AvailableMappedFields);
+        var error = Assert.Single(controller.ModelState[string.Empty]!.Errors);
+        Assert.Equal("The source field must be an included mapped output field.", error.ErrorMessage);
+        Assert.NotNull(ruleService.CreateInput);
+    }
+
+    [Fact]
     public async Task Edit_GetReconstructsDeduplicationSelection()
     {
         var pipelineId = Guid.NewGuid();
@@ -229,6 +268,47 @@ public sealed class TransformationRulesControllerTests
         Assert.Equal(FilterOperator.GreaterThan, model.FilterOperator);
         Assert.Equal("10", model.FilterValue);
         Assert.Null(model.DefaultValue);
+    }
+
+    [Fact]
+    public async Task Edit_ReferenceValidationRejectionRedisplaysPostedForm()
+    {
+        var pipelineId = Guid.NewGuid();
+        var ruleService = new RecordingRuleService
+        {
+            UpdateException = new ArgumentException(
+                "Deduplication field 'hidden' must be an included mapped output field.")
+        };
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings =
+                [
+                    new() { SourceField = "Name", TargetField = "name", IsIncluded = true },
+                    new() { SourceField = "Hidden", TargetField = "hidden", IsIncluded = false }
+                ]
+            }
+        }, ruleService);
+        var posted = new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Deduplicate,
+            SourceField = null,
+            SelectedFields = ["name", "hidden"]
+        };
+
+        var result = await controller.Edit(pipelineId, Guid.NewGuid(), posted, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Same(posted, model);
+        Assert.Equal(TransformationType.Deduplicate, model.Type);
+        Assert.Null(model.SourceField);
+        Assert.Equal(["name", "hidden"], model.SelectedFields);
+        Assert.Equal(["name"], model.AvailableMappedFields);
+        var error = Assert.Single(controller.ModelState[string.Empty]!.Errors);
+        Assert.Equal("Deduplication field 'hidden' must be an included mapped output field.", error.ErrorMessage);
+        Assert.NotNull(ruleService.UpdateInput);
     }
 
     [Fact]
@@ -320,7 +400,10 @@ public sealed class TransformationRulesControllerTests
     private sealed class RecordingRuleService : ITransformationRuleService
     {
         public TransformationRuleInput? CreateInput { get; private set; }
+        public TransformationRuleInput? UpdateInput { get; private set; }
         public IReadOnlyList<Guid>? ReorderInput { get; private set; }
+        public ArgumentException? CreateException { get; init; }
+        public ArgumentException? UpdateException { get; init; }
         public bool UpdateResult { get; init; } = true;
         public bool DeleteResult { get; init; } = true;
         public bool ReorderResult { get; init; } = true;
@@ -328,11 +411,16 @@ public sealed class TransformationRulesControllerTests
         public Task<TransformationRule?> CreateAsync(Guid pipelineId, TransformationRuleInput input, CancellationToken cancellationToken)
         {
             CreateInput = input;
+            if (CreateException is not null) throw CreateException;
             return Task.FromResult<TransformationRule?>(new TransformationRule { Id = Guid.NewGuid() });
         }
 
-        public Task<bool> UpdateAsync(Guid pipelineId, Guid ruleId, TransformationRuleInput input, CancellationToken cancellationToken) =>
-            Task.FromResult(UpdateResult);
+        public Task<bool> UpdateAsync(Guid pipelineId, Guid ruleId, TransformationRuleInput input, CancellationToken cancellationToken)
+        {
+            UpdateInput = input;
+            if (UpdateException is not null) throw UpdateException;
+            return Task.FromResult(UpdateResult);
+        }
 
         public Task<bool> DeleteAsync(Guid pipelineId, Guid ruleId, CancellationToken cancellationToken) =>
             Task.FromResult(DeleteResult);
