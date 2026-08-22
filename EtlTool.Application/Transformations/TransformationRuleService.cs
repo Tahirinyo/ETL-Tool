@@ -189,6 +189,8 @@ public sealed class TransformationRuleService : ITransformationRuleService
             and not TransformationType.ToUpper
             and not TransformationType.ToLower
             and not TransformationType.ConvertToString
+            and not TransformationType.ConvertToInteger
+            and not TransformationType.ConvertToDecimal
             and not TransformationType.SetDefaultValue
             and not TransformationType.FindAndReplace)
         {

@@ -1,7 +1,9 @@
+using System.Globalization;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Transformations;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.UnitTests.Application.Transformations;
 
@@ -29,7 +31,7 @@ public sealed class TransformationEngineTests
             Rule(20, TransformationType.Trim)
         };
 
-        engine.Apply(Row(7, ("Name", "Ada")), rules);
+        engine.Apply(Row(7, ("Name", "Ada")), rules, Options());
 
         Assert.Equal(["lower:10", "trim:20", "trim:30"], calls);
         Assert.Equal([30, 10, 20], rules.Select(rule => rule.Order));
@@ -58,7 +60,8 @@ public sealed class TransformationEngineTests
 
         var result = Engine(first, second).Apply(
             source,
-            [Rule(1, TransformationType.Trim), Rule(2, TransformationType.ToLower)]);
+            [Rule(1, TransformationType.Trim), Rule(2, TransformationType.ToLower)],
+            Options());
 
         Assert.NotSame(source, result);
         Assert.Same(firstOutput, secondInput);
@@ -76,7 +79,7 @@ public sealed class TransformationEngineTests
         var row = Row(3, ("Name", "Ada"));
         var engine = Engine();
 
-        var result = engine.Apply(row, []);
+        var result = engine.Apply(row, [], Options());
 
         Assert.Same(row, result);
         Assert.Equal(3, result.SourceRowNumber);
@@ -97,7 +100,8 @@ public sealed class TransformationEngineTests
 
         var exception = Assert.Throws<KeyNotFoundException>(() => Engine(registered).Apply(
             row,
-            [Rule(1, TransformationType.Trim), Rule(2, TransformationType.ToUpper)]));
+            [Rule(1, TransformationType.Trim), Rule(2, TransformationType.ToUpper)],
+            Options()));
 
         Assert.Contains(nameof(TransformationType.ToUpper), exception.Message, StringComparison.Ordinal);
         Assert.Equal(0, invocationCount);
@@ -116,7 +120,8 @@ public sealed class TransformationEngineTests
 
         var exception = Assert.Throws<InvalidOperationException>(() => Engine(handler).Apply(
             new DataRow(),
-            [Rule(5, TransformationType.Trim), Rule(5, TransformationType.Trim)]));
+            [Rule(5, TransformationType.Trim), Rule(5, TransformationType.Trim)],
+            Options()));
 
         Assert.Contains("'5'", exception.Message, StringComparison.Ordinal);
         Assert.Equal(0, invocationCount);
@@ -134,7 +139,8 @@ public sealed class TransformationEngineTests
 
         Engine(handler).Apply(
             new DataRow(),
-            [Rule(100, TransformationType.Trim), Rule(0, TransformationType.Trim), Rule(-5, TransformationType.Trim)]);
+            [Rule(100, TransformationType.Trim), Rule(0, TransformationType.Trim), Rule(-5, TransformationType.Trim)],
+            Options());
 
         Assert.Equal([-5, 0, 100], observedOrders);
     }
@@ -144,9 +150,10 @@ public sealed class TransformationEngineTests
     {
         var engine = Engine();
 
-        Assert.Throws<ArgumentNullException>(() => engine.Apply(null!, []));
-        Assert.Throws<ArgumentNullException>(() => engine.Apply(new DataRow(), null!));
-        Assert.Throws<ArgumentException>(() => engine.Apply(new DataRow(), [null!]));
+        Assert.Throws<ArgumentNullException>(() => engine.Apply(null!, [], Options()));
+        Assert.Throws<ArgumentNullException>(() => engine.Apply(new DataRow(), null!, Options()));
+        Assert.Throws<ArgumentNullException>(() => engine.Apply(new DataRow(), [], null!));
+        Assert.Throws<ArgumentException>(() => engine.Apply(new DataRow(), [null!], Options()));
     }
 
     [Fact]
@@ -156,7 +163,8 @@ public sealed class TransformationEngineTests
 
         var exception = Assert.Throws<InvalidOperationException>(() => Engine(handler).Apply(
             new DataRow(),
-            [Rule(1, TransformationType.Trim)]));
+            [Rule(1, TransformationType.Trim)],
+            Options()));
 
         Assert.Contains(nameof(TransformationType.Trim), exception.Message, StringComparison.Ordinal);
     }
@@ -169,7 +177,8 @@ public sealed class TransformationEngineTests
 
         var actual = Assert.Throws<FormatException>(() => Engine(handler).Apply(
             new DataRow(),
-            [Rule(1, TransformationType.Trim)]));
+            [Rule(1, TransformationType.Trim)],
+            Options()));
 
         Assert.Same(expected, actual);
     }
@@ -183,10 +192,12 @@ public sealed class TransformationEngineTests
 
         engine.Apply(
             trimThenDefault,
-            [Rule(1, TransformationType.Trim, "Name"), Rule(2, TransformationType.SetDefaultValue, "Name", "Unknown")]);
+            [Rule(1, TransformationType.Trim, "Name"), Rule(2, TransformationType.SetDefaultValue, "Name", "Unknown")],
+            Options());
         engine.Apply(
             defaultThenTrim,
-            [Rule(1, TransformationType.SetDefaultValue, "Name", "Unknown"), Rule(2, TransformationType.Trim, "Name")]);
+            [Rule(1, TransformationType.SetDefaultValue, "Name", "Unknown"), Rule(2, TransformationType.Trim, "Name")],
+            Options());
 
         Assert.Equal("Unknown", trimThenDefault.Values["Name"]);
         Assert.Equal(string.Empty, defaultThenTrim.Values["Name"]);
@@ -203,14 +214,92 @@ public sealed class TransformationEngineTests
             [
                 Rule(20, TransformationType.ToLower, "Code"),
                 Rule(10, TransformationType.ConvertToString, "Code")
-            ]);
+            ],
+            Options());
 
         Assert.Same(row, result);
         Assert.Equal("42", Assert.IsType<string>(result.Values["Code"]));
     }
 
+    [Fact]
+    public void Apply_ResolvesAndPassesPipelineSourceCultureToNumericHandler()
+    {
+        var row = Row(2, ("Amount", "1.234,50"));
+        var engine = Engine(new ConvertToDecimalTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [Rule(1, TransformationType.ConvertToDecimal, "Amount")],
+            Options("tr-TR"));
+
+        Assert.Same(row, result);
+        Assert.Equal(1234.50m, Assert.IsType<decimal>(result.Values["Amount"]));
+    }
+
+    [Fact]
+    public void Apply_ResolvesSourceCultureIndependentlyForEachExecution()
+    {
+        var engine = Engine(new ConvertToDecimalTransformationHandler());
+        var turkishRow = Row(3, ("Amount", "1,5"));
+        var usRow = Row(4, ("Amount", "1.5"));
+
+        engine.Apply(
+            turkishRow,
+            [Rule(1, TransformationType.ConvertToDecimal, "Amount")],
+            Options("tr-TR"));
+        engine.Apply(
+            usRow,
+            [Rule(1, TransformationType.ConvertToDecimal, "Amount")],
+            Options("en-US"));
+
+        Assert.Equal(1.5m, Assert.IsType<decimal>(turkishRow.Values["Amount"]));
+        Assert.Equal(1.5m, Assert.IsType<decimal>(usRow.Values["Amount"]));
+    }
+
+    [Fact]
+    public void Apply_RejectsInvalidSourceCultureBeforeExecutingHandlers()
+    {
+        var invocationCount = 0;
+        var handler = Handler(TransformationType.Trim, (row, _) =>
+        {
+            invocationCount++;
+            return row;
+        });
+
+        Assert.Throws<CultureNotFoundException>(() => Engine(handler).Apply(
+            Row(5, ("Name", "Ada")),
+            [Rule(1, TransformationType.Trim)],
+            Options("not-a-real-culture")));
+
+        Assert.Equal(0, invocationCount);
+    }
+
+    [Fact]
+    public void Apply_ComposesNumericAndStringConversionsByPersistedOrder()
+    {
+        var row = Row(3, ("Code", "42.00"));
+        var engine = Engine(
+            new ConvertToIntegerTransformationHandler(),
+            new ConvertToStringTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [
+                Rule(20, TransformationType.ConvertToString, "Code"),
+                Rule(10, TransformationType.ConvertToInteger, "Code")
+            ],
+            Options("en-US"));
+
+        Assert.Equal("42", Assert.IsType<string>(result.Values["Code"]));
+    }
+
     private static TransformationEngine Engine(params ITransformationHandler[] handlers) =>
         new(new TransformationHandlerRegistry(handlers));
+
+    private static SourceOptions Options(string cultureName = "en-US") => new()
+    {
+        CultureName = cultureName
+    };
 
     private static RecordingHandler Handler(
         TransformationType type,

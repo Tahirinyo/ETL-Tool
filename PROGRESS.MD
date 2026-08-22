@@ -28,6 +28,7 @@
 - Find/Replace transformation handling, including ordinal replace-all string behavior, explicit Find/Replace configuration validation, empty replacement deletion, null/non-string preservation, DI/registry registration, and focused unit coverage, has been implemented and verified.
 - Persisted drag-and-drop transformation-rule ordering, including native MVC card dragging, anti-forgery-protected ordered-ID submission, exact pipeline-rule-set validation, one-based order normalization, aggregate-preserving persistence, and focused service/controller coverage, has been implemented and verified.
 - String conversion transformation handling, including invariant native-scalar formatting, null/string preservation, unsupported-value failures, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
+- Integer and decimal conversion transformation handling, including explicit pipeline/source-culture parsing, `long`/`decimal` outputs, checked range and integrality rules, null preservation, row-level conversion failures, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -35,8 +36,8 @@
 
 ## Blocked
 
-- Full integration-suite verification is environment-blocked: Docker/Testcontainers cannot access `npipe://./pipe/docker_engine`, and the existing web binding tests end their local HTTP responses prematurely. Task-specific source-inspection tests pass.
+- None.
 
 ## Next
 
-- Select the next approved Day 6 transformation task after string conversion.
+- Select the next approved Day 6 transformation task after numeric conversion.

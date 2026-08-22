@@ -1,5 +1,6 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Transformations;
 
@@ -15,10 +16,14 @@ public sealed class TransformationEngine
 
     public DataRow Apply(
         DataRow mappedRow,
-        IReadOnlyCollection<TransformationRule> rules)
+        IReadOnlyCollection<TransformationRule> rules,
+        SourceOptions sourceOptions)
     {
         ArgumentNullException.ThrowIfNull(mappedRow);
         ArgumentNullException.ThrowIfNull(rules);
+        ArgumentNullException.ThrowIfNull(sourceOptions);
+
+        var sourceCulture = sourceOptions.ResolveCulture();
 
         if (rules.Count == 0)
         {
@@ -53,7 +58,11 @@ public sealed class TransformationEngine
 
         foreach (var step in executionSteps)
         {
-            currentRow = step.Handler.Apply(currentRow, step.Rule)
+            currentRow = step.Handler is ISourceCultureTransformationHandler cultureAwareHandler
+                ? cultureAwareHandler.Apply(currentRow, step.Rule, sourceCulture)
+                : step.Handler.Apply(currentRow, step.Rule);
+
+            currentRow = currentRow
                 ?? throw new InvalidOperationException(
                     $"Transformation handler for type '{step.Handler.Type}' returned no row.");
         }

@@ -137,6 +137,25 @@ public sealed class TransformationHandlerRegistryTests
         Assert.IsType<FindAndReplaceTransformationHandler>(handler);
     }
 
+    [Fact]
+    public void Composition_ResolvesConcreteNumericHandlersThroughRegistry()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITransformationHandler, ConvertToIntegerTransformationHandler>();
+        services.AddSingleton<ITransformationHandler, ConvertToDecimalTransformationHandler>();
+        services.AddSingleton<TransformationHandlerRegistry>();
+        services.AddSingleton<TransformationEngine>();
+        using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        var registry = provider.GetRequiredService<TransformationHandlerRegistry>();
+
+        Assert.IsType<ConvertToIntegerTransformationHandler>(
+            registry.Resolve(TransformationType.ConvertToInteger));
+        Assert.IsType<ConvertToDecimalTransformationHandler>(
+            registry.Resolve(TransformationType.ConvertToDecimal));
+    }
+
     private sealed class StubHandler(TransformationType type) : ITransformationHandler
     {
         public TransformationType Type { get; } = type;

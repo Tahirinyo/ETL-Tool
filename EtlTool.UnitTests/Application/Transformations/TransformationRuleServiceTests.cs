@@ -53,6 +53,8 @@ public sealed class TransformationRuleServiceTests
     [InlineData(TransformationType.ToUpper)]
     [InlineData(TransformationType.ToLower)]
     [InlineData(TransformationType.ConvertToString)]
+    [InlineData(TransformationType.ConvertToInteger)]
+    [InlineData(TransformationType.ConvertToDecimal)]
     public async Task CreateAsync_FirstRuleStartsAtOneAndDropsIrrelevantConfiguration(TransformationType type)
     {
         var pipeline = Pipeline();
@@ -70,8 +72,6 @@ public sealed class TransformationRuleServiceTests
 
     [Theory]
     [InlineData(TransformationType.Unspecified)]
-    [InlineData(TransformationType.ConvertToInteger)]
-    [InlineData(TransformationType.ConvertToDecimal)]
     [InlineData(TransformationType.ConvertToDate)]
     [InlineData(TransformationType.FilterRow)]
     [InlineData(TransformationType.Deduplicate)]
