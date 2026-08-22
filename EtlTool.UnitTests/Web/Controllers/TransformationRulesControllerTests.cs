@@ -73,14 +73,177 @@ public sealed class TransformationRulesControllerTests
     }
 
     [Fact]
-    public async Task Create_InvalidModelDoesNotCallService()
+    public async Task Create_FilterPostMapsOnlyFilterConfiguration()
     {
         var ruleService = new RecordingRuleService();
         var controller = new TransformationRulesController(new RecordingPipelineService(), ruleService);
+        var model = new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.FilterRow,
+            SourceField = "amount",
+            FilterOperator = FilterOperator.GreaterThanOrEqual,
+            FilterValue = "12,5",
+            DefaultValue = "ignored",
+            Find = "ignored",
+            Replace = "ignored"
+        };
+
+        await controller.Create(Guid.NewGuid(), model, CancellationToken.None);
+
+        var input = Assert.IsType<TransformationRuleInput>(ruleService.CreateInput);
+        Assert.Equal(FilterOperator.GreaterThanOrEqual, input.FilterOperator);
+        Assert.Equal("12,5", input.FilterValue);
+        Assert.Null(input.DefaultValue);
+        Assert.Null(input.Find);
+        Assert.Null(input.Replace);
+    }
+
+    [Fact]
+    public async Task Create_DeduplicationPostMapsSelectedFieldsWithoutSourceField()
+    {
+        var ruleService = new RecordingRuleService();
+        var controller = new TransformationRulesController(new RecordingPipelineService(), ruleService);
+        var model = new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Deduplicate,
+            SourceField = "ignored",
+            SelectedFields = ["email", "company"],
+            DefaultValue = "ignored"
+        };
+
+        await controller.Create(Guid.NewGuid(), model, CancellationToken.None);
+
+        var input = Assert.IsType<TransformationRuleInput>(ruleService.CreateInput);
+        Assert.Null(input.SourceField);
+        Assert.Equal(["email", "company"], input.SelectedFields);
+        Assert.Null(input.DefaultValue);
+    }
+
+    [Fact]
+    public async Task Create_GetPopulatesOnlyIncludedMappedOutputFields()
+    {
+        var pipelineId = Guid.NewGuid();
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings =
+                [
+                    new() { SourceField = "Id", TargetField = "customerId", IsIncluded = true },
+                    new() { SourceField = "Hidden", TargetField = "hidden", IsIncluded = false },
+                    new() { SourceField = "Name", TargetField = "name", IsIncluded = true }
+                ]
+            }
+        }, new RecordingRuleService());
+
+        var result = await controller.Create(pipelineId, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(["customerId", "name"], model.AvailableMappedFields);
+    }
+
+    [Fact]
+    public async Task Create_InvalidPostRepopulatesMappedFields()
+    {
+        var pipelineId = Guid.NewGuid();
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings = [new() { SourceField = "Name", TargetField = "name", IsIncluded = true }]
+            }
+        }, new RecordingRuleService());
+        var posted = new TransformationRuleFormViewModel { Type = TransformationType.FilterRow, SourceField = "name" };
+        controller.ModelState.AddModelError(nameof(posted.FilterValue), "Required.");
+
+        var result = await controller.Create(pipelineId, posted, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Same(posted, model);
+        Assert.Equal(["name"], model.AvailableMappedFields);
+    }
+
+    [Fact]
+    public async Task Edit_GetReconstructsDeduplicationSelection()
+    {
+        var pipelineId = Guid.NewGuid();
+        var ruleId = Guid.NewGuid();
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings = [new() { SourceField = "Email", TargetField = "email", IsIncluded = true }],
+                TransformationRules =
+                [
+                    new()
+                    {
+                        Id = ruleId,
+                        Type = TransformationType.Deduplicate,
+                        Configuration = new() { ["Fields"] = "[\"email\"]" }
+                    }
+                ]
+            }
+        }, new RecordingRuleService());
+
+        var result = await controller.Edit(pipelineId, ruleId, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(["email"], model.SelectedFields);
+        Assert.Empty(model.SourceField);
+    }
+
+    [Fact]
+    public async Task Edit_GetRestoresFilterValueWithoutHydratingDefaultValue()
+    {
+        var pipelineId = Guid.NewGuid();
+        var ruleId = Guid.NewGuid();
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition
+            {
+                Id = pipelineId,
+                FieldMappings = [new() { SourceField = "Amount", TargetField = "amount", IsIncluded = true }],
+                TransformationRules =
+                [
+                    new()
+                    {
+                        Id = ruleId,
+                        Type = TransformationType.FilterRow,
+                        SourceField = "amount",
+                        Configuration = new()
+                        {
+                            ["Operator"] = "GreaterThan",
+                            ["Value"] = "10"
+                        }
+                    }
+                ]
+            }
+        }, new RecordingRuleService());
+
+        var result = await controller.Edit(pipelineId, ruleId, CancellationToken.None);
+
+        var model = Assert.IsType<TransformationRuleFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(FilterOperator.GreaterThan, model.FilterOperator);
+        Assert.Equal("10", model.FilterValue);
+        Assert.Null(model.DefaultValue);
+    }
+
+    [Fact]
+    public async Task Create_InvalidModelDoesNotCallService()
+    {
+        var ruleService = new RecordingRuleService();
+        var pipelineId = Guid.NewGuid();
+        var controller = new TransformationRulesController(new RecordingPipelineService
+        {
+            Pipeline = new PipelineDefinition { Id = pipelineId }
+        }, ruleService);
         var model = new TransformationRuleFormViewModel();
         controller.ModelState.AddModelError(nameof(model.Type), "Invalid type.");
 
-        var result = await controller.Create(Guid.NewGuid(), model, CancellationToken.None);
+        var result = await controller.Create(pipelineId, model, CancellationToken.None);
 
         Assert.Same(model, Assert.IsType<ViewResult>(result).Model);
         Assert.Null(ruleService.CreateInput);

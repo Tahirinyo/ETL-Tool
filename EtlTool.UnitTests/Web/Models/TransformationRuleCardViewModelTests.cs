@@ -10,8 +10,14 @@ public sealed class TransformationRuleCardViewModelTests
     [InlineData(TransformationType.Trim, "Trim")]
     [InlineData(TransformationType.ToUpper, "Convert to uppercase")]
     [InlineData(TransformationType.ToLower, "Convert to lowercase")]
+    [InlineData(TransformationType.ConvertToString, "Convert to string")]
+    [InlineData(TransformationType.ConvertToInteger, "Convert to integer")]
+    [InlineData(TransformationType.ConvertToDecimal, "Convert to decimal")]
+    [InlineData(TransformationType.ConvertToDate, "Convert to date")]
     [InlineData(TransformationType.SetDefaultValue, "Set default value")]
+    [InlineData(TransformationType.FilterRow, "Conditional filter")]
     [InlineData(TransformationType.FindAndReplace, "Find and replace")]
+    [InlineData(TransformationType.Deduplicate, "Deduplicate")]
     public void FromRule_UsesMeaningfulTypeLabel(TransformationType type, string expectedLabel)
     {
         var card = TransformationRuleCardViewModel.FromRule(new TransformationRule
@@ -67,6 +73,20 @@ public sealed class TransformationRuleCardViewModelTests
             Assert.Equal("Configuration unavailable", item.Value);
             Assert.True(item.IsWarning);
         });
+    }
+
+    [Fact]
+    public void FromRule_FormatsFilterAndDeduplicationConfiguration()
+    {
+        var filter = Card(
+            TransformationType.FilterRow,
+            new() { ["Operator"] = "GreaterThan", ["Value"] = "10" });
+        var deduplicate = Card(TransformationType.Deduplicate, new() { ["Fields"] = "[\"email\",\"company\"]" });
+
+        Assert.Collection(filter.Configuration,
+            item => { Assert.Equal("Operator", item.Label); Assert.Equal("GreaterThan", item.Value); },
+            item => { Assert.Equal("Comparison value", item.Label); Assert.Equal("10", item.Value); });
+        Assert.Equal("email, company", Assert.Single(deduplicate.Configuration).Value);
     }
 
     private static TransformationRuleCardViewModel Card(

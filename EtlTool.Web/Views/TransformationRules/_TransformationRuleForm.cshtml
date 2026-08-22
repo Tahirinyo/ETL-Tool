@@ -1,40 +1,133 @@
 @model TransformationRuleFormViewModel
+@using EtlTool.Domain.Enums
 
 <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
 
 <div class="mb-3">
     <label asp-for="Type" class="form-label">Transformation type</label>
-    <select asp-for="Type" class="form-select">
+    <select asp-for="Type" class="form-select" data-transformation-type>
         <option value="Unspecified">Select a type</option>
         <option value="Trim">Trim</option>
         <option value="ToUpper">To upper</option>
         <option value="ToLower">To lower</option>
+        <option value="ConvertToString">Convert to string</option>
+        <option value="ConvertToInteger">Convert to integer</option>
+        <option value="ConvertToDecimal">Convert to decimal</option>
+        <option value="ConvertToDate">Convert to date</option>
         <option value="SetDefaultValue">Set default value</option>
+        <option value="FilterRow">Conditional filter</option>
         <option value="FindAndReplace">Find and replace</option>
+        <option value="Deduplicate">Deduplicate</option>
     </select>
     <span asp-validation-for="Type" class="text-danger"></span>
 </div>
 
-<div class="mb-3">
+<div class="mb-3" data-transformation-section="source-field">
     <label asp-for="SourceField" class="form-label">Mapped output field</label>
-    <input asp-for="SourceField" class="form-control" />
+    <select asp-for="SourceField" class="form-select">
+        <option value="">Select a mapped output field</option>
+        @foreach (var field in Model.AvailableMappedFields)
+        {
+            <option value="@field">@field</option>
+        }
+    </select>
     <span asp-validation-for="SourceField" class="text-danger"></span>
 </div>
 
-<div class="mb-3">
+<div class="mb-3" data-transformation-section="default-value">
     <label asp-for="DefaultValue" class="form-label">Default value</label>
     <input asp-for="DefaultValue" class="form-control" />
     <span asp-validation-for="DefaultValue" class="text-danger"></span>
 </div>
 
-<div class="mb-3">
+<div class="mb-3" data-transformation-section="filter">
+    <label asp-for="FilterOperator" class="form-label">Filter operator</label>
+    <select asp-for="FilterOperator" class="form-select">
+        <option value="Unspecified">Select an operator</option>
+        @foreach (var filterOperator in Enum.GetValues<FilterOperator>().Where(value => value != FilterOperator.Unspecified))
+        {
+            <option value="@filterOperator">@filterOperator</option>
+        }
+    </select>
+    <span asp-validation-for="FilterOperator" class="text-danger"></span>
+</div>
+
+<div class="mb-3" data-transformation-section="filter">
+    <label asp-for="FilterValue" class="form-label">Filter comparison value</label>
+    <input asp-for="FilterValue" class="form-control" />
+    <span asp-validation-for="FilterValue" class="text-danger"></span>
+</div>
+
+<div class="mb-3" data-transformation-section="find-replace">
     <label asp-for="Find" class="form-label">Find value</label>
     <input asp-for="Find" class="form-control" />
     <span asp-validation-for="Find" class="text-danger"></span>
 </div>
 
-<div class="mb-3">
+<div class="mb-3" data-transformation-section="find-replace">
     <label asp-for="Replace" class="form-label">Replace value</label>
     <input asp-for="Replace" class="form-control" />
     <span asp-validation-for="Replace" class="text-danger"></span>
 </div>
+
+<div class="mb-3" data-transformation-section="deduplicate">
+    <label asp-for="SelectedFields" class="form-label">Deduplicate mapped output fields</label>
+    <select asp-for="SelectedFields" class="form-select" multiple size="5">
+        @foreach (var field in Model.AvailableMappedFields)
+        {
+            <option value="@field">@field</option>
+        }
+    </select>
+    <div class="form-text">Select one or more fields that together identify duplicate rows.</div>
+    <span asp-validation-for="SelectedFields" class="text-danger"></span>
+</div>
+
+<script>
+    (() => {
+        const type = document.querySelector("[data-transformation-type]");
+        if (type === null) return;
+
+        const sections = {
+            "source-field": document.querySelectorAll('[data-transformation-section="source-field"]'),
+            "default-value": document.querySelectorAll('[data-transformation-section="default-value"]'),
+            "filter": document.querySelectorAll('[data-transformation-section="filter"]'),
+            "find-replace": document.querySelectorAll('[data-transformation-section="find-replace"]'),
+            "deduplicate": document.querySelectorAll('[data-transformation-section="deduplicate"]')
+        };
+        const visibleSections = selectedType => {
+            const sourceField = selectedType !== "Deduplicate" && selectedType !== "Unspecified";
+            return {
+                "source-field": sourceField,
+                "default-value": selectedType === "SetDefaultValue",
+                "filter": selectedType === "FilterRow",
+                "find-replace": selectedType === "FindAndReplace",
+                "deduplicate": selectedType === "Deduplicate"
+            };
+        };
+        const update = () => {
+            const visible = visibleSections(type.value);
+            Object.entries(sections).forEach(([section, elements]) => {
+                elements.forEach(element => {
+                    element.hidden = !visible[section];
+                });
+            });
+        };
+
+        type.addEventListener("change", () => {
+            const visible = visibleSections(type.value);
+            Object.entries(sections).forEach(([section, elements]) => {
+                if (visible[section]) return;
+
+                elements.forEach(element => element.querySelectorAll("input, select").forEach(control => {
+                    if (control.multiple) {
+                        Array.from(control.options).forEach(option => option.selected = false);
+                    } else {
+                        control.value = "";
+                    }
+                }));
+            });
+            update();
+        });
+        update();
+    })();
+</script>

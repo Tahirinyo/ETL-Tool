@@ -15,6 +15,54 @@ namespace EtlTool.UnitTests.Web.Models;
 public sealed class TransformationRuleFormViewModelBindingTests
 {
     [Theory]
+    [InlineData(TransformationType.Trim)]
+    [InlineData(TransformationType.ToUpper)]
+    [InlineData(TransformationType.ToLower)]
+    [InlineData(TransformationType.ConvertToString)]
+    [InlineData(TransformationType.ConvertToInteger)]
+    [InlineData(TransformationType.ConvertToDecimal)]
+    [InlineData(TransformationType.ConvertToDate)]
+    public void Validate_AcceptsFieldOnlyTransformationTypes(TransformationType type)
+    {
+        var results = Validate(new TransformationRuleFormViewModel { Type = type, SourceField = "name" });
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Validate_RequiresFilterOperatorAndComparisonValue()
+    {
+        var results = Validate(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.FilterRow,
+            SourceField = "amount"
+        });
+
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(TransformationRuleFormViewModel.FilterOperator)));
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(TransformationRuleFormViewModel.FilterValue)));
+    }
+
+    [Fact]
+    public void Validate_AcceptsDeduplicationWithoutSourceFieldWhenFieldsSelected()
+    {
+        var results = Validate(new TransformationRuleFormViewModel
+        {
+            Type = TransformationType.Deduplicate,
+            SelectedFields = ["email", "company"]
+        });
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Validate_RequiresDeduplicationFieldSelection()
+    {
+        var results = Validate(new TransformationRuleFormViewModel { Type = TransformationType.Deduplicate });
+
+        Assert.Contains(results, result => result.MemberNames.Contains(nameof(TransformationRuleFormViewModel.SelectedFields)));
+    }
+
+    [Theory]
     [InlineData("DefaultValue")]
     [InlineData("Find")]
     [InlineData("Replace")]

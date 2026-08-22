@@ -1,8 +1,10 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Transformations;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using EtlTool.Web.Models.Pipelines;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 namespace EtlTool.Web.Controllers;
 
@@ -41,8 +43,10 @@ public sealed class TransformationRulesController : Controller
     [HttpGet("Create")]
     public async Task<IActionResult> Create(Guid pipelineId, CancellationToken cancellationToken)
     {
-        if (!await PipelineExistsAsync(pipelineId, cancellationToken)) return NotFound();
-        return View(new TransformationRuleFormViewModel());
+        var pipeline = await _pipelineService.GetByIdAsync(pipelineId, cancellationToken);
+        if (pipeline is null) return NotFound();
+
+        return View(CreateFormModel(pipeline));
     }
 
     [HttpPost("Create")]
@@ -52,7 +56,7 @@ public sealed class TransformationRulesController : Controller
         TransformationRuleFormViewModel model,
         CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return View(model);
+        if (!ModelState.IsValid) return await RedisplayFormAsync(pipelineId, model, cancellationToken);
 
         try
         {
@@ -62,12 +66,12 @@ public sealed class TransformationRulesController : Controller
         catch (ArgumentException exception)
         {
             ModelState.AddModelError(string.Empty, exception.Message);
-            return View(model);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
             ModelState.AddModelError(string.Empty, exception.Message);
-            return View(model);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
         }
 
         return RedirectToAction(nameof(Index), new { pipelineId });
@@ -80,15 +84,21 @@ public sealed class TransformationRulesController : Controller
         var rule = pipeline?.TransformationRules.SingleOrDefault(candidate => candidate.Id == ruleId);
         if (rule is null) return NotFound();
         var configuration = rule.Configuration ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var model = CreateFormModel(pipeline!);
+        model.Type = rule.Type;
+        model.SourceField = rule.SourceField ?? string.Empty;
+        model.DefaultValue = rule.Type == TransformationType.SetDefaultValue
+            ? configuration.GetValueOrDefault("Value")
+            : null;
+        model.Find = configuration.GetValueOrDefault("Find");
+        model.Replace = configuration.GetValueOrDefault("Replace");
+        model.FilterValue = rule.Type == TransformationType.FilterRow
+            ? configuration.GetValueOrDefault("Value")
+            : null;
+        model.FilterOperator = ReadFilterOperator(configuration);
+        model.SelectedFields = ReadSelectedFields(configuration);
 
-        return View(new TransformationRuleFormViewModel
-        {
-            Type = rule.Type,
-            SourceField = rule.SourceField ?? string.Empty,
-            DefaultValue = configuration.GetValueOrDefault("Value"),
-            Find = configuration.GetValueOrDefault("Find"),
-            Replace = configuration.GetValueOrDefault("Replace")
-        });
+        return View(model);
     }
 
     [HttpPost("{ruleId:guid}/Edit")]
@@ -99,7 +109,7 @@ public sealed class TransformationRulesController : Controller
         TransformationRuleFormViewModel model,
         CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid) return View(model);
+        if (!ModelState.IsValid) return await RedisplayFormAsync(pipelineId, model, cancellationToken);
 
         try
         {
@@ -108,12 +118,12 @@ public sealed class TransformationRulesController : Controller
         catch (ArgumentException exception)
         {
             ModelState.AddModelError(string.Empty, exception.Message);
-            return View(model);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
             ModelState.AddModelError(string.Empty, exception.Message);
-            return View(model);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
         }
 
         return RedirectToAction(nameof(Index), new { pipelineId });
@@ -167,13 +177,67 @@ public sealed class TransformationRulesController : Controller
         return RedirectToAction(nameof(Index), new { pipelineId });
     }
 
-    private async Task<bool> PipelineExistsAsync(Guid pipelineId, CancellationToken cancellationToken) =>
-        await _pipelineService.GetByIdAsync(pipelineId, cancellationToken) is not null;
+    private async Task<IActionResult> RedisplayFormAsync(
+        Guid pipelineId,
+        TransformationRuleFormViewModel model,
+        CancellationToken cancellationToken)
+    {
+        var pipeline = await _pipelineService.GetByIdAsync(pipelineId, cancellationToken);
+        if (pipeline is null) return NotFound();
 
-    private static TransformationRuleInput ToInput(TransformationRuleFormViewModel model) => new(
-        model.Type,
-        model.SourceField,
-        model.DefaultValue,
-        model.Find,
-        model.Replace);
+        PopulateAvailableMappedFields(model, pipeline);
+        return View(model);
+    }
+
+    private static TransformationRuleFormViewModel CreateFormModel(PipelineDefinition pipeline)
+    {
+        var model = new TransformationRuleFormViewModel();
+        PopulateAvailableMappedFields(model, pipeline);
+        return model;
+    }
+
+    private static void PopulateAvailableMappedFields(
+        TransformationRuleFormViewModel model,
+        PipelineDefinition pipeline) =>
+        model.AvailableMappedFields = pipeline.FieldMappings
+            .Where(mapping => mapping is not null
+                && mapping.IsIncluded
+                && !string.IsNullOrWhiteSpace(mapping.TargetField))
+            .Select(mapping => mapping.TargetField)
+            .ToList();
+
+    private static FilterOperator ReadFilterOperator(Dictionary<string, string> configuration) =>
+        configuration.TryGetValue("Operator", out var value)
+        && Enum.TryParse<FilterOperator>(value, ignoreCase: false, out var filterOperator)
+        && Enum.IsDefined(filterOperator)
+        && filterOperator != FilterOperator.Unspecified
+            ? filterOperator
+            : FilterOperator.Unspecified;
+
+    private static List<string> ReadSelectedFields(Dictionary<string, string> configuration)
+    {
+        if (!configuration.TryGetValue("Fields", out var value) || value is null) return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(value) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static TransformationRuleInput ToInput(TransformationRuleFormViewModel model) => model.Type switch
+    {
+        TransformationType.SetDefaultValue => new(
+            model.Type, model.SourceField, model.DefaultValue, null, null),
+        TransformationType.FindAndReplace => new(
+            model.Type, model.SourceField, null, model.Find, model.Replace),
+        TransformationType.FilterRow => new(
+            model.Type, model.SourceField, null, null, null, model.FilterOperator, model.FilterValue),
+        TransformationType.Deduplicate => new(
+            model.Type, null, null, null, null, SelectedFields: model.SelectedFields),
+        _ => new(model.Type, model.SourceField, null, null, null)
+    };
 }
