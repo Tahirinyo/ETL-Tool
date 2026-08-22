@@ -18,6 +18,37 @@ namespace EtlTool.IntegrationTests.Web;
 public sealed class PipelinesControllerBindingTests
 {
     [Fact]
+    public async Task TransformationRulesIndex_RendersRuleScopedEditAndAntiForgeryProtectedDeleteActions()
+    {
+        var pipeline = CreatePipeline("Route pipeline");
+        var rule = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = TransformationType.Trim,
+            Order = 1,
+            SourceField = "name"
+        };
+        pipeline.TransformationRules = [rule];
+
+        await using var host = await BindingTestHost.StartAsync(new RecordingPipelineService(pipeline));
+
+        using var response = await host.Client.GetAsync($"/Pipelines/{pipeline.Id}/Transformations");
+        var html = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains($"href=\"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Edit\"", html);
+        var deleteFormStart = html.IndexOf(
+            $"<form action=\"/Pipelines/{pipeline.Id}/Transformations/{rule.Id}/Delete\"",
+            StringComparison.Ordinal);
+        Assert.NotEqual(-1, deleteFormStart);
+        var deleteFormEnd = html.IndexOf("</form>", deleteFormStart, StringComparison.Ordinal);
+        Assert.NotEqual(-1, deleteFormEnd);
+        var deleteForm = html[deleteFormStart..deleteFormEnd];
+        Assert.Contains("method=\"post\"", deleteForm);
+        Assert.Equal(1, CountOccurrences(deleteForm, "name=\"__RequestVerificationToken\""));
+    }
+
+    [Fact]
     public async Task EditPost_UsesRouteIdWhenFormContainsConflictingId()
     {
         var routePipeline = CreatePipeline("Route pipeline");
@@ -168,6 +199,19 @@ public sealed class PipelinesControllerBindingTests
             Id = Guid.NewGuid(),
             Name = name
         };
+    }
+
+    private static int CountOccurrences(string value, string substring)
+    {
+        var count = 0;
+        var startIndex = 0;
+        while ((startIndex = value.IndexOf(substring, startIndex, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            startIndex += substring.Length;
+        }
+
+        return count;
     }
 
     private sealed class BindingTestHost : IAsyncDisposable
