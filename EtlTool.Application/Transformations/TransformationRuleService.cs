@@ -188,6 +188,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
         if (type is not TransformationType.Trim
             and not TransformationType.ToUpper
             and not TransformationType.ToLower
+            and not TransformationType.ConvertToString
             and not TransformationType.SetDefaultValue
             and not TransformationType.FindAndReplace)
         {

@@ -27,6 +27,7 @@
 - Default Value transformation handling, including null/empty-string replacement only, whitespace and non-string preservation, ordinal configuration lookup, explicit invalid-configuration failures, DI/registry registration, and focused ordering coverage with Trim, has been implemented and verified.
 - Find/Replace transformation handling, including ordinal replace-all string behavior, explicit Find/Replace configuration validation, empty replacement deletion, null/non-string preservation, DI/registry registration, and focused unit coverage, has been implemented and verified.
 - Persisted drag-and-drop transformation-rule ordering, including native MVC card dragging, anti-forgery-protected ordered-ID submission, exact pipeline-rule-set validation, one-based order normalization, aggregate-preserving persistence, and focused service/controller coverage, has been implemented and verified.
+- String conversion transformation handling, including invariant native-scalar formatting, null/string preservation, unsupported-value failures, application rule-service support, DI/registry integration, persisted-order composition, and focused unit coverage, has been implemented and verified.
 
 ## In Progress
 
@@ -38,4 +39,4 @@
 
 ## Next
 
-- Select the next approved transformation or pipeline task.
+- Select the next approved Day 6 transformation task after string conversion.

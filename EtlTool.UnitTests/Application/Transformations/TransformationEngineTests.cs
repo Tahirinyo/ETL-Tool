@@ -192,6 +192,23 @@ public sealed class TransformationEngineTests
         Assert.Equal(string.Empty, defaultThenTrim.Values["Name"]);
     }
 
+    [Fact]
+    public void Apply_ComposesConvertToStringWithLaterTextTransformationByPersistedOrder()
+    {
+        var row = Row(1, ("Code", 42L));
+        var engine = Engine(new ConvertToStringTransformationHandler(), new ToLowerTransformationHandler());
+
+        var result = engine.Apply(
+            row,
+            [
+                Rule(20, TransformationType.ToLower, "Code"),
+                Rule(10, TransformationType.ConvertToString, "Code")
+            ]);
+
+        Assert.Same(row, result);
+        Assert.Equal("42", Assert.IsType<string>(result.Values["Code"]));
+    }
+
     private static TransformationEngine Engine(params ITransformationHandler[] handlers) =>
         new(new TransformationHandlerRegistry(handlers));
 
