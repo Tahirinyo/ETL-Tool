@@ -15,9 +15,15 @@ public sealed class ValidationRuleFormTests
         Assert.Contains("DateRange", view);
     }
 
-    private static string ReadView()
+    [Fact]
+    public void ValidationRuleViewsProvideSharedEditFormAndRuleIdentityRoute()
     {
-        const string relativePath = "EtlTool.Web/Views/ValidationRules/_ValidationRuleForm.cshtml";
+        Assert.Contains("_ValidationRuleForm", ReadView("EtlTool.Web/Views/ValidationRules/Edit.cshtml"));
+        Assert.Contains("asp-route-ruleId", ReadView("EtlTool.Web/Views/ValidationRules/Index.cshtml"));
+    }
+
+    private static string ReadView(string relativePath = "EtlTool.Web/Views/ValidationRules/_ValidationRuleForm.cshtml")
+    {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
             var candidate = Path.Combine(directory.FullName, relativePath.Replace('/', Path.DirectorySeparatorChar));

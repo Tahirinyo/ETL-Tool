@@ -38,6 +38,12 @@ else
                             }
                         </dl>
                     </div>
+                    <div class="card-footer">
+                        <a class="btn btn-sm btn-outline-primary"
+                           asp-action="Edit"
+                           asp-route-pipelineId="@Model.PipelineId"
+                           asp-route-ruleId="@rule.Id">Edit validation</a>
+                    </div>
                 </article>
             </div>
         }

@@ -41,6 +41,44 @@ public sealed class ValidationRuleService : IValidationRuleService
         var rules = CopyRules(pipeline.ValidationRules);
         rules.Add(rule);
 
+        return await UpdatePipelineAsync(pipeline, rules, cancellationToken) ? rule : null;
+    }
+
+    public async Task<bool> UpdateAsync(
+        Guid pipelineId,
+        Guid ruleId,
+        ValidationRuleInput input,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty)
+        {
+            throw new ArgumentException("Pipeline identifier cannot be empty.", nameof(pipelineId));
+        }
+        if (ruleId == Guid.Empty)
+        {
+            throw new ArgumentException("Validation rule identifier cannot be empty.", nameof(ruleId));
+        }
+        ArgumentNullException.ThrowIfNull(input);
+
+        var pipeline = await _repository.GetByIdAsync(pipelineId, cancellationToken);
+        if (pipeline is null) return false;
+
+        var index = pipeline.ValidationRules.FindIndex(rule => rule.Id == ruleId);
+        if (index < 0) return false;
+
+        var updatedRule = CreateRule(input, pipeline);
+        updatedRule.Id = ruleId;
+        var rules = CopyRules(pipeline.ValidationRules);
+        rules[index] = updatedRule;
+
+        return await UpdatePipelineAsync(pipeline, rules, cancellationToken);
+    }
+
+    private async Task<bool> UpdatePipelineAsync(
+        PipelineDefinition pipeline,
+        List<ValidationRule> rules,
+        CancellationToken cancellationToken)
+    {
         var replacement = new PipelineDefinition
         {
             Id = pipeline.Id,
@@ -59,7 +97,7 @@ public sealed class ValidationRuleService : IValidationRuleService
             UpdatedAt = _timeProvider.GetUtcNow()
         };
 
-        return await _repository.UpdateAsync(replacement, cancellationToken) ? rule : null;
+        return await _repository.UpdateAsync(replacement, cancellationToken);
     }
 
     private static ValidationRule CreateRule(ValidationRuleInput input, PipelineDefinition pipeline)

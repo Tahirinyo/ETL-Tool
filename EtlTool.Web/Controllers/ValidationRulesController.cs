@@ -1,6 +1,7 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using EtlTool.Web.Models.Pipelines;
 using Microsoft.AspNetCore.Mvc;
 
@@ -45,6 +46,60 @@ public sealed class ValidationRulesController : Controller
         try
         {
             if (await _ruleService.CreateAsync(pipelineId, ToInput(model), cancellationToken) is null) return NotFound();
+        }
+        catch (ArgumentException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return await RedisplayFormAsync(pipelineId, model, cancellationToken);
+        }
+
+        return RedirectToAction(nameof(Index), new { pipelineId });
+    }
+
+    [HttpGet("{ruleId:guid}/Edit")]
+    public async Task<IActionResult> Edit(Guid pipelineId, Guid ruleId, CancellationToken cancellationToken)
+    {
+        var pipeline = await _pipelineService.GetByIdAsync(pipelineId, cancellationToken);
+        var rule = pipeline?.ValidationRules.SingleOrDefault(candidate => candidate.Id == ruleId);
+        if (rule is null) return NotFound();
+
+        var configuration = rule.Configuration ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var model = CreateFormModel(pipeline!);
+        model.Type = rule.Type;
+        model.Field = rule.Type == ValidationType.UpsertKeyRequired ? null : rule.Field;
+        model.Minimum = rule.Type is ValidationType.NumericRange
+            or ValidationType.TextLengthRange
+            or ValidationType.DateRange
+            ? configuration.GetValueOrDefault("Minimum")
+            : null;
+        model.Maximum = rule.Type is ValidationType.NumericRange
+            or ValidationType.TextLengthRange
+            or ValidationType.DateRange
+            ? configuration.GetValueOrDefault("Maximum")
+            : null;
+        model.ErrorMessage = rule.ErrorMessage;
+
+        return View(model);
+    }
+
+    [HttpPost("{ruleId:guid}/Edit")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Edit(
+        Guid pipelineId,
+        Guid ruleId,
+        ValidationRuleFormViewModel model,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return await RedisplayFormAsync(pipelineId, model, cancellationToken);
+
+        try
+        {
+            if (!await _ruleService.UpdateAsync(pipelineId, ruleId, ToInput(model), cancellationToken)) return NotFound();
         }
         catch (ArgumentException exception)
         {

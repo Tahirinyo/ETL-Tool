@@ -8,4 +8,10 @@ public interface IValidationRuleService
         Guid pipelineId,
         ValidationRuleInput input,
         CancellationToken cancellationToken);
+
+    Task<bool> UpdateAsync(
+        Guid pipelineId,
+        Guid ruleId,
+        ValidationRuleInput input,
+        CancellationToken cancellationToken);
 }

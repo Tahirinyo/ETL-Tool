@@ -38,6 +38,7 @@
 - Task 7A.1 Required validation, including ordinal post-transformation field lookup, null/empty/whitespace/absent value failures, non-string value acceptance, reusable result/error contracts, registry/engine dispatch, DI registration, and focused unit coverage, has been implemented and verified.
 - Task 7A.2 Email validation, including optional-value format checks, ordinal post-transformation field lookup, non-string rejection without coercion, custom/default messages, read-only behavior, registry/engine dispatch, DI registration, and focused unit coverage, has been implemented and verified.
 - Task 7B.1 validation-rule creation, including MVC create/list screens, authoritative mapped-field options, type-specific server-side configuration validation, pipeline-derived upsert-key validation, aggregate-preserving persistence, and focused application/MVC/form coverage, has been implemented and verified.
+- Task 7B.2 validation-rule editing, including stable rule-ID routes, shared form hydration, type-safe rebuild-and-replace persistence, current-state mapped/upsert-key validation, list access, and focused application/MVC/form coverage, has been implemented and verified.
 
 ## In Progress
 
