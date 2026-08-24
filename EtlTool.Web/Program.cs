@@ -69,6 +69,7 @@ builder.Services.AddSingleton<TransformationEngine>();
 builder.Services.AddSingleton<IValidationHandler, RequiredValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, EmailValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, NumericRangeValidationHandler>();
+builder.Services.AddSingleton<IValidationHandler, TextLengthValidationHandler>();
 builder.Services.AddSingleton<ValidationHandlerRegistry>();
 builder.Services.AddSingleton<ValidationEngine>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();

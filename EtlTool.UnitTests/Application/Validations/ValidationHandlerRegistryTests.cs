@@ -14,11 +14,13 @@ public sealed class ValidationHandlerRegistryTests
         var required = new StubHandler(ValidationType.Required);
         var email = new StubHandler(ValidationType.EmailFormat);
         var numericRange = new StubHandler(ValidationType.NumericRange);
-        var registry = new ValidationHandlerRegistry([required, email, numericRange]);
+        var textLength = new StubHandler(ValidationType.TextLengthRange);
+        var registry = new ValidationHandlerRegistry([required, email, numericRange, textLength]);
 
         Assert.Same(required, registry.Resolve(ValidationType.Required));
         Assert.Same(email, registry.Resolve(ValidationType.EmailFormat));
         Assert.Same(numericRange, registry.Resolve(ValidationType.NumericRange));
+        Assert.Same(textLength, registry.Resolve(ValidationType.TextLengthRange));
     }
 
     [Fact]
@@ -62,12 +64,21 @@ public sealed class ValidationHandlerRegistryTests
     }
 
     [Fact]
+    public void Resolve_DoesNotTreatLaterValidationTypesAsTextLength()
+    {
+        var registry = new ValidationHandlerRegistry([new TextLengthValidationHandler()]);
+
+        Assert.Throws<KeyNotFoundException>(() => registry.Resolve(ValidationType.DateRange));
+    }
+
+    [Fact]
     public void Composition_ResolvesConcreteValidationHandlersThroughRegistry()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IValidationHandler, RequiredValidationHandler>();
         services.AddSingleton<IValidationHandler, EmailValidationHandler>();
         services.AddSingleton<IValidationHandler, NumericRangeValidationHandler>();
+        services.AddSingleton<IValidationHandler, TextLengthValidationHandler>();
         services.AddSingleton<ValidationHandlerRegistry>();
         services.AddSingleton<ValidationEngine>();
         using var provider = services.BuildServiceProvider(
@@ -82,6 +93,9 @@ public sealed class ValidationHandlerRegistryTests
         Assert.IsType<NumericRangeValidationHandler>(provider
             .GetRequiredService<ValidationHandlerRegistry>()
             .Resolve(ValidationType.NumericRange));
+        Assert.IsType<TextLengthValidationHandler>(provider
+            .GetRequiredService<ValidationHandlerRegistry>()
+            .Resolve(ValidationType.TextLengthRange));
         Assert.IsType<ValidationEngine>(provider.GetRequiredService<ValidationEngine>());
     }
 
