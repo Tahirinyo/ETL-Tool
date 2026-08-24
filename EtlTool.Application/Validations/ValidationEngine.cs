@@ -37,6 +37,11 @@ public sealed class ValidationEngine
             var handler = _handlerRegistry.Resolve(rule.Type);
             var result = handler switch
             {
+                ISourceDateFormatValidationHandler dateFormatAwareHandler => dateFormatAwareHandler.Validate(
+                    transformedRow,
+                    rule,
+                    sourceCulture,
+                    sourceOptions.DateFormat),
                 ISourceCultureValidationHandler cultureAwareHandler => cultureAwareHandler.Validate(
                     transformedRow,
                     rule,
