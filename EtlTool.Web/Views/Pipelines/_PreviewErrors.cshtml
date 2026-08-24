@@ -1,0 +1,34 @@
+@model PreviewErrorTableViewModel
+
+@if (Model.Errors.Count == 0)
+{
+    <div class="alert alert-info" role="status">
+        No row-level errors are available in this preview.
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Row</th>
+                    <th scope="col">Field</th>
+                    <th scope="col">Stage</th>
+                    <th scope="col">Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var error in Model.Errors)
+                {
+                    <tr>
+                        <td>@error.SourceRowNumber</td>
+                        <td>@(error.Field ?? "Row-level")</td>
+                        <td>@error.Stage</td>
+                        <td>@error.Message</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
