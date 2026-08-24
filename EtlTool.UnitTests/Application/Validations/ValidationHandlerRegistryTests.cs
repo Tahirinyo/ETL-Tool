@@ -16,13 +16,22 @@ public sealed class ValidationHandlerRegistryTests
         var numericRange = new StubHandler(ValidationType.NumericRange);
         var textLength = new StubHandler(ValidationType.TextLengthRange);
         var dateRange = new StubHandler(ValidationType.DateRange);
-        var registry = new ValidationHandlerRegistry([required, email, numericRange, textLength, dateRange]);
+        var upsertKey = new StubHandler(ValidationType.UpsertKeyRequired);
+        var registry = new ValidationHandlerRegistry([
+            required,
+            email,
+            numericRange,
+            textLength,
+            dateRange,
+            upsertKey
+        ]);
 
         Assert.Same(required, registry.Resolve(ValidationType.Required));
         Assert.Same(email, registry.Resolve(ValidationType.EmailFormat));
         Assert.Same(numericRange, registry.Resolve(ValidationType.NumericRange));
         Assert.Same(textLength, registry.Resolve(ValidationType.TextLengthRange));
         Assert.Same(dateRange, registry.Resolve(ValidationType.DateRange));
+        Assert.Same(upsertKey, registry.Resolve(ValidationType.UpsertKeyRequired));
     }
 
     [Fact]
@@ -74,6 +83,15 @@ public sealed class ValidationHandlerRegistryTests
     }
 
     [Fact]
+    public void Resolve_ThrowsWhenUpsertKeyHasNoRegisteredHandler()
+    {
+        var registry = new ValidationHandlerRegistry([new RequiredValidationHandler()]);
+
+        Assert.Throws<KeyNotFoundException>(
+            () => registry.Resolve(ValidationType.UpsertKeyRequired));
+    }
+
+    [Fact]
     public void Composition_ResolvesConcreteValidationHandlersThroughRegistry()
     {
         var services = new ServiceCollection();
@@ -82,10 +100,15 @@ public sealed class ValidationHandlerRegistryTests
         services.AddSingleton<IValidationHandler, NumericRangeValidationHandler>();
         services.AddSingleton<IValidationHandler, TextLengthValidationHandler>();
         services.AddSingleton<IValidationHandler, DateRangeValidationHandler>();
+        services.AddSingleton<IValidationHandler, UpsertKeyValidationHandler>();
         services.AddSingleton<ValidationHandlerRegistry>();
         services.AddSingleton<ValidationEngine>();
         using var provider = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        Assert.Single(provider
+            .GetServices<IValidationHandler>()
+            .OfType<UpsertKeyValidationHandler>());
 
         Assert.IsType<RequiredValidationHandler>(provider
             .GetRequiredService<ValidationHandlerRegistry>()
@@ -102,6 +125,9 @@ public sealed class ValidationHandlerRegistryTests
         Assert.IsType<DateRangeValidationHandler>(provider
             .GetRequiredService<ValidationHandlerRegistry>()
             .Resolve(ValidationType.DateRange));
+        Assert.IsType<UpsertKeyValidationHandler>(provider
+            .GetRequiredService<ValidationHandlerRegistry>()
+            .Resolve(ValidationType.UpsertKeyRequired));
         Assert.IsType<ValidationEngine>(provider.GetRequiredService<ValidationEngine>());
     }
 

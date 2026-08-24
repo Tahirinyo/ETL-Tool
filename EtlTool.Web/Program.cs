@@ -71,6 +71,7 @@ builder.Services.AddSingleton<IValidationHandler, EmailValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, NumericRangeValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, TextLengthValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, DateRangeValidationHandler>();
+builder.Services.AddSingleton<IValidationHandler, UpsertKeyValidationHandler>();
 builder.Services.AddSingleton<ValidationHandlerRegistry>();
 builder.Services.AddSingleton<ValidationEngine>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();

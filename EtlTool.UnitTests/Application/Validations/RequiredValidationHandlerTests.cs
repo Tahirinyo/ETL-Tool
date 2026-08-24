@@ -66,6 +66,7 @@ public sealed class RequiredValidationHandlerTests
 
         Assert.True(_handler.Validate(Row(8, ("Value", 0L)), Rule("Value")).IsValid);
         Assert.True(_handler.Validate(Row(8, ("Value", 42L)), Rule("Value")).IsValid);
+        Assert.True(_handler.Validate(Row(8, ("Value", 0m)), Rule("Value")).IsValid);
         Assert.True(_handler.Validate(Row(8, ("Value", 12.5m)), Rule("Value")).IsValid);
         Assert.True(_handler.Validate(Row(8, ("Value", timestamp)), Rule("Value")).IsValid);
         Assert.True(_handler.Validate(Row(8, ("Value", false)), Rule("Value")).IsValid);
