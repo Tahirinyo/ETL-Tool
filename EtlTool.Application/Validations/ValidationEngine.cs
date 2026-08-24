@@ -1,5 +1,6 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Validations;
 
@@ -15,10 +16,14 @@ public sealed class ValidationEngine
 
     public ValidationResult Validate(
         DataRow transformedRow,
-        IReadOnlyCollection<ValidationRule> rules)
+        IReadOnlyCollection<ValidationRule> rules,
+        SourceOptions sourceOptions)
     {
         ArgumentNullException.ThrowIfNull(transformedRow);
         ArgumentNullException.ThrowIfNull(rules);
+        ArgumentNullException.ThrowIfNull(sourceOptions);
+
+        var sourceCulture = sourceOptions.ResolveCulture();
 
         foreach (var rule in rules)
         {
@@ -29,7 +34,15 @@ public sealed class ValidationEngine
                     nameof(rules));
             }
 
-            var result = _handlerRegistry.Resolve(rule.Type).Validate(transformedRow, rule)
+            var handler = _handlerRegistry.Resolve(rule.Type);
+            var result = handler switch
+            {
+                ISourceCultureValidationHandler cultureAwareHandler => cultureAwareHandler.Validate(
+                    transformedRow,
+                    rule,
+                    sourceCulture),
+                _ => handler.Validate(transformedRow, rule)
+            }
                 ?? throw new InvalidOperationException(
                     $"Validation handler for type '{rule.Type}' returned no result.");
 

@@ -13,10 +13,12 @@ public sealed class ValidationHandlerRegistryTests
     {
         var required = new StubHandler(ValidationType.Required);
         var email = new StubHandler(ValidationType.EmailFormat);
-        var registry = new ValidationHandlerRegistry([required, email]);
+        var numericRange = new StubHandler(ValidationType.NumericRange);
+        var registry = new ValidationHandlerRegistry([required, email, numericRange]);
 
         Assert.Same(required, registry.Resolve(ValidationType.Required));
         Assert.Same(email, registry.Resolve(ValidationType.EmailFormat));
+        Assert.Same(numericRange, registry.Resolve(ValidationType.NumericRange));
     }
 
     [Fact]
@@ -52,7 +54,7 @@ public sealed class ValidationHandlerRegistryTests
     }
 
     [Fact]
-    public void Resolve_DoesNotTreatLaterValidationTypesAsEmail()
+    public void Resolve_ThrowsWhenNumericRangeHasNoRegisteredHandler()
     {
         var registry = new ValidationHandlerRegistry([new EmailValidationHandler()]);
 
@@ -65,6 +67,7 @@ public sealed class ValidationHandlerRegistryTests
         var services = new ServiceCollection();
         services.AddSingleton<IValidationHandler, RequiredValidationHandler>();
         services.AddSingleton<IValidationHandler, EmailValidationHandler>();
+        services.AddSingleton<IValidationHandler, NumericRangeValidationHandler>();
         services.AddSingleton<ValidationHandlerRegistry>();
         services.AddSingleton<ValidationEngine>();
         using var provider = services.BuildServiceProvider(
@@ -76,6 +79,9 @@ public sealed class ValidationHandlerRegistryTests
         Assert.IsType<EmailValidationHandler>(provider
             .GetRequiredService<ValidationHandlerRegistry>()
             .Resolve(ValidationType.EmailFormat));
+        Assert.IsType<NumericRangeValidationHandler>(provider
+            .GetRequiredService<ValidationHandlerRegistry>()
+            .Resolve(ValidationType.NumericRange));
         Assert.IsType<ValidationEngine>(provider.GetRequiredService<ValidationEngine>());
     }
 
