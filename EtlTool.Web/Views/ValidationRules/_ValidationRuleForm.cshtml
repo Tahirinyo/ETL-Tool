@@ -1,0 +1,81 @@
+@model ValidationRuleFormViewModel
+@using EtlTool.Domain.Enums
+
+<div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+
+<div class="mb-3">
+    <label asp-for="Type" class="form-label">Validation type</label>
+    <select asp-for="Type" class="form-select" data-validation-type>
+        <option value="Unspecified">Select a type</option>
+        <option value="Required">Required</option>
+        <option value="EmailFormat">Email format</option>
+        <option value="NumericRange">Numeric range</option>
+        <option value="TextLengthRange">Text length</option>
+        <option value="DateRange">Date range</option>
+        <option value="UpsertKeyRequired">Upsert-Key</option>
+    </select>
+    <span asp-validation-for="Type" class="text-danger"></span>
+</div>
+
+<div class="mb-3" data-validation-section="field">
+    <label asp-for="Field" class="form-label">Mapped output field</label>
+    <select asp-for="Field" class="form-select">
+        <option value="">Select a mapped output field</option>
+        @foreach (var field in Model.AvailableMappedFields)
+        {
+            <option value="@field">@field</option>
+        }
+    </select>
+    <span asp-validation-for="Field" class="text-danger"></span>
+</div>
+
+<div class="mb-3" data-validation-section="upsert">
+    <label class="form-label">Configured upsert-key field</label>
+    <input class="form-control" value="@(string.IsNullOrWhiteSpace(Model.UpsertKeyField) ? "Not configured" : Model.UpsertKeyField)" readonly />
+    <div class="form-text">The upsert-key validation uses the pipeline's configured upsert-key field.</div>
+</div>
+
+<div class="mb-3" data-validation-section="range">
+    <label asp-for="Minimum" class="form-label">Minimum</label>
+    <input asp-for="Minimum" class="form-control" />
+    <span asp-validation-for="Minimum" class="text-danger"></span>
+</div>
+<div class="mb-3" data-validation-section="range">
+    <label asp-for="Maximum" class="form-label">Maximum</label>
+    <input asp-for="Maximum" class="form-control" />
+    <span asp-validation-for="Maximum" class="text-danger"></span>
+</div>
+
+<div class="mb-3">
+    <label asp-for="ErrorMessage" class="form-label">Custom error message (optional)</label>
+    <input asp-for="ErrorMessage" class="form-control" />
+    <span asp-validation-for="ErrorMessage" class="text-danger"></span>
+</div>
+
+<script>
+    (() => {
+        const type = document.querySelector("[data-validation-type]");
+        if (type === null) return;
+        const sections = {
+            field: document.querySelectorAll('[data-validation-section="field"]'),
+            range: document.querySelectorAll('[data-validation-section="range"]'),
+            upsert: document.querySelectorAll('[data-validation-section="upsert"]')
+        };
+        const update = () => {
+            const isRange = ["NumericRange", "TextLengthRange", "DateRange"].includes(type.value);
+            Object.values(sections).forEach(items => items.forEach(item => item.hidden = false));
+            sections.range.forEach(item => item.hidden = !isRange);
+            sections.field.forEach(item => item.hidden = type.value === "UpsertKeyRequired" || type.value === "Unspecified");
+            sections.upsert.forEach(item => item.hidden = type.value !== "UpsertKeyRequired");
+        };
+        type.addEventListener("change", () => {
+            if (type.value === "UpsertKeyRequired" || type.value === "Unspecified") document.getElementById("Field").value = "";
+            if (!["NumericRange", "TextLengthRange", "DateRange"].includes(type.value)) {
+                document.getElementById("Minimum").value = "";
+                document.getElementById("Maximum").value = "";
+            }
+            update();
+        });
+        update();
+    })();
+</script>

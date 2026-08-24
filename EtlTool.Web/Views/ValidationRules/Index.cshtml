@@ -1,0 +1,60 @@
+@model ValidationRulesViewModel
+@using EtlTool.Domain.Enums
+
+@{
+    ViewData["Title"] = "Configure validations";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="mb-1">Configure validations</h1>
+        <p class="text-muted mb-0">Add validation rules for this pipeline.</p>
+    </div>
+    <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add validation</a>
+</div>
+
+@if (Model.Rules.Count == 0)
+{
+    <div class="alert alert-info" role="status">No validations have been configured.</div>
+}
+else
+{
+    <div class="row row-cols-1 row-cols-lg-2 g-3">
+        @foreach (var rule in Model.Rules)
+        {
+            <div class="col">
+                <article class="card h-100">
+                    <div class="card-header"><h2 class="h5 mb-0">@Label(rule.Type)</h2></div>
+                    <div class="card-body">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-4">Target field</dt><dd class="col-sm-8 text-break">@rule.Field</dd>
+                            @foreach (var item in rule.Configuration)
+                            {
+                                <dt class="col-sm-4">@item.Key</dt><dd class="col-sm-8 text-break">@item.Value</dd>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(rule.ErrorMessage))
+                            {
+                                <dt class="col-sm-4">Error message</dt><dd class="col-sm-8 text-break">@rule.ErrorMessage</dd>
+                            }
+                        </dl>
+                    </div>
+                </article>
+            </div>
+        }
+    </div>
+}
+
+<a class="btn btn-outline-secondary mt-3" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+
+@functions {
+    private static string Label(ValidationType type) => type switch
+    {
+        ValidationType.Required => "Required",
+        ValidationType.EmailFormat => "Email format",
+        ValidationType.NumericRange => "Numeric range",
+        ValidationType.TextLengthRange => "Text length",
+        ValidationType.DateRange => "Date range",
+        ValidationType.UpsertKeyRequired => "Upsert-Key",
+        _ => "Unsupported validation"
+    };
+}

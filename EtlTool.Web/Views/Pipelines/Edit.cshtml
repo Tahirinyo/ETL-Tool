@@ -16,6 +16,7 @@
             <a class="btn btn-outline-primary" asp-action="Source" asp-route-id="@pipelineId">Configure source</a>
             <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
             <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
+            <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure validations</a>
             <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
         </form>
     </div>

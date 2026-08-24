@@ -75,6 +75,7 @@ builder.Services.AddSingleton<IValidationHandler, UpsertKeyValidationHandler>();
 builder.Services.AddSingleton<ValidationHandlerRegistry>();
 builder.Services.AddSingleton<ValidationEngine>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();
+builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
 builder.Services.AddHostedService<SourceInspectionCleanupService>();

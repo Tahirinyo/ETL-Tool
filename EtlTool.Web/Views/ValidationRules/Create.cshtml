@@ -1,0 +1,18 @@
+@model ValidationRuleFormViewModel
+
+@{
+    ViewData["Title"] = "Add validation";
+    var pipelineId = Context.Request.RouteValues["pipelineId"];
+}
+
+<h1>Add validation</h1>
+
+<form asp-action="Create" asp-route-pipelineId="@pipelineId" method="post">
+    <partial name="_ValidationRuleForm" model="Model" />
+    <button type="submit" class="btn btn-primary">Add validation</button>
+    <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

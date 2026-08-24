@@ -37,6 +37,7 @@
 - Task 6B.3 server-side transformation-reference validation regression coverage, including rejected non-Deduplicate and Deduplicate updates without persistence, preservation of prior valid rules, and MVC create/edit error redisplay with authoritative mapped-field choices, has been implemented and verified by focused and full unit suites.
 - Task 7A.1 Required validation, including ordinal post-transformation field lookup, null/empty/whitespace/absent value failures, non-string value acceptance, reusable result/error contracts, registry/engine dispatch, DI registration, and focused unit coverage, has been implemented and verified.
 - Task 7A.2 Email validation, including optional-value format checks, ordinal post-transformation field lookup, non-string rejection without coercion, custom/default messages, read-only behavior, registry/engine dispatch, DI registration, and focused unit coverage, has been implemented and verified.
+- Task 7B.1 validation-rule creation, including MVC create/list screens, authoritative mapped-field options, type-specific server-side configuration validation, pipeline-derived upsert-key validation, aggregate-preserving persistence, and focused application/MVC/form coverage, has been implemented and verified.
 
 ## In Progress
 
