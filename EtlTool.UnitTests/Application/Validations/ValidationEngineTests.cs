@@ -8,14 +8,17 @@ namespace EtlTool.UnitTests.Application.Validations;
 public sealed class ValidationEngineTests
 {
     private readonly ValidationEngine _engine = new(
-        new ValidationHandlerRegistry([new RequiredValidationHandler()]));
+        new ValidationHandlerRegistry([
+            new RequiredValidationHandler(),
+            new EmailValidationHandler()
+        ]));
 
     [Fact]
     public void Validate_ReturnsValidForRowThatPassesRequiredRule()
     {
         var row = Row(("Name", "Ada"));
 
-        var result = _engine.Validate(row, [Rule("Name")]);
+        var result = _engine.Validate(row, [Rule(ValidationType.Required, "Name")]);
 
         Assert.True(result.IsValid);
         Assert.Same(row, result.Row);
@@ -26,7 +29,7 @@ public sealed class ValidationEngineTests
     {
         var row = Row(("Name", null));
 
-        var result = _engine.Validate(row, [Rule("Name"), new ValidationRule
+        var result = _engine.Validate(row, [Rule(ValidationType.Required, "Name"), new ValidationRule
         {
             Type = ValidationType.EmailFormat,
             Field = "Email"
@@ -37,6 +40,33 @@ public sealed class ValidationEngineTests
     }
 
     [Fact]
+    public void Validate_DispatchesEmailRule()
+    {
+        var row = Row(("Email", "not-an-email"));
+
+        var result = _engine.Validate(row, [Rule(ValidationType.EmailFormat, "Email")]);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("Email", Assert.Single(result.Errors).Field);
+    }
+
+    [Fact]
+    public void Validate_EmailRuleDoesNotDuplicateRequiredPresenceValidation()
+    {
+        var row = Row(("Email", " \t "));
+
+        var result = _engine.Validate(row, [
+            Rule(ValidationType.EmailFormat, "Email"),
+            Rule(ValidationType.Required, "Email")
+        ]);
+
+        var error = Assert.Single(result.Errors);
+        Assert.False(result.IsValid);
+        Assert.Equal("Email", error.Field);
+        Assert.Equal("Field 'Email' is required.", error.Message);
+    }
+
+    [Fact]
     public void Validate_ThrowsForNullArgumentsAndInvalidRuleCollectionEntry()
     {
         Assert.Throws<ArgumentNullException>(() => _engine.Validate(null!, []));
@@ -44,9 +74,9 @@ public sealed class ValidationEngineTests
         Assert.Throws<ArgumentException>(() => _engine.Validate(Row(), [null!]));
     }
 
-    private static ValidationRule Rule(string field) => new()
+    private static ValidationRule Rule(ValidationType type, string field) => new()
     {
-        Type = ValidationType.Required,
+        Type = type,
         Field = field
     };
 

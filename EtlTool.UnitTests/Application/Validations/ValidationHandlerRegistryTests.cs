@@ -52,10 +52,19 @@ public sealed class ValidationHandlerRegistryTests
     }
 
     [Fact]
-    public void Composition_ResolvesConcreteRequiredHandlerThroughRegistry()
+    public void Resolve_DoesNotTreatLaterValidationTypesAsEmail()
+    {
+        var registry = new ValidationHandlerRegistry([new EmailValidationHandler()]);
+
+        Assert.Throws<KeyNotFoundException>(() => registry.Resolve(ValidationType.NumericRange));
+    }
+
+    [Fact]
+    public void Composition_ResolvesConcreteValidationHandlersThroughRegistry()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IValidationHandler, RequiredValidationHandler>();
+        services.AddSingleton<IValidationHandler, EmailValidationHandler>();
         services.AddSingleton<ValidationHandlerRegistry>();
         services.AddSingleton<ValidationEngine>();
         using var provider = services.BuildServiceProvider(
@@ -64,6 +73,9 @@ public sealed class ValidationHandlerRegistryTests
         Assert.IsType<RequiredValidationHandler>(provider
             .GetRequiredService<ValidationHandlerRegistry>()
             .Resolve(ValidationType.Required));
+        Assert.IsType<EmailValidationHandler>(provider
+            .GetRequiredService<ValidationHandlerRegistry>()
+            .Resolve(ValidationType.EmailFormat));
         Assert.IsType<ValidationEngine>(provider.GetRequiredService<ValidationEngine>());
     }
 
