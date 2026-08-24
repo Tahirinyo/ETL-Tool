@@ -33,7 +33,54 @@ public sealed class PreviewServiceTests
         Assert.Equal(expectedRows, result.Rows.Count);
         Assert.Equal(expectedRows, extractor.YieldedRows);
         Assert.All(result.Rows, row => Assert.Equal(RowProcessingStatus.Valid, row.Status));
+        Assert.Equal(expectedRows, result.ValidRowCount);
+        Assert.Equal(0, result.InvalidRowCount);
+        Assert.Equal(0, result.FilteredRowCount);
+        Assert.Equal(expectedRows, extractor.YieldedRows);
         Assert.True(source.CanRead);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_ReportsAllInvalidAndAllFilteredCounters()
+    {
+        var invalidExtractor = new GuardedExtractor(3, sourceValue: " ");
+        var invalidPipeline = ReadyPipeline();
+        invalidPipeline.ValidationRules =
+        [
+            new ValidationRule { Type = ValidationType.Required, Field = "value" }
+        ];
+        await using var invalidSource = new MemoryStream([1]);
+
+        var invalid = await Service(
+                invalidExtractor,
+                Processor([], [new RequiredValidationHandler()]))
+            .PreviewAsync(invalidSource, invalidPipeline, CancellationToken.None);
+
+        Assert.Equal(0, invalid.ValidRowCount);
+        Assert.Equal(3, invalid.InvalidRowCount);
+        Assert.Equal(0, invalid.FilteredRowCount);
+
+        var filteredPipeline = ReadyPipeline();
+        filteredPipeline.TransformationRules =
+        [
+            Rule(
+                1,
+                TransformationType.FilterRow,
+                "value",
+                ("Operator", FilterOperator.Equals.ToString()),
+                ("Value", "filtered"))
+        ];
+        var filteredExtractor = new GuardedExtractor(3, sourceValue: "filtered");
+        await using var filteredSource = new MemoryStream([1]);
+
+        var filtered = await Service(
+                filteredExtractor,
+                Processor([new ConditionalFilterTransformationHandler()], []))
+            .PreviewAsync(filteredSource, filteredPipeline, CancellationToken.None);
+
+        Assert.Equal(0, filtered.ValidRowCount);
+        Assert.Equal(0, filtered.InvalidRowCount);
+        Assert.Equal(3, filtered.FilteredRowCount);
     }
 
     [Fact]
@@ -192,6 +239,13 @@ public sealed class PreviewServiceTests
         Assert.Equal(20, result.Rows.Count(row => row.Status == RowProcessingStatus.Filtered));
         Assert.Equal(20, result.Rows.Count(row => row.Status == RowProcessingStatus.Duplicate));
         Assert.Equal(40, result.Rows.Count(row => row.Status == RowProcessingStatus.Invalid));
+        Assert.Equal(20, result.ValidRowCount);
+        Assert.Equal(40, result.InvalidRowCount);
+        Assert.Equal(20, result.FilteredRowCount);
+        Assert.Equal(20, result.ValidRowCount);
+        Assert.Equal(40, result.InvalidRowCount);
+        Assert.Equal(20, result.FilteredRowCount);
+        Assert.Equal(100, extractor.YieldedRows);
         Assert.Equal(20, result.Rows.Count(row =>
             row.Errors.SingleOrDefault()?.Stage == RowProcessingErrorStage.Transformation));
         Assert.Equal(20, result.Rows.Count(row =>
