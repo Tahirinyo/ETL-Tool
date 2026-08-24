@@ -35,6 +35,7 @@
 - Culture/date parsing error consistency, including preserved format-versus-overflow taxonomy for numeric filter comparisons, deterministic shared date-parser parity, invariant/invalid-culture execution behavior, failure atomicity, and focused cross-consumer regression coverage, has been implemented and verified.
 - Task 6B.2 client-side transformation reference validation, including mapped-output SourceField validation, Deduplicate SelectedFields validation, stale-reference feedback, type-change cleanup, submit blocking, and the nullable Deduplicate SourceField form-contract regression fix, has been implemented and verified.
 - Task 6B.3 server-side transformation-reference validation regression coverage, including rejected non-Deduplicate and Deduplicate updates without persistence, preservation of prior valid rules, and MVC create/edit error redisplay with authoritative mapped-field choices, has been implemented and verified by focused and full unit suites.
+- Task 7A.1 Required validation, including ordinal post-transformation field lookup, null/empty/whitespace/absent value failures, non-string value acceptance, reusable result/error contracts, registry/engine dispatch, DI registration, and focused unit coverage, has been implemented and verified.
 
 ## In Progress
 

@@ -3,6 +3,7 @@ using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.Transformations;
+using EtlTool.Application.Validations;
 using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
@@ -65,6 +66,9 @@ builder.Services.AddSingleton<ITransformationHandler, FindAndReplaceTransformati
 builder.Services.AddSingleton<ITransformationHandler, DeduplicateTransformationHandler>();
 builder.Services.AddSingleton<TransformationHandlerRegistry>();
 builder.Services.AddSingleton<TransformationEngine>();
+builder.Services.AddSingleton<IValidationHandler, RequiredValidationHandler>();
+builder.Services.AddSingleton<ValidationHandlerRegistry>();
+builder.Services.AddSingleton<ValidationEngine>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
