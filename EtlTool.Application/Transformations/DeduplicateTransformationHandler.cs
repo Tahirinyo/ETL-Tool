@@ -24,6 +24,13 @@ public sealed class DeduplicateTransformationHandler : ITransformationHandler
     {
         ArgumentNullException.ThrowIfNull(rule);
 
+        return new DeduplicationRuleExecutionState(ReadSelectedFields(rule));
+    }
+
+    internal static IReadOnlyList<string> ReadSelectedFields(TransformationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+
         if (rule.Configuration is null
             || !TryGetOrdinalConfigurationValue(
                 rule.Configuration,
@@ -74,7 +81,7 @@ public sealed class DeduplicateTransformationHandler : ITransformationHandler
             selectedFields[index] = field;
         }
 
-        return new DeduplicationRuleExecutionState(selectedFields);
+        return selectedFields;
     }
 
     internal DeduplicationEvaluation Evaluate(

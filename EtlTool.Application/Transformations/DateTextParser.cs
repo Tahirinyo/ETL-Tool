@@ -14,10 +14,9 @@ internal static class DateTextParser
         ArgumentNullException.ThrowIfNull(sourceCulture);
         ArgumentException.ThrowIfNullOrWhiteSpace(errorSubject);
 
-        if (!string.IsNullOrWhiteSpace(dateFormat)
-            && IsTimezoneBearingStandardFormat(dateFormat))
+        if (!string.IsNullOrWhiteSpace(dateFormat))
         {
-            throw UnsupportedTimezone(errorSubject);
+            ValidateFormat(dateFormat, sourceCulture);
         }
 
         var parsed = string.IsNullOrWhiteSpace(dateFormat)
@@ -27,6 +26,38 @@ internal static class DateTextParser
         return parsed.Kind is DateTimeKind.Unspecified
             ? parsed
             : throw UnsupportedTimezone(errorSubject);
+    }
+
+    internal static void ValidateFormat(
+        string? dateFormat,
+        CultureInfo sourceCulture)
+    {
+        ArgumentNullException.ThrowIfNull(sourceCulture);
+
+        if (string.IsNullOrWhiteSpace(dateFormat))
+        {
+            return;
+        }
+
+        if (IsTimezoneBearingStandardFormat(dateFormat))
+        {
+            throw UnsupportedTimezone("The source date format");
+        }
+
+        if (dateFormat.Length > 1)
+        {
+            ValidateCustomFormatSyntax(dateFormat, sourceCulture);
+
+            if (CustomFormatContainsTimezoneSpecifier(dateFormat))
+            {
+                throw UnsupportedTimezone("The source date format");
+            }
+        }
+
+        if (!FormatContainsYear(dateFormat, sourceCulture))
+        {
+            throw new FormatException("The source date format must include a year.");
+        }
     }
 
     private static DateTime ParseUsingCulture(
@@ -230,6 +261,55 @@ internal static class DateTextParser
 
     private static bool IsTimezoneBearingStandardFormat(string format) =>
         format.Length == 1 && format[0] is 'R' or 'r' or 'u';
+
+    private static void ValidateCustomFormatSyntax(
+        string format,
+        CultureInfo sourceCulture)
+    {
+        try
+        {
+            _ = new DateTime(2000, 1, 1).ToString(format, sourceCulture);
+        }
+        catch (FormatException exception)
+        {
+            throw new FormatException("The source date format is not a valid custom date format.", exception);
+        }
+    }
+
+    private static bool CustomFormatContainsTimezoneSpecifier(string format)
+    {
+        for (var index = 0; index < format.Length; index++)
+        {
+            var character = format[index];
+
+            if (character is '\'' or '"')
+            {
+                var quote = character;
+                while (++index < format.Length && format[index] != quote)
+                {
+                    if (format[index] == '\\' && index + 1 < format.Length)
+                    {
+                        index++;
+                    }
+                }
+
+                continue;
+            }
+
+            if (character == '\\')
+            {
+                index++;
+                continue;
+            }
+
+            if (character is 'z' or 'K')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool CustomFormatContainsYear(string format)
     {

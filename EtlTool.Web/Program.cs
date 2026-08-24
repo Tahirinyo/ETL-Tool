@@ -81,6 +81,7 @@ builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.Get
 builder.Services.AddHostedService<SourceInspectionCleanupService>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
+builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
 
 var app = builder.Build();
 

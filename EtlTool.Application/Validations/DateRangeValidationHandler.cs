@@ -89,6 +89,16 @@ public sealed class DateRangeValidationHandler : ISourceDateFormatValidationHand
         return new DateRange(minimum, maximum);
     }
 
+    internal static void ValidateConfiguration(
+        ValidationRule rule,
+        CultureInfo sourceCulture,
+        string? dateFormat)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(sourceCulture);
+        _ = ReadRange(rule, sourceCulture, dateFormat);
+    }
+
     private static DateTime? ReadBound(
         ValidationRule rule,
         CultureInfo sourceCulture,

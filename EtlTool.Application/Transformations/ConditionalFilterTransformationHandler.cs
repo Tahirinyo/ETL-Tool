@@ -71,7 +71,7 @@ public sealed class ConditionalFilterTransformationHandler : ISourceDateFormatTr
             : TransformationResult.Transformed(row);
     }
 
-    private static FilterOperator ReadOperator(TransformationRule rule)
+    internal static FilterOperator ReadOperator(TransformationRule rule)
     {
         if (rule.Configuration is null
             || !rule.Configuration.TryGetValue(OperatorConfigurationKey, out var configured)
@@ -88,7 +88,7 @@ public sealed class ConditionalFilterTransformationHandler : ISourceDateFormatTr
         return parsed;
     }
 
-    private static string ReadComparisonValue(TransformationRule rule)
+    internal static string ReadComparisonValue(TransformationRule rule)
     {
         if (rule.Configuration is null
             || !rule.Configuration.TryGetValue(ValueConfigurationKey, out var comparisonText)

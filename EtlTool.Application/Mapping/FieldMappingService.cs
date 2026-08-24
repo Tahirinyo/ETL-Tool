@@ -1,5 +1,6 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Mapping;
 
@@ -9,28 +10,10 @@ public sealed class FieldMappingService
     {
         ArgumentNullException.ThrowIfNull(pipeline);
 
-        if (pipeline.ExpectedSchema is not { Count: > 0 })
-        {
-            throw new InvalidOperationException(
-                "Field mapping requires a non-empty expected source schema.");
-        }
-
-        var schemaFields = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var field in pipeline.ExpectedSchema)
-        {
-            if (field is null || string.IsNullOrWhiteSpace(field.Name))
-            {
-                throw new InvalidOperationException(
-                    "The expected source schema contains an empty field name.");
-            }
-
-            if (!schemaFields.Add(field.Name))
-            {
-                throw new InvalidOperationException(
-                    $"The expected source schema contains duplicate field '{field.Name}'.");
-            }
-        }
+        ValidateExpectedSchema(pipeline.ExpectedSchema);
+        var schemaFields = pipeline.ExpectedSchema
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
         if (pipeline.FieldMappings is null)
         {
@@ -97,6 +80,32 @@ public sealed class FieldMappingService
         }
 
         return new FieldMappingPlan(activeMappings.ToArray());
+    }
+
+    internal static void ValidateExpectedSchema(IReadOnlyList<SourceFieldDefinition>? expectedSchema)
+    {
+        if (expectedSchema is not { Count: > 0 })
+        {
+            throw new InvalidOperationException(
+                "Field mapping requires a non-empty expected source schema.");
+        }
+
+        var schemaFields = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var field in expectedSchema)
+        {
+            if (field is null || string.IsNullOrWhiteSpace(field.Name))
+            {
+                throw new InvalidOperationException(
+                    "The expected source schema contains an empty field name.");
+            }
+
+            if (!schemaFields.Add(field.Name))
+            {
+                throw new InvalidOperationException(
+                    $"The expected source schema contains duplicate field '{field.Name}'.");
+            }
+        }
     }
 
     public DataRow Apply(DataRow sourceRow, FieldMappingPlan plan)

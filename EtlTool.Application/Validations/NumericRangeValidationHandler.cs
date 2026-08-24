@@ -88,6 +88,13 @@ public sealed class NumericRangeValidationHandler : ISourceCultureValidationHand
         return new NumericRange(minimum, maximum);
     }
 
+    internal static void ValidateConfiguration(ValidationRule rule, CultureInfo sourceCulture)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(sourceCulture);
+        _ = ReadRange(rule, sourceCulture);
+    }
+
     private static decimal? ReadBound(
         ValidationRule rule,
         CultureInfo sourceCulture,

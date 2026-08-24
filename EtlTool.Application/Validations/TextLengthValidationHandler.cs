@@ -70,6 +70,12 @@ public sealed class TextLengthValidationHandler : IValidationHandler
         return new TextLengthRange(minimum, maximum);
     }
 
+    internal static void ValidateConfiguration(ValidationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        _ = ReadRange(rule);
+    }
+
     private static int? ReadBound(ValidationRule rule, string configurationKey)
     {
         if (!TryGetExactConfigurationValue(rule.Configuration, configurationKey, out var configured))

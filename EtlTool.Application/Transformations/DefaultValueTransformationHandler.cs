@@ -21,13 +21,7 @@ public sealed class DefaultValueTransformationHandler : ITransformationHandler
                 "The default value transformation requires a non-empty source field.");
         }
 
-        if (rule.Configuration is null
-            || !rule.Configuration.TryGetValue(DefaultValueConfigurationKey, out var defaultValue)
-            || defaultValue is null)
-        {
-            throw new InvalidOperationException(
-                "The default value transformation requires a non-null 'Value' configuration value.");
-        }
+        var defaultValue = ReadDefaultValue(rule);
 
         if (!row.Values.TryGetValue(rule.SourceField, out var value))
         {
@@ -41,5 +35,20 @@ public sealed class DefaultValueTransformationHandler : ITransformationHandler
         }
 
         return TransformationResult.Transformed(row);
+    }
+
+    internal static string ReadDefaultValue(TransformationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+
+        if (rule.Configuration is null
+            || !rule.Configuration.TryGetValue(DefaultValueConfigurationKey, out var defaultValue)
+            || defaultValue is null)
+        {
+            throw new InvalidOperationException(
+                "The default value transformation requires a non-null 'Value' configuration value.");
+        }
+
+        return defaultValue;
     }
 }

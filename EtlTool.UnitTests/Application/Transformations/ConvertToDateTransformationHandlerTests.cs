@@ -172,6 +172,52 @@ public sealed class ConvertToDateTransformationHandlerTests
     }
 
     [Theory]
+    [InlineData("yyyy'")]
+    [InlineData("yyyy%")]
+    public void Apply_RejectsMalformedConfiguredExactFormatBeforeRowParsing(string dateFormat)
+    {
+        const string input = "not examined after configuration validation";
+        var row = Row(8, ("OccurredAt", input));
+
+        var exception = Assert.Throws<FormatException>(
+            () => _handler.Apply(row, Rule("OccurredAt"), Culture("en-US"), dateFormat));
+
+        Assert.Contains("source date format", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(input, row.Values["OccurredAt"]);
+    }
+
+    [Theory]
+    [InlineData("yyyy-MM-ddz")]
+    [InlineData("yyyy-MM-ddzz")]
+    [InlineData("yyyy-MM-ddzzz")]
+    [InlineData("yyyy-MM-ddK")]
+    public void Apply_RejectsTimezoneBearingConfiguredExactFormatBeforeRowParsing(string dateFormat)
+    {
+        const string input = "not examined after configuration validation";
+        var row = Row(8, ("OccurredAt", input));
+
+        var exception = Assert.Throws<FormatException>(
+            () => _handler.Apply(row, Rule("OccurredAt"), Culture("en-US"), dateFormat));
+
+        Assert.Contains("timezone or offset", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(input, row.Values["OccurredAt"]);
+    }
+
+    [Theory]
+    [InlineData("2026-12-31 zK", "yyyy-MM-dd 'zK'")]
+    [InlineData("2026-12-31 zK", @"yyyy-MM-dd \z\K")]
+    public void Apply_AcceptsTimezoneLikeCharactersWhenTheyAreLiterals(
+        string input,
+        string dateFormat)
+    {
+        var row = Row(8, ("OccurredAt", input));
+
+        _handler.Apply(row, Rule("OccurredAt"), Culture("en-US"), dateFormat);
+
+        Assert.Equal(new DateTime(2026, 12, 31), Assert.IsType<DateTime>(row.Values["OccurredAt"]));
+    }
+
+    [Theory]
     [InlineData("2026-12-31", "dd.MM.yyyy")]
     [InlineData("31.12.2026 10:30", "dd.MM.yyyy")]
     public void Apply_ExactFormatDoesNotFallBackToGeneralParsing(
