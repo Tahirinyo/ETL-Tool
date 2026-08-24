@@ -85,6 +85,8 @@ builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddSingleton<SourceInspectionService>();
 builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.GetRequiredService<SourceInspectionService>());
+builder.Services.AddSingleton<IWizardSourceStore>(provider => provider.GetRequiredService<SourceInspectionService>());
+builder.Services.AddSingleton<PipelineSourceCommitCoordinator>();
 builder.Services.AddHostedService<SourceInspectionCleanupService>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();

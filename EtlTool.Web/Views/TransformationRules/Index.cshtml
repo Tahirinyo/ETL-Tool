@@ -74,6 +74,7 @@ else
     </div>
 }
 
+<a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@Model.PipelineId">Configure validations</a>
 <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
 
 @if (Model.Rules.Count > 1)

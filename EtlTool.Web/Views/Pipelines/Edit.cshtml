@@ -12,11 +12,39 @@
     <div class="col-lg-7">
         <form asp-action="Edit" asp-route-id="@pipelineId" method="post">
             <partial name="_PipelineForm" model="Model" />
+
+            <fieldset class="mt-4">
+                <legend class="h4">Preview readiness</legend>
+                <p class="text-muted">These draft values satisfy the existing pipeline readiness contract. MongoDB discovery and connectivity are configured later.</p>
+                <div class="mb-3">
+                    <label asp-for="DestinationDatabase" class="form-label"></label>
+                    <input asp-for="DestinationDatabase" class="form-control" />
+                    <span asp-validation-for="DestinationDatabase" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="DestinationCollection" class="form-label"></label>
+                    <input asp-for="DestinationCollection" class="form-control" />
+                    <span asp-validation-for="DestinationCollection" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="UpsertKeyField" class="form-label"></label>
+                    <select asp-for="UpsertKeyField" class="form-select">
+                        <option value="">Select an included mapped field</option>
+                        @foreach (var field in Model.AvailableMappedFields)
+                        {
+                            <option value="@field">@field</option>
+                        }
+                    </select>
+                    <span asp-validation-for="UpsertKeyField" class="text-danger"></span>
+                </div>
+            </fieldset>
+
             <button type="submit" class="btn btn-primary">Save changes</button>
             <a class="btn btn-outline-primary" asp-action="Source" asp-route-id="@pipelineId">Configure source</a>
             <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
             <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
             <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure validations</a>
+            <a class="btn btn-outline-success" asp-action="Preview" asp-route-id="@pipelineId">Preview</a>
             <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
         </form>
     </div>

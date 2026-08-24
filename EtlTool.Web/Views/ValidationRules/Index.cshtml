@@ -50,6 +50,7 @@ else
     </div>
 }
 
+<a class="btn btn-outline-success mt-3" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@Model.PipelineId">Preview</a>
 <a class="btn btn-outline-secondary mt-3" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
 
 @functions {

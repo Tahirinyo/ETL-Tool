@@ -6,7 +6,12 @@ namespace EtlTool.Application.Sources;
 
 public interface ISourceInspectionService
 {
-    Task<SourceInspectionResult> InspectCsvAsync(Stream content, string fileName, SourceOptions options, CancellationToken cancellationToken);
+    Task<SourceInspectionResult> InspectCsvAsync(
+        Guid pipelineId,
+        Stream content,
+        string fileName,
+        SourceOptions options,
+        CancellationToken cancellationToken);
     Task<SourceInspectionResult> StageXlsxAsync(
         Guid pipelineId,
         Stream content,
@@ -28,6 +33,7 @@ public sealed class SourceInspectionResult
     public IReadOnlyList<DataRow> SampleRows { get; init; } = [];
     public IReadOnlyList<SourceFieldDefinition> DetectedSchema { get; init; } = [];
     public Guid? StageId { get; init; }
+    public Guid? SourceReferenceId { get; init; }
     public string? ErrorMessage { get; init; }
     public bool IsSuccess => ErrorMessage is null;
 }

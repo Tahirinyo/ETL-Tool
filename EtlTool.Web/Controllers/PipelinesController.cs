@@ -1,4 +1,5 @@
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
 using EtlTool.Domain.Entities;
@@ -14,16 +15,31 @@ public sealed class PipelinesController : Controller
     private readonly IPipelineService _pipelineService;
     private readonly ISourceInspectionService? _sourceInspectionService;
     private readonly FieldMappingService _fieldMappingService;
+    private readonly IWizardSourceStore? _wizardSourceStore;
+    private readonly IPipelineReadinessService? _readinessService;
+    private readonly IPreviewService? _previewService;
+    private readonly ILogger<PipelinesController>? _logger;
+    private readonly PipelineSourceCommitCoordinator? _sourceCommitCoordinator;
 
     public PipelinesController(
         IPipelineService pipelineService,
         ISourceInspectionService? sourceInspectionService = null,
-        FieldMappingService? fieldMappingService = null)
+        FieldMappingService? fieldMappingService = null,
+        IWizardSourceStore? wizardSourceStore = null,
+        IPipelineReadinessService? readinessService = null,
+        IPreviewService? previewService = null,
+        ILogger<PipelinesController>? logger = null,
+        PipelineSourceCommitCoordinator? sourceCommitCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
         _sourceInspectionService = sourceInspectionService;
         _fieldMappingService = fieldMappingService ?? new FieldMappingService();
+        _wizardSourceStore = wizardSourceStore;
+        _readinessService = readinessService;
+        _previewService = previewService;
+        _logger = logger;
+        _sourceCommitCoordinator = sourceCommitCoordinator;
     }
 
     public async Task<IActionResult> Mapping(Guid id, CancellationToken cancellationToken)
@@ -148,12 +164,28 @@ public sealed class PipelinesController : Controller
             return ApplyInspection(model, stage);
         }
         var options = CreateCsvOptions(pipeline, model.Delimiter);
-        var inspection = await _sourceInspectionService.InspectCsvAsync(content, model.SourceFile.FileName, options, cancellationToken);
+        var inspection = await _sourceInspectionService.InspectCsvAsync(
+            id,
+            content,
+            model.SourceFile.FileName,
+            options,
+            cancellationToken);
         var result = ApplyInspection(model, inspection);
-        if (inspection.IsSuccess
-            && !await SaveSourceAsync(id, pipeline, SourceType.Csv, options, inspection.DetectedSchema, cancellationToken))
+        if (inspection.IsSuccess)
         {
-            return NotFound();
+            var commitStatus = await CommitSourceAsync(
+                id,
+                pipeline,
+                SourceType.Csv,
+                options,
+                inspection,
+                cancellationToken);
+            if (commitStatus == PipelineSourceCommitStatus.PersistenceRejected)
+            {
+                return NotFound();
+            }
+
+            AddActivationFailure(commitStatus);
         }
 
         return result;
@@ -187,10 +219,19 @@ public sealed class PipelinesController : Controller
         var result = ApplyInspection(model, inspection);
         if (inspection.IsSuccess)
         {
-            if (!await SaveSourceAsync(id, pipeline, SourceType.Xlsx, options, inspection.DetectedSchema, cancellationToken))
+            var commitStatus = await CommitSourceAsync(
+                id,
+                pipeline,
+                SourceType.Xlsx,
+                options,
+                inspection,
+                cancellationToken);
+            if (commitStatus == PipelineSourceCommitStatus.PersistenceRejected)
             {
                 return NotFound();
             }
+
+            AddActivationFailure(commitStatus);
         }
 
         return result;
@@ -369,6 +410,60 @@ public sealed class PipelinesController : Controller
         return await _pipelineService.UpdateAsync(id, pipeline, ct);
     }
 
+    private async Task<PipelineSourceCommitStatus> CommitSourceAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        SourceType type,
+        SourceOptions options,
+        SourceInspectionResult inspection,
+        CancellationToken cancellationToken)
+    {
+        if (_sourceCommitCoordinator is null)
+        {
+            if (_wizardSourceStore is not null)
+            {
+                throw new InvalidOperationException("Pipeline source commit coordination is not configured.");
+            }
+
+            return await SaveSourceAsync(
+                    id,
+                    pipeline,
+                    type,
+                    options,
+                    inspection.DetectedSchema,
+                    cancellationToken)
+                ? PipelineSourceCommitStatus.Succeeded
+                : PipelineSourceCommitStatus.PersistenceRejected;
+        }
+
+        if (inspection.SourceReferenceId is not Guid sourceReferenceId)
+        {
+            return PipelineSourceCommitStatus.ActivationFailed;
+        }
+
+        return await _sourceCommitCoordinator.CommitAsync(
+            id,
+            sourceReferenceId,
+            token => SaveSourceAsync(
+                id,
+                pipeline,
+                type,
+                options,
+                inspection.DetectedSchema,
+                token),
+            cancellationToken);
+    }
+
+    private void AddActivationFailure(PipelineSourceCommitStatus commitStatus)
+    {
+        if (commitStatus == PipelineSourceCommitStatus.ActivationFailed)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                "The inspected source could not be retained for preview. Upload the source again.");
+        }
+    }
+
     private IActionResult ApplyInspection(SourceUploadViewModel model, SourceInspectionResult inspection)
     {
         if (!inspection.IsSuccess) ModelState.AddModelError(string.Empty, inspection.ErrorMessage!);
@@ -426,7 +521,7 @@ public sealed class PipelinesController : Controller
 
         try
         {
-            await _pipelineService.CreateAsync(pipeline, cancellationToken);
+            pipeline = await _pipelineService.CreateAsync(pipeline, cancellationToken);
         }
         catch (ArgumentException exception) when (exception.ParamName == "pipeline")
         {
@@ -441,7 +536,7 @@ public sealed class PipelinesController : Controller
             return View(model);
         }
 
-        return RedirectToAction(nameof(Index));
+        return RedirectToAction(nameof(Source), new { id = pipeline.Id });
     }
 
     public async Task<IActionResult> Edit(
@@ -461,11 +556,16 @@ public sealed class PipelinesController : Controller
         }
 
         ViewData["PipelineId"] = id;
-        return View(new PipelineFormViewModel
+        var model = new PipelineFormViewModel
         {
             Name = pipeline.Name,
-            Description = pipeline.Description
-        });
+            Description = pipeline.Description,
+            DestinationDatabase = pipeline.DestinationDatabase,
+            DestinationCollection = pipeline.DestinationCollection,
+            UpsertKeyField = pipeline.UpsertKeyField
+        };
+        PopulateAvailableMappedFields(model, pipeline);
+        return View(model);
     }
 
     [HttpPost]
@@ -482,11 +582,6 @@ public sealed class PipelinesController : Controller
 
         ViewData["PipelineId"] = id;
 
-        if (!ModelState.IsValid)
-        {
-            return View(model);
-        }
-
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
 
         if (pipeline is null)
@@ -494,8 +589,26 @@ public sealed class PipelinesController : Controller
             return NotFound();
         }
 
+        PopulateAvailableMappedFields(model, pipeline);
+
+        if (!string.IsNullOrWhiteSpace(model.UpsertKeyField)
+            && !model.AvailableMappedFields.Contains(model.UpsertKeyField, StringComparer.Ordinal))
+        {
+            ModelState.AddModelError(
+                nameof(PipelineFormViewModel.UpsertKeyField),
+                "Choose an included mapped output field as the upsert key.");
+        }
+
+        if (!ModelState.IsValid)
+        {
+            return View(model);
+        }
+
         pipeline.Name = model.Name;
         pipeline.Description = model.Description;
+        pipeline.DestinationDatabase = model.DestinationDatabase ?? string.Empty;
+        pipeline.DestinationCollection = model.DestinationCollection ?? string.Empty;
+        pipeline.UpsertKeyField = model.UpsertKeyField ?? string.Empty;
 
         try
         {
@@ -511,6 +624,92 @@ public sealed class PipelinesController : Controller
         }
 
         return RedirectToAction(nameof(Index));
+    }
+
+    public async Task<IActionResult> Preview(Guid id, CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty)
+        {
+            return NotFound();
+        }
+
+        if (_sourceCommitCoordinator is null || _readinessService is null || _previewService is null)
+        {
+            throw new InvalidOperationException("Pipeline preview is not configured.");
+        }
+
+        PipelineDefinition? pipeline = null;
+        try
+        {
+            await using var snapshot = await _sourceCommitCoordinator.CapturePreviewAsync(
+                id,
+                token => _pipelineService.GetByIdAsync(id, token),
+                _readinessService.Evaluate,
+                cancellationToken);
+            if (snapshot.Status == PipelinePreviewSnapshotStatus.NotFound)
+            {
+                return NotFound();
+            }
+
+            pipeline = snapshot.Pipeline
+                ?? throw new InvalidOperationException("The preview snapshot has no pipeline.");
+            if (snapshot.Status == PipelinePreviewSnapshotStatus.NotReady)
+            {
+                return View(new PipelinePreviewViewModel
+                {
+                    PipelineId = pipeline.Id,
+                    PipelineName = pipeline.Name,
+                    ReadinessProblems = snapshot.Readiness!.Problems
+                });
+            }
+
+            if (snapshot.Status == PipelinePreviewSnapshotStatus.SourceUnavailable)
+            {
+                Response.StatusCode = StatusCodes.Status410Gone;
+                return View(new PipelinePreviewViewModel
+                {
+                    PipelineId = pipeline.Id,
+                    PipelineName = pipeline.Name,
+                    FailureMessage = "The inspected source is no longer available or no longer matches this pipeline. Upload and inspect the source again.",
+                    RequiresSourceUpload = true
+                });
+            }
+
+            var source = snapshot.Source
+                ?? throw new InvalidOperationException("The ready preview snapshot has no retained source.");
+            var preview = await _previewService.PreviewAsync(
+                source.Content,
+                pipeline,
+                cancellationToken);
+            return View(PipelinePreviewViewModel.FromPreview(pipeline, preview));
+        }
+        catch (PipelineNotReadyException exception)
+        {
+            return View(new PipelinePreviewViewModel
+            {
+                PipelineId = pipeline?.Id ?? id,
+                PipelineName = pipeline?.Name ?? string.Empty,
+                ReadinessProblems = exception.Problems
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsPreviewSystemFailure(exception))
+        {
+            _logger?.LogError(
+                exception,
+                "Preview generation failed for pipeline {PipelineId}.",
+                pipeline?.Id ?? id);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return View(new PipelinePreviewViewModel
+            {
+                PipelineId = pipeline?.Id ?? id,
+                PipelineName = pipeline?.Name ?? string.Empty,
+                FailureMessage = "The preview could not be generated from the selected source. Review the configuration or upload the source again."
+            });
+        }
     }
 
     public async Task<IActionResult> Delete(
@@ -553,6 +752,39 @@ public sealed class PipelinesController : Controller
             return NotFound();
         }
 
+        if (_wizardSourceStore is not null)
+        {
+            try
+            {
+                await _wizardSourceStore.RemoveAsync(id, CancellationToken.None);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                _logger?.LogWarning(
+                    exception,
+                    "The retained wizard source for deleted pipeline {PipelineId} could not be removed immediately.",
+                    id);
+            }
+        }
+
         return RedirectToAction(nameof(Index));
     }
+
+    private static void PopulateAvailableMappedFields(
+        PipelineFormViewModel model,
+        PipelineDefinition pipeline) =>
+        model.AvailableMappedFields = pipeline.FieldMappings
+            .Where(mapping => mapping is not null
+                && mapping.IsIncluded
+                && !string.IsNullOrWhiteSpace(mapping.TargetField))
+            .Select(mapping => mapping.TargetField)
+            .ToList();
+
+    private static bool IsPreviewSystemFailure(Exception exception) =>
+        exception is InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or ArgumentException
+            or NotSupportedException;
 }

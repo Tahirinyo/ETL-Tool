@@ -1,6 +1,7 @@
 using System.Text;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Uploads;
+using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Extraction;
@@ -103,6 +104,9 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
         Assert.True(selected.IsSuccess);
         Assert.Equal(["Id"], selected.Columns);
+        await service.DiscardAsync(
+            Assert.IsType<Guid>(selected.SourceReferenceId),
+            CancellationToken.None);
         Assert.False(File.Exists(storedPath));
     }
 
@@ -151,6 +155,9 @@ public sealed class SourceInspectionServiceTests : IDisposable
         Assert.True(consumed.IsSuccess);
         Assert.False(repeated.IsSuccess);
         Assert.Contains("expired", repeated.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        await service.DiscardAsync(
+            Assert.IsType<Guid>(consumed.SourceReferenceId),
+            CancellationToken.None);
         Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
     }
 
@@ -574,6 +581,356 @@ public sealed class SourceInspectionServiceTests : IDisposable
         return new SourceInspectionService(validation, storage, csv, xlsx, _clock);
     }
 
+    [Fact]
+    public async Task RetainedCsv_ActivatesOnlyForOwningPipelineAndMatchingOptions()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions
+        {
+            CultureName = "en-US",
+            Delimiter = CsvDelimiter.Semicolon,
+            FirstRowIsHeader = true
+        };
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id;Name\n1;Ada"));
+
+        var inspection = await service.InspectCsvAsync(
+            pipelineId,
+            content,
+            "customers.csv",
+            options,
+            CancellationToken.None);
+
+        var reference = Assert.IsType<Guid>(inspection.SourceReferenceId);
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+        Assert.True(await service.ActivateAsync(pipelineId, reference, CancellationToken.None));
+        Assert.Null(await service.AcquireAsync(
+            Guid.NewGuid(), SourceType.Csv, options, CancellationToken.None));
+        Assert.Null(await service.AcquireAsync(
+            pipelineId,
+            SourceType.Csv,
+            new SourceOptions { CultureName = "en-US", Delimiter = CsvDelimiter.Comma },
+            CancellationToken.None));
+
+        await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var reader = new StreamReader(lease.Content, leaveOpen: true);
+        Assert.Equal("Id;Name", await reader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task RetainedSources_KeepDistinctActiveContentForEachPipeline()
+    {
+        var firstPipelineId = Guid.NewGuid();
+        var secondPipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var firstContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nfirst"));
+        await using var secondContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nsecond"));
+
+        var first = await service.InspectCsvAsync(
+            firstPipelineId, firstContent, "same-name.csv", options, CancellationToken.None);
+        var second = await service.InspectCsvAsync(
+            secondPipelineId, secondContent, "same-name.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            firstPipelineId, Assert.IsType<Guid>(first.SourceReferenceId), CancellationToken.None));
+        Assert.True(await service.ActivateAsync(
+            secondPipelineId, Assert.IsType<Guid>(second.SourceReferenceId), CancellationToken.None));
+
+        await using var firstLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(firstPipelineId, SourceType.Csv, options, CancellationToken.None));
+        await using var secondLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(secondPipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var firstReader = new StreamReader(firstLease.Content, leaveOpen: true);
+        using var secondReader = new StreamReader(secondLease.Content, leaveOpen: true);
+
+        _ = await firstReader.ReadLineAsync();
+        _ = await secondReader.ReadLineAsync();
+        Assert.Equal("first", await firstReader.ReadLineAsync());
+        Assert.Equal("second", await secondReader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task ConcurrentSourceCommits_KeepFinalPersistedStatePairedWithItsRetainedSource()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions
+        {
+            CultureName = "en-US",
+            Delimiter = CsvDelimiter.Comma,
+            FirstRowIsHeader = true
+        };
+        var service = CreateService();
+        var coordinator = new PipelineSourceCommitCoordinator(service);
+        await using var firstContent = new MemoryStream(Encoding.UTF8.GetBytes("Id,Value\n1,first"));
+        await using var secondContent = new MemoryStream(Encoding.UTF8.GetBytes("Id,Value\n1,second"));
+        var firstInspection = await service.InspectCsvAsync(
+            pipelineId, firstContent, "same.csv", options, CancellationToken.None);
+        var secondInspection = await service.InspectCsvAsync(
+            pipelineId, secondContent, "same.csv", options, CancellationToken.None);
+        var firstReferenceId = Assert.IsType<Guid>(firstInspection.SourceReferenceId);
+        var secondReferenceId = Assert.IsType<Guid>(secondInspection.SourceReferenceId);
+        var firstPersistenceEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstPersistence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        CommittedSourceState? persistedState = null;
+
+        var firstCommit = coordinator.CommitAsync(
+            pipelineId,
+            firstReferenceId,
+            async cancellationToken =>
+            {
+                persistedState = new CommittedSourceState(Pipeline(pipelineId, options), "first");
+                firstPersistenceEntered.TrySetResult();
+                await releaseFirstPersistence.Task.WaitAsync(cancellationToken);
+                return true;
+            },
+            CancellationToken.None);
+        await firstPersistenceEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var secondCommit = coordinator.CommitAsync(
+            pipelineId,
+            secondReferenceId,
+            _ =>
+            {
+                persistedState = new CommittedSourceState(Pipeline(pipelineId, options), "second");
+                return Task.FromResult(true);
+            },
+            CancellationToken.None);
+
+        releaseFirstPersistence.TrySetResult();
+        Assert.Equal(
+            [PipelineSourceCommitStatus.Succeeded, PipelineSourceCommitStatus.Succeeded],
+            await Task.WhenAll(firstCommit, secondCommit));
+
+        var finalState = Assert.IsType<CommittedSourceState>(persistedState);
+        await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(
+                finalState.Pipeline.Id,
+                finalState.Pipeline.SourceType,
+                finalState.Pipeline.SourceOptions,
+                CancellationToken.None));
+        using var reader = new StreamReader(lease.Content, leaveOpen: true);
+        _ = await reader.ReadLineAsync();
+        var retainedValue = (await reader.ReadLineAsync())!.Split(',')[1];
+
+        Assert.Equal(finalState.ExpectedSourceValue, retainedValue);
+        Assert.Equal("second", retainedValue);
+    }
+
+    [Fact]
+    public async Task RetainedSource_DiscardedReplacementPreservesPreviousActiveSource()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var firstContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nfirst"));
+        var first = await service.InspectCsvAsync(
+            pipelineId, firstContent, "first.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(first.SourceReferenceId),
+            CancellationToken.None));
+
+        await using var replacementContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nreplacement"));
+        var replacement = await service.InspectCsvAsync(
+            pipelineId, replacementContent, "replacement.csv", options, CancellationToken.None);
+        await service.DiscardAsync(
+            Assert.IsType<Guid>(replacement.SourceReferenceId),
+            CancellationToken.None);
+
+        await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var reader = new StreamReader(lease.Content, leaveOpen: true);
+        Assert.Equal("Id", await reader.ReadLineAsync());
+        Assert.Equal("first", await reader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task RetireActiveSource_DoesNotDiscardAnotherPendingCommit()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var activeContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nactive"));
+        var active = await service.InspectCsvAsync(
+            pipelineId, activeContent, "active.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(active.SourceReferenceId),
+            CancellationToken.None));
+        await using var pendingContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\npending"));
+        var pending = await service.InspectCsvAsync(
+            pipelineId, pendingContent, "pending.csv", options, CancellationToken.None);
+
+        await service.RetireActiveAsync(pipelineId, CancellationToken.None);
+
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(pending.SourceReferenceId),
+            CancellationToken.None));
+        await using var pendingLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var reader = new StreamReader(pendingLease.Content, leaveOpen: true);
+        _ = await reader.ReadLineAsync();
+        Assert.Equal("pending", await reader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task RetainedSource_ReplacementWaitsForActiveLeaseBeforeDeletingOldUpload()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var firstContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nfirst"));
+        var first = await service.InspectCsvAsync(
+            pipelineId, firstContent, "first.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(first.SourceReferenceId),
+            CancellationToken.None));
+        var firstLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+
+        await using var replacementContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nreplacement"));
+        var replacement = await service.InspectCsvAsync(
+            pipelineId, replacementContent, "replacement.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(replacement.SourceReferenceId),
+            CancellationToken.None));
+        Assert.Equal(2, Directory.EnumerateFiles(_root, "*.upload").Count());
+
+        using (var reader = new StreamReader(firstLease.Content, leaveOpen: true))
+        {
+            Assert.Equal("Id", await reader.ReadLineAsync());
+            Assert.Equal("first", await reader.ReadLineAsync());
+        }
+
+        await firstLease.DisposeAsync();
+        Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+        await using var replacementLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var replacementReader = new StreamReader(replacementLease.Content, leaveOpen: true);
+        Assert.Equal("Id", await replacementReader.ReadLineAsync());
+        Assert.Equal("replacement", await replacementReader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task RetainedSource_ExpiresAndReturnsUnavailable()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId, content, "source.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(inspection.SourceReferenceId),
+            CancellationToken.None));
+
+        _clock.Advance(TimeSpan.FromMinutes(16));
+
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task RetainedSource_ExpirationDefersCleanupUntilAnActiveLeaseIsReleased()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id\nretained"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId, content, "source.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(inspection.SourceReferenceId),
+            CancellationToken.None));
+        var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        await service.PurgeExpiredAsync();
+
+        Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
+        using (var reader = new StreamReader(lease.Content, leaveOpen: true))
+        {
+            Assert.Equal("Id", await reader.ReadLineAsync());
+            Assert.Equal("retained", await reader.ReadLineAsync());
+        }
+
+        await lease.DisposeAsync();
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task RetainedSource_RemoveClearsActiveAndPendingSourcesForPipeline()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var activeContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nactive"));
+        var active = await service.InspectCsvAsync(
+            pipelineId, activeContent, "active.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(active.SourceReferenceId),
+            CancellationToken.None));
+        await using var pendingContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\npending"));
+        _ = await service.InspectCsvAsync(
+            pipelineId, pendingContent, "pending.csv", options, CancellationToken.None);
+        Assert.Equal(2, Directory.EnumerateFiles(_root, "*.upload").Count());
+
+        await service.RemoveAsync(pipelineId, CancellationToken.None);
+
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RetainedXlsx_UsesSelectedWorksheetOptionsDuringLaterAcquisition()
+    {
+        var pipelineId = Guid.NewGuid();
+        var service = CreateService();
+        await using var workbook = Create(
+            Sheet("First", Row(Text(1, "Wrong")), Row(Text(1, "ignored"))),
+            Sheet("Data", Row(Text(1, "Id")), Row(Number(1, 7))));
+        var stage = await service.StageXlsxAsync(
+            pipelineId, workbook, "source.xlsx", CancellationToken.None);
+        var options = new SourceOptions
+        {
+            WorksheetName = "Data",
+            CultureName = "en-US",
+            FirstRowIsHeader = true
+        };
+
+        var inspection = await service.InspectStagedXlsxAsync(
+            pipelineId,
+            Assert.IsType<Guid>(stage.StageId),
+            "Data",
+            CancellationToken.None,
+            options);
+        Assert.Equal(["Id"], inspection.Columns);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(inspection.SourceReferenceId),
+            CancellationToken.None));
+
+        await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Xlsx, options, CancellationToken.None));
+        Assert.True(lease.Content.CanRead);
+        Assert.True(lease.Content.CanSeek);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
@@ -587,6 +944,22 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
         public void Advance(TimeSpan duration) => _now = _now.Add(duration);
     }
+
+    private static PipelineDefinition Pipeline(Guid pipelineId, SourceOptions options) => new()
+    {
+        Id = pipelineId,
+        SourceType = SourceType.Csv,
+        SourceOptions = options,
+        ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
+            new SourceFieldDefinition { Name = "Value", DataType = SourceFieldType.String }
+        ]
+    };
+
+    private sealed record CommittedSourceState(
+        PipelineDefinition Pipeline,
+        string ExpectedSourceValue);
 
     private sealed class BlockingAfterStoreStorage(IUploadStorage inner) : IUploadStorage
     {

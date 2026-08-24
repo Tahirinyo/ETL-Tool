@@ -87,7 +87,15 @@ public sealed class PipelinesControllerTests
     [Fact]
     public async Task Create_ValidPostMapsDraftAndRedirects()
     {
-        var service = new RecordingPipelineService();
+        var createdId = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            CreateHandler = (pipeline, _) =>
+            {
+                pipeline.Id = createdId;
+                return Task.FromResult(pipeline);
+            }
+        };
         var controller = new PipelinesController(service);
         var model = new PipelineFormViewModel
         {
@@ -99,11 +107,12 @@ public sealed class PipelinesControllerTests
         var result = await controller.Create(model, cancellationSource.Token);
 
         var redirect = Assert.IsType<RedirectToActionResult>(result);
-        Assert.Equal(nameof(PipelinesController.Index), redirect.ActionName);
+        Assert.Equal(nameof(PipelinesController.Source), redirect.ActionName);
+        Assert.Equal(createdId, Assert.IsType<Guid>(redirect.RouteValues!["id"]));
         var pipeline = Assert.IsType<PipelineDefinition>(service.CreatedPipeline);
         Assert.Equal(model.Name, pipeline.Name);
         Assert.Equal(model.Description, pipeline.Description);
-        Assert.Equal(Guid.Empty, pipeline.Id);
+        Assert.Equal(createdId, pipeline.Id);
         Assert.Equal(SourceType.Unspecified, pipeline.SourceType);
         Assert.Empty(pipeline.FieldMappings);
         Assert.Empty(pipeline.TransformationRules);
@@ -244,7 +253,10 @@ public sealed class PipelinesControllerTests
         var model = new PipelineFormViewModel
         {
             Name = "After",
-            Description = "After description"
+            Description = "After description",
+            DestinationDatabase = "warehouse",
+            DestinationCollection = "curatedCustomers",
+            UpsertKeyField = "customerId"
         };
         using var cancellationSource = new CancellationTokenSource();
 
@@ -260,26 +272,36 @@ public sealed class PipelinesControllerTests
         Assert.Same(mappings, existing.FieldMappings);
         Assert.Same(transformations, existing.TransformationRules);
         Assert.Same(validations, existing.ValidationRules);
-        Assert.Equal("analytics", existing.DestinationDatabase);
-        Assert.Equal("customers", existing.DestinationCollection);
+        Assert.Equal("warehouse", existing.DestinationDatabase);
+        Assert.Equal("curatedCustomers", existing.DestinationCollection);
         Assert.Equal("customerId", existing.UpsertKeyField);
         Assert.Equal(cancellationSource.Token, service.GetByIdCancellationTokens.Single());
         Assert.Equal(cancellationSource.Token, service.UpdateCancellationToken);
     }
 
     [Fact]
-    public async Task Edit_InvalidPostDoesNotLoadOrUpdate()
+    public async Task Edit_InvalidPostReloadsAuthoritativeMappedFieldsWithoutUpdating()
     {
-        var service = new RecordingPipelineService();
+        var id = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(new PipelineDefinition
+            {
+                Id = id,
+                Name = "Existing",
+                FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }]
+            })
+        };
         var controller = new PipelinesController(service);
         var model = new PipelineFormViewModel { Name = string.Empty };
         controller.ModelState.AddModelError(nameof(model.Name), "Name is required.");
 
-        var result = await controller.Edit(Guid.NewGuid(), model, CancellationToken.None);
+        var result = await controller.Edit(id, model, CancellationToken.None);
 
         var view = Assert.IsType<ViewResult>(result);
         Assert.Same(model, view.Model);
-        Assert.Equal(0, service.GetByIdCallCount);
+        Assert.Equal(["id"], model.AvailableMappedFields);
+        Assert.Equal(1, service.GetByIdCallCount);
         Assert.Equal(0, service.UpdateCallCount);
     }
 
@@ -1430,8 +1452,14 @@ public sealed class PipelinesControllerTests
         public string? WorksheetName { get; private set; }
         public SourceOptions? XlsxOptions { get; private set; }
         public Func<Guid, SourceInspectionResult?>? XlsxInspectionHandler { get; init; }
-        public Task<SourceInspectionResult> InspectCsvAsync(Stream content, string fileName, SourceOptions options, CancellationToken cancellationToken)
+        public Task<SourceInspectionResult> InspectCsvAsync(
+            Guid pipelineId,
+            Stream content,
+            string fileName,
+            SourceOptions options,
+            CancellationToken cancellationToken)
         {
+            PipelineId = pipelineId;
             CsvOptions = options;
             if (CsvFailure)
             {
@@ -1452,7 +1480,8 @@ public sealed class PipelinesControllerTests
                 [
                     new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer },
                     new SourceFieldDefinition { Name = "Name", DataType = SourceFieldType.String }
-                ]
+                ],
+                SourceReferenceId = Guid.NewGuid()
             });
         }
         public Task<SourceInspectionResult> StageXlsxAsync(
@@ -1481,7 +1510,8 @@ public sealed class PipelinesControllerTests
                 SourceType = SourceType.Xlsx,
                 Columns = ["SecondId"],
                 SampleRows = [row],
-                DetectedSchema = [new SourceFieldDefinition { Name = "SecondId", DataType = SourceFieldType.Integer }]
+                DetectedSchema = [new SourceFieldDefinition { Name = "SecondId", DataType = SourceFieldType.Integer }],
+                SourceReferenceId = stageId
             });
         }
     }
