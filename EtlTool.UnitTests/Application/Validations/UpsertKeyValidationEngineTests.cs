@@ -31,7 +31,7 @@ public sealed class UpsertKeyValidationEngineTests
     }
 
     [Fact]
-    public void Validate_StopsAfterUpsertKeyFailure()
+    public void Validate_ContinuesAfterUpsertKeyFailure()
     {
         var laterHandler = new TrackingHandler(ValidationType.EmailFormat);
         var engine = new ValidationEngine(new ValidationHandlerRegistry([
@@ -49,7 +49,7 @@ public sealed class UpsertKeyValidationEngineTests
 
         Assert.False(result.IsValid);
         Assert.Equal("CustomerId", Assert.Single(result.Errors).Field);
-        Assert.Equal(0, laterHandler.InvocationCount);
+        Assert.Equal(1, laterHandler.InvocationCount);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class UpsertKeyValidationEngineTests
     }
 
     [Fact]
-    public void Validate_StopsBeforeUpsertKeyWhenEarlierRuleFails()
+    public void Validate_InvokesUpsertKeyAfterEarlierRuleFails()
     {
         var upsertKeyHandler = new TrackingHandler(ValidationType.UpsertKeyRequired);
         var engine = new ValidationEngine(new ValidationHandlerRegistry([
@@ -86,7 +86,7 @@ public sealed class UpsertKeyValidationEngineTests
 
         Assert.False(result.IsValid);
         Assert.Equal("CustomerId", Assert.Single(result.Errors).Field);
-        Assert.Equal(0, upsertKeyHandler.InvocationCount);
+        Assert.Equal(1, upsertKeyHandler.InvocationCount);
     }
 
     [Fact]

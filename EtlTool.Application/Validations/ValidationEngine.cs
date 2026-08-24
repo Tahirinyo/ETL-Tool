@@ -16,7 +16,7 @@ public sealed class ValidationEngine
 
     public ValidationResult Validate(
         DataRow transformedRow,
-        IReadOnlyCollection<ValidationRule> rules,
+        IReadOnlyList<ValidationRule> rules,
         SourceOptions sourceOptions)
     {
         ArgumentNullException.ThrowIfNull(transformedRow);
@@ -24,6 +24,7 @@ public sealed class ValidationEngine
         ArgumentNullException.ThrowIfNull(sourceOptions);
 
         var sourceCulture = sourceOptions.ResolveCulture();
+        List<ValidationError> errors = [];
 
         foreach (var rule in rules)
         {
@@ -53,10 +54,12 @@ public sealed class ValidationEngine
 
             if (!result.IsValid)
             {
-                return result;
+                errors.AddRange(result.Errors);
             }
         }
 
-        return ValidationResult.Valid(transformedRow);
+        return errors.Count == 0
+            ? ValidationResult.Valid(transformedRow)
+            : ValidationResult.Invalid(transformedRow, errors);
     }
 }
