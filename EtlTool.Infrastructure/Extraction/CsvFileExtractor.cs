@@ -10,6 +10,8 @@ namespace EtlTool.Infrastructure.Extraction;
 
 public sealed class CsvFileExtractor : IFileExtractor
 {
+    public SourceType SourceType => SourceType.Csv;
+
     public async Task<IReadOnlyList<string>> ReadHeadersAsync(
         Stream stream,
         SourceOptions options,

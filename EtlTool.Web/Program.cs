@@ -1,4 +1,7 @@
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Preview;
+using EtlTool.Application.Processing;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
@@ -50,6 +53,9 @@ builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
+builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredService<CsvFileExtractor>());
+builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredService<XlsxFileExtractor>());
+builder.Services.AddSingleton<IFileExtractorResolver, FileExtractorResolver>();
 builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
 builder.Services.AddSingleton<SourceSchemaInferenceService>();
 builder.Services.AddSingleton<FieldMappingService>();
@@ -74,6 +80,7 @@ builder.Services.AddSingleton<IValidationHandler, DateRangeValidationHandler>();
 builder.Services.AddSingleton<IValidationHandler, UpsertKeyValidationHandler>();
 builder.Services.AddSingleton<ValidationHandlerRegistry>();
 builder.Services.AddSingleton<ValidationEngine>();
+builder.Services.AddSingleton<PipelineRowProcessor>();
 builder.Services.AddScoped<ITransformationRuleService, TransformationRuleService>();
 builder.Services.AddScoped<IValidationRuleService, ValidationRuleService>();
 builder.Services.AddSingleton<SourceInspectionService>();
@@ -82,6 +89,7 @@ builder.Services.AddHostedService<SourceInspectionCleanupService>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
+builder.Services.AddScoped<IPreviewService, PreviewService>();
 
 var app = builder.Build();
 

@@ -49,8 +49,10 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         return Evaluate(pipeline);
     }
 
-    private PipelineReadinessResult Evaluate(PipelineDefinition pipeline)
+    public PipelineReadinessResult Evaluate(PipelineDefinition pipeline)
     {
+        ArgumentNullException.ThrowIfNull(pipeline);
+
         var problems = new List<PipelineReadinessProblem>();
         var sourceState = EvaluateSourceAndSchema(pipeline, problems);
         var mappingState = EvaluateMappings(pipeline, sourceState.HasUsableSchema, problems);

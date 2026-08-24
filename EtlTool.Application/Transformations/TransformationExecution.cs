@@ -26,6 +26,18 @@ public sealed class TransformationExecution
 
     public TransformationResult Apply(DataRow mappedRow)
     {
+        return Execute(mappedRow, captureRowFailure: false).Result!;
+    }
+
+    internal TransformationExecutionOutcome ApplyForRowProcessing(DataRow mappedRow)
+    {
+        return Execute(mappedRow, captureRowFailure: true);
+    }
+
+    private TransformationExecutionOutcome Execute(
+        DataRow mappedRow,
+        bool captureRowFailure)
+    {
         ArgumentNullException.ThrowIfNull(mappedRow);
 
         if (Interlocked.CompareExchange(ref _isApplying, 1, 0) != 0)
@@ -36,7 +48,7 @@ public sealed class TransformationExecution
 
         try
         {
-            return ApplyCore(mappedRow);
+            return ApplyCore(mappedRow, captureRowFailure);
         }
         finally
         {
@@ -44,7 +56,9 @@ public sealed class TransformationExecution
         }
     }
 
-    private TransformationResult ApplyCore(DataRow mappedRow)
+    private TransformationExecutionOutcome ApplyCore(
+        DataRow mappedRow,
+        bool captureRowFailure)
     {
         var pendingKeys = new List<PendingDeduplicationKey>();
         var currentRow = mappedRow;
@@ -52,34 +66,46 @@ public sealed class TransformationExecution
 
         foreach (var step in _steps)
         {
-            if (step.DeduplicationState is not null)
+            try
             {
-                var handler = (DeduplicateTransformationHandler)step.Handler;
-                var evaluation = handler.Evaluate(currentRow, step.DeduplicationState);
-                if (evaluation.IsDuplicate)
+                if (step.DeduplicationState is not null)
                 {
-                    return TransformationResult.Duplicate(currentRow);
-                }
+                    var handler = (DeduplicateTransformationHandler)step.Handler;
+                    var evaluation = handler.Evaluate(currentRow, step.DeduplicationState);
+                    if (evaluation.IsDuplicate)
+                    {
+                        return TransformationExecutionOutcome.Succeeded(
+                            TransformationResult.Duplicate(currentRow));
+                    }
 
-                pendingKeys.Add(new PendingDeduplicationKey(
-                    step.DeduplicationState,
-                    evaluation.Key));
-                currentResult = TransformationResult.Transformed(currentRow);
-            }
-            else
-            {
-                currentResult = step.Handler switch
+                    pendingKeys.Add(new PendingDeduplicationKey(
+                        step.DeduplicationState,
+                        evaluation.Key));
+                    currentResult = TransformationResult.Transformed(currentRow);
+                }
+                else
                 {
-                    ISourceDateFormatTransformationHandler dateFormatAwareHandler =>
-                        dateFormatAwareHandler.Apply(
-                            currentRow,
-                            step.Rule,
-                            _sourceCulture,
-                            _dateFormat),
-                    ISourceCultureTransformationHandler cultureAwareHandler =>
-                        cultureAwareHandler.Apply(currentRow, step.Rule, _sourceCulture),
-                    _ => step.Handler.Apply(currentRow, step.Rule)
-                };
+                    currentResult = step.Handler switch
+                    {
+                        ISourceDateFormatTransformationHandler dateFormatAwareHandler =>
+                            dateFormatAwareHandler.Apply(
+                                currentRow,
+                                step.Rule,
+                                _sourceCulture,
+                                _dateFormat),
+                        ISourceCultureTransformationHandler cultureAwareHandler =>
+                            cultureAwareHandler.Apply(currentRow, step.Rule, _sourceCulture),
+                        _ => step.Handler.Apply(currentRow, step.Rule)
+                    };
+                }
+            }
+            catch (Exception exception)
+                when (captureRowFailure && IsExpectedRowFailure(exception))
+            {
+                return TransformationExecutionOutcome.Failed(
+                    currentRow,
+                    step.Rule,
+                    exception);
             }
 
             currentResult = currentResult
@@ -89,7 +115,7 @@ public sealed class TransformationExecution
             currentRow = currentResult.Row;
             if (currentResult.IsFiltered || currentResult.IsDuplicate)
             {
-                return currentResult;
+                return TransformationExecutionOutcome.Succeeded(currentResult);
             }
         }
 
@@ -102,12 +128,57 @@ public sealed class TransformationExecution
             }
         }
 
-        return currentResult;
+        return TransformationExecutionOutcome.Succeeded(currentResult);
     }
+
+    private static bool IsExpectedRowFailure(Exception exception) =>
+        exception is FormatException or OverflowException or InvalidOperationException;
 
     private readonly record struct PendingDeduplicationKey(
         DeduplicationRuleExecutionState State,
         DeduplicationKey Key);
+}
+
+internal sealed class TransformationExecutionOutcome
+{
+    private TransformationExecutionOutcome(
+        TransformationResult? result,
+        DataRow row,
+        TransformationRule? failedRule,
+        Exception? failure)
+    {
+        Result = result;
+        Row = row;
+        FailedRule = failedRule;
+        Failure = failure;
+    }
+
+    public TransformationResult? Result { get; }
+
+    public DataRow Row { get; }
+
+    public TransformationRule? FailedRule { get; }
+
+    public Exception? Failure { get; }
+
+    public bool IsSuccess => Result is not null;
+
+    public static TransformationExecutionOutcome Succeeded(TransformationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return new TransformationExecutionOutcome(result, result.Row, null, null);
+    }
+
+    public static TransformationExecutionOutcome Failed(
+        DataRow row,
+        TransformationRule rule,
+        Exception failure)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(failure);
+        return new TransformationExecutionOutcome(null, row, rule, failure);
+    }
 }
 
 internal readonly record struct TransformationExecutionStep(

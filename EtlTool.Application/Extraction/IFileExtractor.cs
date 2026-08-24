@@ -1,3 +1,4 @@
+using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Extraction;
@@ -11,6 +12,8 @@ namespace EtlTool.Application.Extraction;
 /// </remarks>
 public interface IFileExtractor
 {
+    SourceType SourceType { get; }
+
     Task<IReadOnlyList<string>> ReadHeadersAsync(
         Stream stream,
         SourceOptions options,

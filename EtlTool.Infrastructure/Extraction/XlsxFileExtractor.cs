@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml;
 using EtlTool.Application.Extraction;
+using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using ExcelDataReader;
 using ExcelDataReader.Exceptions;
@@ -15,6 +16,8 @@ public sealed class XlsxFileExtractor : IFileExtractor
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
+
+    public SourceType SourceType => SourceType.Xlsx;
 
     public async Task<IReadOnlyList<string>> ReadHeadersAsync(
         Stream stream,

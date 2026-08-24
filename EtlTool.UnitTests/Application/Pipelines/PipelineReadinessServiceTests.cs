@@ -11,6 +11,20 @@ namespace EtlTool.UnitTests.Application.Pipelines;
 public sealed class PipelineReadinessServiceTests
 {
     [Fact]
+    public void Evaluate_UsesProvidedDefinitionWithoutRepositoryAccess()
+    {
+        var pipeline = ReadyPipeline();
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService());
+
+        var result = service.Evaluate(pipeline);
+
+        Assert.True(result.IsReady);
+        Assert.Throws<ArgumentNullException>(() => service.Evaluate(null!));
+    }
+
+    [Fact]
     public async Task EvaluateAsync_ReturnsReadyForCompletePipeline()
     {
         var pipeline = ReadyPipeline();
