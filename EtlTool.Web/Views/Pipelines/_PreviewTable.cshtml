@@ -1,0 +1,36 @@
+@model PreviewTableViewModel
+
+@if (Model.Rows.Count == 0)
+{
+    <div class="alert alert-info" role="status">
+        No complete transformed rows are available in this preview.
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Row</th>
+                    @foreach (var column in Model.Columns)
+                    {
+                        <th scope="col">@column</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Model.Rows)
+                {
+                    <tr>
+                        <td>@row.SourceRowNumber</td>
+                        @foreach (var cell in row.Cells)
+                        {
+                            <td>@cell.DisplayValue</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
