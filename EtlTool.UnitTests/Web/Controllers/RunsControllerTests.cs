@@ -10,6 +10,31 @@ namespace EtlTool.UnitTests.Web.Controllers;
 public sealed class RunsControllerTests
 {
     [Fact]
+    public void Progress_ValidRunIdReturnsViewWithRequestedRunIdWithoutRepositoryAccess()
+    {
+        var runId = Guid.NewGuid();
+        var repository = new RecordingRunRepository();
+
+        var result = new RunsController(repository).Progress(runId);
+
+        var view = Assert.IsType<ViewResult>(result);
+        var model = Assert.IsType<RunProgressViewModel>(view.Model);
+        Assert.Equal(runId, model.RunId);
+        Assert.Equal(0, repository.GetByIdCallCount);
+    }
+
+    [Fact]
+    public void Progress_EmptyRunIdReturnsNotFoundWithoutRepositoryAccess()
+    {
+        var repository = new RecordingRunRepository();
+
+        var result = new RunsController(repository).Progress(Guid.Empty);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Equal(0, repository.GetByIdCallCount);
+    }
+
+    [Fact]
     public async Task Status_ExistingRunReturnsOnlyPollingStatusFields()
     {
         var run = Run();

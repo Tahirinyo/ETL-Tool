@@ -15,6 +15,17 @@ public sealed class RunsController : Controller
         _runRepository = runRepository;
     }
 
+    [HttpGet("{runId:guid}")]
+    public IActionResult Progress(Guid runId)
+    {
+        if (runId == Guid.Empty) return NotFound();
+
+        return View(new RunProgressViewModel
+        {
+            RunId = runId
+        });
+    }
+
     [HttpGet("{runId:guid}/Status")]
     public async Task<IActionResult> Status(Guid runId, CancellationToken cancellationToken)
     {
