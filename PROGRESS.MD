@@ -44,6 +44,7 @@
 - The Task 9A.1 prerequisite configured-deduplication correction now commits tentative keys only for final valid row outcomes, preserving first-valid-row behavior across validation failures, filtering, multiple deduplication rules, unexpected validation failures, overlapping-session protection, and Preview reuse, and has been implemented and verified.
 - Task 9A.1 application-layer batch orchestration, including readiness-gated incremental extraction, one shared row-processing session, configurable valid-row batching, exact outcome counters, awaited source-ordered batch callbacks, failure/cancellation propagation, caller-owned stream preservation, DI registration, and focused Mongo-free integration coverage, has been implemented and verified.
 - Task 9A.2 execution-scoped cancellation infrastructure, including `EtlRun.Id`-keyed registration leases, singleton in-process cancellation access, exact-entry cleanup, coordinated cancellation/disposal, repeated-request safety, Batch Orchestrator token composition, and focused plus full-unit verification, has been implemented and verified.
+- Task 9A.3 application-layer run progress callbacks, including immutable exact outcome snapshots, awaited source-ordered reporting after successful batches and excluded-row intervals, final completion reporting, callback failure/cancellation propagation, and focused plus full-unit verification, has been implemented and verified.
 
 ## In Progress
 

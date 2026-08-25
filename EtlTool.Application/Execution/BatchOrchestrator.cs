@@ -35,11 +35,13 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
         Stream source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(processBatchAsync);
+        ArgumentNullException.ThrowIfNull(reportProgressAsync);
 
         if (!source.CanRead)
         {
@@ -62,6 +64,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
         long invalidRows = 0;
         long filteredRows = 0;
         long deduplicatedRows = 0;
+        long lastReportedProcessedRows = 0;
 
         await foreach (var sourceRow in extractor
             .ReadAsync(source, pipeline.SourceOptions, cancellationToken)
@@ -72,6 +75,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             var result = session.Process(sourceRow);
             cancellationToken.ThrowIfCancellationRequested();
             processedRows++;
+            var reportedFullBatch = false;
 
             switch (result.Status)
             {
@@ -82,6 +86,17 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
                     {
                         await processBatchAsync(currentBatch, cancellationToken).ConfigureAwait(false);
                         currentBatch = new List<DataRow>(_batchSize);
+                        await ReportProgressAsync(
+                            reportProgressAsync,
+                            processedRows,
+                            validRows,
+                            invalidRows,
+                            filteredRows,
+                            deduplicatedRows,
+                            isCompleted: false,
+                            cancellationToken).ConfigureAwait(false);
+                        lastReportedProcessedRows = processedRows;
+                        reportedFullBatch = true;
                     }
 
                     break;
@@ -98,6 +113,20 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
                     throw new InvalidOperationException(
                         $"The row-processing status '{result.Status}' is not supported.");
             }
+
+            if (!reportedFullBatch && processedRows - lastReportedProcessedRows >= _batchSize)
+            {
+                await ReportProgressAsync(
+                    reportProgressAsync,
+                    processedRows,
+                    validRows,
+                    invalidRows,
+                    filteredRows,
+                    deduplicatedRows,
+                    isCompleted: false,
+                    cancellationToken).ConfigureAwait(false);
+                lastReportedProcessedRows = processedRows;
+            }
         }
 
         if (currentBatch.Count > 0)
@@ -105,11 +134,43 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             await processBatchAsync(currentBatch, cancellationToken).ConfigureAwait(false);
         }
 
+        await ReportProgressAsync(
+            reportProgressAsync,
+            processedRows,
+            validRows,
+            invalidRows,
+            filteredRows,
+            deduplicatedRows,
+            isCompleted: true,
+            cancellationToken).ConfigureAwait(false);
+
         return new BatchExecutionResult(
             processedRows,
             validRows,
             invalidRows,
             filteredRows,
             deduplicatedRows);
+    }
+
+    private static async Task ReportProgressAsync(
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+        long processedRows,
+        long validRows,
+        long invalidRows,
+        long filteredRows,
+        long deduplicatedRows,
+        bool isCompleted,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var progress = new BatchExecutionProgress(
+            processedRows,
+            validRows,
+            invalidRows,
+            filteredRows,
+            deduplicatedRows,
+            isCompleted);
+        await reportProgressAsync(progress, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 }

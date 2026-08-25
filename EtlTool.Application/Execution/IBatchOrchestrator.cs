@@ -9,5 +9,6 @@ public interface IBatchOrchestrator
         Stream source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
         CancellationToken cancellationToken);
 }

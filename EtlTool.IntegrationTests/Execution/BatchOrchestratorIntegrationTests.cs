@@ -63,6 +63,7 @@ public sealed class BatchOrchestratorIntegrationTests
                 batches.Add(batch);
                 return Task.CompletedTask;
             },
+            (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
         Assert.Equal([2, 2, 1], batches.Select(batch => batch.Count));
