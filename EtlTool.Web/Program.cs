@@ -9,6 +9,7 @@ using EtlTool.Application.Mapping;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Uploads;
@@ -54,6 +55,14 @@ var batchExecutionOptions = builder.Configuration
 
 batchExecutionOptions.Validate();
 
+var backgroundJobQueueOptions = builder.Configuration
+    .GetRequiredSection(BackgroundJobQueueOptions.SectionName)
+    .Get<BackgroundJobQueueOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{BackgroundJobQueueOptions.SectionName}' is invalid.");
+
+backgroundJobQueueOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
@@ -61,7 +70,11 @@ builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton(batchExecutionOptions);
+builder.Services.AddSingleton(backgroundJobQueueOptions);
 builder.Services.AddSingleton<IExecutionCancellationRegistry, ExecutionCancellationRegistry>();
+builder.Services.AddSingleton<InProcessBackgroundJobQueue>();
+builder.Services.AddSingleton<IBackgroundJobQueue>(provider =>
+    provider.GetRequiredService<InProcessBackgroundJobQueue>());
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredService<CsvFileExtractor>());
@@ -99,6 +112,7 @@ builder.Services.AddSingleton<ISourceInspectionService>(provider => provider.Get
 builder.Services.AddSingleton<IWizardSourceStore>(provider => provider.GetRequiredService<SourceInspectionService>());
 builder.Services.AddSingleton<PipelineSourceCommitCoordinator>();
 builder.Services.AddHostedService<SourceInspectionCleanupService>();
+builder.Services.AddHostedService<BackgroundJobWorker>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
