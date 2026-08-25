@@ -386,6 +386,66 @@ public sealed class BatchOrchestratorTests
         Assert.Equal(0, untouchedExtractor.EnumerationCount);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ObservesRegistryCancellationBeforeExecutionStarts()
+    {
+        var registry = new ExecutionCancellationRegistry();
+        var runId = Guid.NewGuid();
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        using var registration = registry.Register(runId);
+        await using var source = new MemoryStream([1]);
+
+        Assert.True(registry.TryRequestCancellation(runId));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Orchestrator(extractor).ExecuteAsync(
+                source,
+                ReadyPipeline(),
+                IgnoreBatch,
+                registration.Token));
+
+        Assert.Equal(0, extractor.EnumerationCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PropagatesRegistryCancellationDuringTokenAwareBatchCallback()
+    {
+        var registry = new ExecutionCancellationRegistry();
+        var runId = Guid.NewGuid();
+        var registration = registry.Register(runId);
+        var callbackStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var source = new MemoryStream([1]);
+
+        try
+        {
+            var execution = Orchestrator(
+                new SequenceExtractor([Row(2, ("Value", "value"))]),
+                batchSize: 1).ExecuteAsync(
+                    source,
+                    ReadyPipeline(),
+                    async (_, cancellationToken) =>
+                    {
+                        callbackStarted.SetResult(true);
+                        await releaseCallback.Task.WaitAsync(cancellationToken);
+                    },
+                    registration.Token);
+
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(registry.TryRequestCancellation(runId));
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+            Assert.True(registry.TryRequestCancellation(runId));
+        }
+        finally
+        {
+            registration.Dispose();
+        }
+
+        Assert.False(registry.TryRequestCancellation(runId));
+    }
+
     private static Task IgnoreBatch(
         IReadOnlyList<DataRow> batch,
         CancellationToken cancellationToken) => Task.CompletedTask;

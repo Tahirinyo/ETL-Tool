@@ -61,6 +61,7 @@ builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton(batchExecutionOptions);
+builder.Services.AddSingleton<IExecutionCancellationRegistry, ExecutionCancellationRegistry>();
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredService<CsvFileExtractor>());
