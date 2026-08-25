@@ -1,14 +1,21 @@
 using System.Collections.ObjectModel;
-using EtlTool.Application.Pipelines;
 
-namespace EtlTool.Application.Preview;
+namespace EtlTool.Application.Pipelines;
 
 public sealed class PipelineNotReadyException : InvalidOperationException
 {
     public PipelineNotReadyException(IReadOnlyList<PipelineReadinessProblem> problems)
-        : base("The pipeline is not ready for preview.")
+        : this(problems, "The pipeline is not ready for execution.")
+    {
+    }
+
+    internal PipelineNotReadyException(
+        IReadOnlyList<PipelineReadinessProblem> problems,
+        string message)
+        : base(message)
     {
         ArgumentNullException.ThrowIfNull(problems);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
         if (problems.Count == 0)
         {

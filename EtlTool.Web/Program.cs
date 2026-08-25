@@ -1,6 +1,7 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Processing;
+using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
@@ -45,12 +46,21 @@ var uploadValidationOptions = builder.Configuration
 
 uploadValidationOptions.Validate();
 
+var batchExecutionOptions = builder.Configuration
+    .GetRequiredSection(BatchExecutionOptions.SectionName)
+    .Get<BatchExecutionOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{BatchExecutionOptions.SectionName}' is invalid.");
+
+batchExecutionOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
+builder.Services.AddSingleton(batchExecutionOptions);
 builder.Services.AddSingleton<CsvFileExtractor>();
 builder.Services.AddSingleton<XlsxFileExtractor>();
 builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredService<CsvFileExtractor>());
@@ -92,6 +102,7 @@ builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
 builder.Services.AddScoped<IPreviewService, PreviewService>();
+builder.Services.AddScoped<IBatchOrchestrator, BatchOrchestrator>();
 
 var app = builder.Build();
 

@@ -96,6 +96,7 @@ public sealed class PreviewServiceTests
         var exception = await Assert.ThrowsAsync<PipelineNotReadyException>(() =>
             service.PreviewAsync(source, pipeline, CancellationToken.None));
 
+        Assert.Equal("The pipeline is not ready for preview.", exception.Message);
         Assert.Contains(exception.Problems, problem => problem.Component == "Destination");
         Assert.Equal(0, resolver.InvocationCount);
         Assert.Equal(0, extractor.EnumerationCount);

@@ -45,7 +45,9 @@ public sealed class PreviewService : IPreviewService
         var readiness = _readinessService.Evaluate(pipeline);
         if (!readiness.IsReady)
         {
-            throw new PipelineNotReadyException(readiness.Problems);
+            throw new PipelineNotReadyException(
+                readiness.Problems,
+                "The pipeline is not ready for preview.");
         }
 
         var extractor = _extractorResolver.Resolve(pipeline.SourceType);
