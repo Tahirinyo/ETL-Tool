@@ -190,6 +190,48 @@ public sealed class PreviewServiceTests
     }
 
     [Fact]
+    public async Task PreviewAsync_KeepsFirstValidationValidRowForConfiguredDeduplication()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Id" },
+            new SourceFieldDefinition { Name = "Value" }
+        ];
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true },
+            new FieldMapping { SourceField = "Value", TargetField = "value", IsIncluded = true }
+        ];
+        pipeline.UpsertKeyField = "id";
+        pipeline.TransformationRules = [DeduplicateRule(1, "id")];
+        pipeline.ValidationRules =
+        [
+            new ValidationRule { Type = ValidationType.Required, Field = "value" }
+        ];
+        var extractor = new SequenceExtractor(
+            Row(2, ("Id", "A"), ("Value", null)),
+            Row(3, ("Id", "A"), ("Value", "first valid")),
+            Row(4, ("Id", "A"), ("Value", "later valid")));
+        await using var source = new MemoryStream([1]);
+
+        var preview = await Service(
+                extractor,
+                Processor(
+                    [new DeduplicateTransformationHandler()],
+                    [new RequiredValidationHandler()]))
+            .PreviewAsync(source, pipeline, CancellationToken.None);
+
+        Assert.Equal(
+            [RowProcessingStatus.Invalid, RowProcessingStatus.Valid, RowProcessingStatus.Duplicate],
+            preview.Rows.Select(row => row.Status));
+        Assert.Equal([2L, 3L, 4L], preview.Rows.Select(row => row.Row.SourceRowNumber));
+        Assert.Equal(1, preview.InvalidRowCount);
+        Assert.Equal(1, preview.ValidRowCount);
+        Assert.Equal(0, preview.FilteredRowCount);
+    }
+
+    [Fact]
     public async Task PreviewAsync_StopsAfterOneHundredSourceRowsWhenOutcomesAreNotAllValid()
     {
         var pipeline = ReadyPipeline();
@@ -433,6 +475,31 @@ public sealed class PreviewServiceTests
                     3 => Row(sourceIndex + 1, ("Kind", "keep"), ("Id", $"V{cycle}"), ("Value", "2")),
                     _ => Row(sourceIndex + 1, ("Kind", "keep"), ("Id", $"T{cycle}"), ("Value", "not-a-number"))
                 };
+            }
+        }
+    }
+
+    private sealed class SequenceExtractor(params DataRow[] rows) : IFileExtractor
+    {
+        public SourceType SourceType => SourceType.Csv;
+
+        public Task<IReadOnlyList<string>> ReadHeadersAsync(
+            Stream stream,
+            SourceOptions options,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
+        public async IAsyncEnumerable<DataRow> ReadAsync(
+            Stream stream,
+            SourceOptions options,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return row;
             }
         }
     }

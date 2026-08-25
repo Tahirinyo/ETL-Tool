@@ -66,6 +66,7 @@ public sealed class PipelineRowProcessingSession
     private readonly ValidationEngine _validationEngine;
     private readonly IReadOnlyList<ValidationRule> _validationRules;
     private readonly SourceOptions _sourceOptions;
+    private int _isProcessing;
 
     internal PipelineRowProcessingSession(
         FieldMappingService fieldMappingService,
@@ -87,6 +88,24 @@ public sealed class PipelineRowProcessingSession
     {
         ArgumentNullException.ThrowIfNull(sourceRow);
 
+        if (Interlocked.CompareExchange(ref _isProcessing, 1, 0) != 0)
+        {
+            throw new InvalidOperationException(
+                "A pipeline row-processing session cannot process overlapping rows.");
+        }
+
+        try
+        {
+            return ProcessCore(sourceRow);
+        }
+        finally
+        {
+            Volatile.Write(ref _isProcessing, 0);
+        }
+    }
+
+    private RowProcessingResult ProcessCore(DataRow sourceRow)
+    {
         var mappedRow = _fieldMappingService.Apply(sourceRow, _mappingPlan);
         var transformation = _transformationExecution.ApplyForRowProcessing(mappedRow);
 
@@ -124,6 +143,7 @@ public sealed class PipelineRowProcessingSession
 
         if (validation.IsValid)
         {
+            transformation.CommitDeduplication();
             return RowProcessingResult.Valid(validation.Row);
         }
 

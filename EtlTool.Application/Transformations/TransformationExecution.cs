@@ -26,17 +26,24 @@ public sealed class TransformationExecution
 
     public TransformationResult Apply(DataRow mappedRow)
     {
-        return Execute(mappedRow, captureRowFailure: false).Result!;
+        return Execute(
+            mappedRow,
+            captureRowFailure: false,
+            commitDeduplication: true).Result!;
     }
 
     internal TransformationExecutionOutcome ApplyForRowProcessing(DataRow mappedRow)
     {
-        return Execute(mappedRow, captureRowFailure: true);
+        return Execute(
+            mappedRow,
+            captureRowFailure: true,
+            commitDeduplication: false);
     }
 
     private TransformationExecutionOutcome Execute(
         DataRow mappedRow,
-        bool captureRowFailure)
+        bool captureRowFailure,
+        bool commitDeduplication)
     {
         ArgumentNullException.ThrowIfNull(mappedRow);
 
@@ -48,7 +55,14 @@ public sealed class TransformationExecution
 
         try
         {
-            return ApplyCore(mappedRow, captureRowFailure);
+            var outcome = ApplyCore(mappedRow, captureRowFailure);
+            if (commitDeduplication
+                && outcome.Result is { IsFiltered: false, IsDuplicate: false })
+            {
+                outcome.CommitDeduplication();
+            }
+
+            return outcome;
         }
         finally
         {
@@ -75,7 +89,8 @@ public sealed class TransformationExecution
                     if (evaluation.IsDuplicate)
                     {
                         return TransformationExecutionOutcome.Succeeded(
-                            TransformationResult.Duplicate(currentRow));
+                            TransformationResult.Duplicate(currentRow),
+                            pendingKeys);
                     }
 
                     pendingKeys.Add(new PendingDeduplicationKey(
@@ -115,42 +130,33 @@ public sealed class TransformationExecution
             currentRow = currentResult.Row;
             if (currentResult.IsFiltered || currentResult.IsDuplicate)
             {
-                return TransformationExecutionOutcome.Succeeded(currentResult);
+                return TransformationExecutionOutcome.Succeeded(currentResult, pendingKeys);
             }
         }
 
-        foreach (var pendingKey in pendingKeys)
-        {
-            if (!pendingKey.State.Commit(pendingKey.Key))
-            {
-                throw new InvalidOperationException(
-                    "A deduplication key changed while the current row was being transformed.");
-            }
-        }
-
-        return TransformationExecutionOutcome.Succeeded(currentResult);
+        return TransformationExecutionOutcome.Succeeded(currentResult, pendingKeys);
     }
 
     private static bool IsExpectedRowFailure(Exception exception) =>
         exception is FormatException or OverflowException or InvalidOperationException;
-
-    private readonly record struct PendingDeduplicationKey(
-        DeduplicationRuleExecutionState State,
-        DeduplicationKey Key);
 }
 
 internal sealed class TransformationExecutionOutcome
 {
+    private readonly IReadOnlyList<PendingDeduplicationKey> _pendingDeduplicationKeys;
+
     private TransformationExecutionOutcome(
         TransformationResult? result,
         DataRow row,
         TransformationRule? failedRule,
-        Exception? failure)
+        Exception? failure,
+        IReadOnlyList<PendingDeduplicationKey> pendingDeduplicationKeys)
     {
         Result = result;
         Row = row;
         FailedRule = failedRule;
         Failure = failure;
+        _pendingDeduplicationKeys = pendingDeduplicationKeys;
     }
 
     public TransformationResult? Result { get; }
@@ -163,10 +169,39 @@ internal sealed class TransformationExecutionOutcome
 
     public bool IsSuccess => Result is not null;
 
-    public static TransformationExecutionOutcome Succeeded(TransformationResult result)
+    public void CommitDeduplication()
+    {
+        foreach (var pendingKey in _pendingDeduplicationKeys)
+        {
+            if (pendingKey.State.Contains(pendingKey.Key))
+            {
+                throw new InvalidOperationException(
+                    "A deduplication key changed while the current row was being processed.");
+            }
+        }
+
+        foreach (var pendingKey in _pendingDeduplicationKeys)
+        {
+            if (!pendingKey.State.Commit(pendingKey.Key))
+            {
+                throw new InvalidOperationException(
+                    "A deduplication key changed while the current row was being processed.");
+            }
+        }
+    }
+
+    public static TransformationExecutionOutcome Succeeded(
+        TransformationResult result,
+        IReadOnlyList<PendingDeduplicationKey> pendingDeduplicationKeys)
     {
         ArgumentNullException.ThrowIfNull(result);
-        return new TransformationExecutionOutcome(result, result.Row, null, null);
+        ArgumentNullException.ThrowIfNull(pendingDeduplicationKeys);
+        return new TransformationExecutionOutcome(
+            result,
+            result.Row,
+            null,
+            null,
+            pendingDeduplicationKeys.ToArray());
     }
 
     public static TransformationExecutionOutcome Failed(
@@ -177,9 +212,13 @@ internal sealed class TransformationExecutionOutcome
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(failure);
-        return new TransformationExecutionOutcome(null, row, rule, failure);
+        return new TransformationExecutionOutcome(null, row, rule, failure, []);
     }
 }
+
+internal readonly record struct PendingDeduplicationKey(
+    DeduplicationRuleExecutionState State,
+    DeduplicationKey Key);
 
 internal readonly record struct TransformationExecutionStep(
     TransformationRule Rule,

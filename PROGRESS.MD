@@ -41,6 +41,7 @@
 - Task 7B.2 validation-rule editing, including stable rule-ID routes, shared form hydration, type-safe rebuild-and-replace persistence, current-state mapped/upsert-key validation, list access, and focused application/MVC/form coverage, has been implemented and verified.
 - Task 8A.1 first-100-row preview orchestration, including source-type extractor resolution, readiness gating, a reusable Map-Transform-Validate row-processing session, persisted transformation order and execution-scoped deduplication, structured valid/invalid/filtered/duplicate outcomes, row-level transformation continuation, aggregated validation errors, cancellation propagation, a strict 100-source-row enumeration boundary, DI integration, and focused/high-risk regression coverage, has been implemented and verified.
 - Task 8A.2 preview valid, invalid, and filtered counters, derived immutably from the completed structured row outcomes without a second extraction or processing pass, including transformation-error invalid counting and distinct duplicate outcomes, has been implemented and verified.
+- The Task 9A.1 prerequisite configured-deduplication correction now commits tentative keys only for final valid row outcomes, preserving first-valid-row behavior across validation failures, filtering, multiple deduplication rules, unexpected validation failures, overlapping-session protection, and Preview reuse, and has been implemented and verified.
 
 ## In Progress
 

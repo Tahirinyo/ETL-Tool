@@ -129,6 +129,200 @@ public sealed class PipelineRowProcessorTests
     }
 
     [Fact]
+    public void Process_CommitsDeduplicationOnlyAfterValidationSucceeds()
+    {
+        var pipeline = Pipeline(
+            Mapping("Id", "id"),
+            Mapping("Name", "name"),
+            Mapping("Email", "email"));
+        pipeline.TransformationRules = [DeduplicateRule(1, "id")];
+        pipeline.ValidationRules =
+        [
+            Validation(ValidationType.Required, "name"),
+            Validation(ValidationType.EmailFormat, "email")
+        ];
+        var session = Processor(
+                [new DeduplicateTransformationHandler()],
+                [new RequiredValidationHandler(), new EmailValidationHandler()])
+            .CreateSession(pipeline);
+
+        var invalid = session.Process(Row(
+            2,
+            ("Id", "A"),
+            ("Name", " "),
+            ("Email", "invalid")));
+        var valid = session.Process(Row(
+            3,
+            ("Id", "A"),
+            ("Name", "Ada"),
+            ("Email", "ada@example.com")));
+        var duplicate = session.Process(Row(
+            4,
+            ("Id", "A"),
+            ("Name", "Grace"),
+            ("Email", "grace@example.com")));
+
+        Assert.Equal(RowProcessingStatus.Invalid, invalid.Status);
+        Assert.Equal(2, invalid.Errors.Count);
+        Assert.Equal(["name", "email"], invalid.Errors.Select(error => error.Field));
+        Assert.Equal(RowProcessingStatus.Valid, valid.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicate.Status);
+    }
+
+    [Fact]
+    public void Process_ValidationInvalidKeyDoesNotAffectDifferentKeys()
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"), Mapping("Value", "value"));
+        pipeline.TransformationRules = [DeduplicateRule(1, "id")];
+        pipeline.ValidationRules = [Validation(ValidationType.Required, "value")];
+        var session = Processor(
+                [new DeduplicateTransformationHandler()],
+                [new RequiredValidationHandler()])
+            .CreateSession(pipeline);
+
+        var invalidA = session.Process(Row(2, ("Id", "A"), ("Value", null)));
+        var validB = session.Process(Row(3, ("Id", "B"), ("Value", "first")));
+        var validA = session.Process(Row(4, ("Id", "A"), ("Value", "second")));
+        var duplicateB = session.Process(Row(5, ("Id", "B"), ("Value", "third")));
+
+        Assert.Equal(RowProcessingStatus.Invalid, invalidA.Status);
+        Assert.Equal(RowProcessingStatus.Valid, validB.Status);
+        Assert.Equal(RowProcessingStatus.Valid, validA.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicateB.Status);
+    }
+
+    [Fact]
+    public void Process_FilterAfterDeduplicationDoesNotCommitTentativeKey()
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"), Mapping("Kind", "kind"));
+        pipeline.TransformationRules =
+        [
+            DeduplicateRule(1, "id"),
+            Rule(
+                2,
+                TransformationType.FilterRow,
+                "kind",
+                ("Operator", FilterOperator.Equals.ToString()),
+                ("Value", "skip"))
+        ];
+        var session = Processor(
+                [new DeduplicateTransformationHandler(), new ConditionalFilterTransformationHandler()],
+                [])
+            .CreateSession(pipeline);
+
+        var filtered = session.Process(Row(2, ("Id", "A"), ("Kind", "skip")));
+        var valid = session.Process(Row(3, ("Id", "A"), ("Kind", "keep")));
+        var duplicate = session.Process(Row(4, ("Id", "A"), ("Kind", "keep")));
+
+        Assert.Equal(RowProcessingStatus.Filtered, filtered.Status);
+        Assert.Equal(RowProcessingStatus.Valid, valid.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicate.Status);
+    }
+
+    [Fact]
+    public void Process_CommitsAllConfiguredDeduplicationKeysOnlyForValidRow()
+    {
+        var pipeline = Pipeline(
+            Mapping("First", "first"),
+            Mapping("Second", "second"),
+            Mapping("Value", "value"));
+        pipeline.TransformationRules =
+        [
+            DeduplicateRule(1, "first"),
+            DeduplicateRule(2, "second")
+        ];
+        pipeline.ValidationRules = [Validation(ValidationType.Required, "value")];
+        var session = Processor(
+                [new DeduplicateTransformationHandler()],
+                [new RequiredValidationHandler()])
+            .CreateSession(pipeline);
+
+        var invalid = session.Process(Row(
+            2,
+            ("First", "A"),
+            ("Second", "X"),
+            ("Value", null)));
+        var valid = session.Process(Row(
+            3,
+            ("First", "A"),
+            ("Second", "X"),
+            ("Value", "valid")));
+        var duplicateOfFirstRule = session.Process(Row(
+            4,
+            ("First", "A"),
+            ("Second", "Y"),
+            ("Value", "valid")));
+        var duplicateOfSecondRule = session.Process(Row(
+            5,
+            ("First", "B"),
+            ("Second", "X"),
+            ("Value", "valid")));
+        var provesEarlierTentativeKeyWasNotCommitted = session.Process(Row(
+            6,
+            ("First", "B"),
+            ("Second", "Z"),
+            ("Value", "valid")));
+
+        Assert.Equal(RowProcessingStatus.Invalid, invalid.Status);
+        Assert.Equal(RowProcessingStatus.Valid, valid.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicateOfFirstRule.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicateOfSecondRule.Status);
+        Assert.Equal(RowProcessingStatus.Valid, provesEarlierTentativeKeyWasNotCommitted.Status);
+    }
+
+    [Fact]
+    public void Process_UnexpectedValidationFailureDoesNotCommitTentativeKey()
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"));
+        pipeline.TransformationRules = [DeduplicateRule(1, "id")];
+        pipeline.ValidationRules = [Validation(ValidationType.Required, "id")];
+        var session = Processor(
+                [new DeduplicateTransformationHandler()],
+                [new ThrowOnceValidationHandler()])
+            .CreateSession(pipeline);
+
+        var exception = Assert.Throws<ApplicationException>(() =>
+            session.Process(Row(2, ("Id", "A"))));
+        var valid = session.Process(Row(3, ("Id", "A")));
+        var duplicate = session.Process(Row(4, ("Id", "A")));
+
+        Assert.Equal("Unexpected validation failure.", exception.Message);
+        Assert.Equal(RowProcessingStatus.Valid, valid.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, duplicate.Status);
+    }
+
+    [Fact]
+    public async Task Process_RejectsOverlappingRowsAcrossValidationAndCommit()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var pipeline = Pipeline(Mapping("Id", "id"));
+        pipeline.TransformationRules = [DeduplicateRule(1, "id")];
+        pipeline.ValidationRules = [Validation(ValidationType.Required, "id")];
+        var session = Processor(
+                [new DeduplicateTransformationHandler()],
+                [new BlockingValidationHandler(entered, release)])
+            .CreateSession(pipeline);
+        var first = Task.Run(() => session.Process(Row(2, ("Id", "A"))));
+
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                session.Process(Row(3, ("Id", "A"))));
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.Equal(RowProcessingStatus.Valid, (await first).Status);
+        Assert.Equal(
+            RowProcessingStatus.Duplicate,
+            session.Process(Row(4, ("Id", "A"))).Status);
+    }
+
+    [Fact]
     public void Process_PreservesAllValidationErrors()
     {
         var pipeline = Pipeline(Mapping("Name", "name"), Mapping("Email", "email"));
@@ -268,5 +462,36 @@ public sealed class PipelineRowProcessorTests
 
         public TransformationResult Apply(DataRow row, TransformationRule rule) =>
             throw new ApplicationException("Unexpected failure.");
+    }
+
+    private sealed class ThrowOnceValidationHandler : IValidationHandler
+    {
+        private int _invocationCount;
+
+        public ValidationType Type => ValidationType.Required;
+
+        public ValidationResult Validate(DataRow row, ValidationRule rule)
+        {
+            if (Interlocked.Increment(ref _invocationCount) == 1)
+            {
+                throw new ApplicationException("Unexpected validation failure.");
+            }
+
+            return ValidationResult.Valid(row);
+        }
+    }
+
+    private sealed class BlockingValidationHandler(
+        ManualResetEventSlim entered,
+        ManualResetEventSlim release) : IValidationHandler
+    {
+        public ValidationType Type => ValidationType.Required;
+
+        public ValidationResult Validate(DataRow row, ValidationRule rule)
+        {
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            return ValidationResult.Valid(row);
+        }
     }
 }
