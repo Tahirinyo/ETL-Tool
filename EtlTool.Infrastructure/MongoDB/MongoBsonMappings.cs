@@ -27,6 +27,14 @@ internal static class MongoBsonMappings
                 classMap.MapIdMember(pipeline => pipeline.Id)
                     .SetSerializer(guidSerializer);
             });
+            BsonClassMap.RegisterClassMap<EtlRun>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapIdMember(run => run.Id)
+                    .SetSerializer(guidSerializer);
+                classMap.MapMember(run => run.PipelineId)
+                    .SetSerializer(guidSerializer);
+            });
             BsonClassMap.RegisterClassMap<TransformationRule>(classMap =>
             {
                 classMap.AutoMap();

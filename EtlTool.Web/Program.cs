@@ -66,6 +66,7 @@ backgroundJobQueueOptions.Validate();
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
+builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);

@@ -20,4 +20,7 @@ public sealed class MongoMetadataDatabase
     internal IMongoCollection<PipelineDefinition> PipelineDefinitions =>
         _database.GetCollection<PipelineDefinition>(
             MongoMetadataCollectionNames.PipelineDefinitions);
+
+    internal IMongoCollection<EtlRun> EtlRuns =>
+        _database.GetCollection<EtlRun>(MongoMetadataCollectionNames.EtlRuns);
 }

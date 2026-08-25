@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using EtlTool.Application.Execution;
 using EtlTool.Application.Pipelines;
 using EtlTool.Infrastructure.MongoDB;
 using MongoDB.Driver;
@@ -89,6 +90,7 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
             });
 
         Repository = new MongoPipelineDefinitionRepository(metadataDatabase);
+        EtlRunRepository = new MongoEtlRunRepository(metadataDatabase);
     }
 
     public string DatabaseName { get; }
@@ -98,6 +100,8 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
     public IMongoDatabase Database { get; }
 
     public IPipelineDefinitionRepository Repository { get; }
+
+    public IEtlRunRepository EtlRunRepository { get; }
 
     public ValueTask DisposeAsync()
     {
