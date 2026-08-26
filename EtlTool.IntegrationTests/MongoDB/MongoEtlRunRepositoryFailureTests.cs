@@ -33,6 +33,7 @@ public sealed class MongoEtlRunRepositoryFailureTests
                 DateTimeOffset.UtcNow,
                 finalProgress: null,
                 null,
+                errorReportPath: null,
                 CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentException>(
             () => repository.TryMarkTerminalAsync(
@@ -41,6 +42,7 @@ public sealed class MongoEtlRunRepositoryFailureTests
                 DateTimeOffset.UtcNow,
                 finalProgress: null,
                 null,
+                errorReportPath: null,
                 CancellationToken.None));
     }
 

@@ -9,6 +9,7 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Reporting;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace EtlTool.IntegrationTests.Execution;
 
@@ -30,6 +31,8 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Null(harness.Runs.SystemError);
         Assert.Equal(1, harness.Runs.ProgressUpdates);
         Assert.Equal(0, harness.Output.OpenCount);
+        Assert.Equal(1, harness.SourceFiles.DeleteCount);
+        Assert.True(harness.SourceFiles.WasDisposedBeforeDelete);
     }
 
     [Fact]
@@ -44,6 +47,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         Assert.Equal(EtlRunStatus.Failed, before.Runs.TerminalStatus);
         Assert.Null(before.Runs.TerminalProgress);
+        Assert.Equal(1, before.SourceFiles.DeleteCount);
 
         var after = Harness();
         after.Loader.Result = new BatchLoadResult(1, 0);
@@ -59,6 +63,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         Assert.Equal(EtlRunStatus.PartiallyCompleted, after.Runs.TerminalStatus);
         Assert.Equal(1, after.Runs.TerminalProgress!.InsertedRows);
+        Assert.Equal(1, after.SourceFiles.DeleteCount);
     }
 
     [Fact]
@@ -122,6 +127,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal(EtlRunStatus.Interrupted, harness.Runs.TerminalStatus);
         Assert.Equal(1, harness.Runs.TerminalProgress!.InsertedRows);
         Assert.Equal("ETL execution was interrupted.", harness.Runs.SystemError);
+        Assert.Equal(1, harness.SourceFiles.DeleteCount);
     }
 
     [Fact]
@@ -159,6 +165,38 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Contains("Ada", csv);
         Assert.Equal(EtlRunStatus.Completed, harness.Runs.TerminalStatus);
         Assert.Equal(1, harness.Runs.TerminalProgress!.InvalidRows);
+        Assert.Equal($"error-report-{harness.Run.Id:N}.csv", harness.Run.ErrorReportPath);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FinalizesHealthyInvalidRowReportBeforeLaterSystemFailure()
+    {
+        var harness = Harness();
+        harness.Pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name" }];
+        harness.Orchestrator.Execute = async (_, reportInvalid, _, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            throw new IOException("The source became unavailable after this row.");
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id), CancellationToken.None));
+
+        Assert.Equal(EtlRunStatus.Failed, harness.Runs.TerminalStatus);
+        Assert.Equal($"error-report-{harness.Run.Id:N}.csv", harness.Run.ErrorReportPath);
+        Assert.Equal(1, harness.Output.OpenCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SourceCleanupFailurePreservesCompletedTerminalStatus()
+    {
+        var harness = Harness();
+        harness.SourceFiles.ThrowOnDelete = true;
+
+        await harness.Executor.ExecuteAsync(new BackgroundJob(harness.Run.Id), CancellationToken.None);
+
+        Assert.Equal(EtlRunStatus.Completed, harness.Runs.TerminalStatus);
+        Assert.Equal(1, harness.SourceFiles.DeleteCount);
     }
 
     [Theory]
@@ -254,6 +292,72 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal("ETL execution was interrupted.", harness.Runs.SystemError);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CancellationWaitsForReportWriterShutdownBeforeSourceCleanup()
+    {
+        var writer = new ShutdownGatedErrorReportWriter();
+        var harness = Harness(writer);
+        harness.Pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name" }];
+        harness.Orchestrator.Execute = async (_, reportInvalid, _, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            throw new InvalidOperationException("The reporting callback unexpectedly returned.");
+        };
+        using var cancellation = new CancellationTokenSource();
+        var execution = harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            cancellation.Token);
+
+        await writer.RowObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await writer.ShutdownStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Yield();
+
+        Assert.False(execution.IsCompleted);
+        Assert.Equal(0, harness.SourceFiles.DeleteCount);
+        Assert.Equal(0, harness.Output.AbortCount);
+
+        writer.ReleaseShutdown.TrySetResult(true);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        await writer.Terminated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(EtlRunStatus.Interrupted, harness.Runs.TerminalStatus);
+        Assert.Null(harness.Run.ErrorReportPath);
+        Assert.Equal(1, harness.SourceFiles.DeleteCount);
+        Assert.Equal(1, harness.Output.AbortCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CancellationPreservesInterruptedStatusWhenWriterShutdownFails()
+    {
+        var writer = new ShutdownGatedErrorReportWriter(new IOException("Writer shutdown failed."));
+        var harness = Harness(writer);
+        harness.Pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name" }];
+        harness.Orchestrator.Execute = async (_, reportInvalid, _, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            throw new InvalidOperationException("The reporting callback unexpectedly returned.");
+        };
+        using var cancellation = new CancellationTokenSource();
+        var execution = harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            cancellation.Token);
+
+        await writer.RowObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+        await writer.ShutdownStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        writer.ReleaseShutdown.TrySetResult(true);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        await writer.Terminated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(EtlRunStatus.Interrupted, harness.Runs.TerminalStatus);
+        Assert.Null(harness.Run.ErrorReportPath);
+        Assert.Equal(1, harness.SourceFiles.DeleteCount);
+        Assert.Equal(1, harness.Output.AbortCount);
+    }
+
     private static TestHarness Harness(IErrorReportWriter? errorReportWriter = null)
     {
         var run = new EtlRun
@@ -269,16 +373,18 @@ public sealed class EtlRunBackgroundJobExecutorTests
         var orchestrator = new StubOrchestrator();
         var loader = new StubLoader();
         var output = new RecordingOutputFactory();
+        var sourceFiles = new MemorySourceFactory();
         var executor = new EtlRunBackgroundJobExecutor(
             runs,
             pipelines,
             orchestrator,
             loader,
             new FixedTimeProvider(),
-            new MemorySourceFactory(),
+            sourceFiles,
             errorReportWriter ?? new CsvErrorReportWriter(),
-            output);
-        return new TestHarness(run, pipeline, runs, orchestrator, loader, output, executor);
+            output,
+            NullLogger<EtlRunBackgroundJobExecutor>.Instance);
+        return new TestHarness(run, pipeline, runs, orchestrator, loader, output, sourceFiles, executor);
     }
 
     private static BatchExecutionProgress Progress(
@@ -330,6 +436,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         StubOrchestrator Orchestrator,
         StubLoader Loader,
         RecordingOutputFactory Output,
+        MemorySourceFactory SourceFiles,
         EtlRunBackgroundJobExecutor Executor);
 
     private sealed class StubRunRepository(EtlRun run) : IEtlRunRepository
@@ -374,12 +481,14 @@ public sealed class EtlRunBackgroundJobExecutorTests
             DateTimeOffset completedAt,
             BatchExecutionProgress? finalProgress,
             string? systemError,
+            string? errorReportPath,
             CancellationToken cancellationToken)
         {
             TerminalStatus = status;
             TerminalProgress = finalProgress;
             SystemError = systemError;
             run.Status = status;
+            run.ErrorReportPath = errorReportPath;
             return Task.FromResult(true);
         }
     }
@@ -471,22 +580,66 @@ public sealed class EtlRunBackgroundJobExecutorTests
             CancellationToken cancellationToken) => Task.FromResult(Result);
     }
 
-    private sealed class MemorySourceFactory : IRunSourceStreamFactory
+    private sealed class MemorySourceFactory : IRunSourceFileStore
     {
-        public Stream Open(EtlRun run) => new MemoryStream([1]);
+        public int DeleteCount { get; private set; }
+
+        public bool WasDisposedBeforeDelete { get; private set; }
+
+        public bool ThrowOnDelete { get; set; }
+
+        private MemoryStream? LastStream { get; set; }
+
+        public Stream Open(EtlRun run) => LastStream = new MemoryStream([1]);
+
+        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken)
+        {
+            DeleteCount++;
+            WasDisposedBeforeDelete = LastStream is not null && !LastStream.CanRead;
+            if (ThrowOnDelete)
+            {
+                throw new IOException("Simulated source cleanup failure.");
+            }
+            return Task.CompletedTask;
+        }
     }
 
-    private sealed class RecordingOutputFactory : IErrorReportOutputStreamFactory
+    private sealed class RecordingOutputFactory : IErrorReportStore
     {
         public int OpenCount { get; private set; }
 
+        public int AbortCount { get; private set; }
+
         public MemoryStream? LastStream { get; private set; }
 
-        public Stream Open(EtlRun run)
+        public IErrorReportOutput CreateOutput(EtlRun run)
         {
             OpenCount++;
             LastStream = new MemoryStream();
-            return LastStream;
+            return new MemoryErrorReportOutput(this, LastStream, run.Id);
+        }
+
+        public Stream? OpenRead(EtlRun run) => null;
+
+        public Task DeletePublishedAsync(EtlRun run, string reportReference, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        private sealed class MemoryErrorReportOutput(
+            RecordingOutputFactory owner,
+            MemoryStream stream,
+            Guid runId) : IErrorReportOutput
+        {
+            public Stream Stream => stream;
+
+            public Task<string> PublishAsync(CancellationToken cancellationToken) =>
+                Task.FromResult($"error-report-{runId:N}.csv");
+
+            public Task AbortAsync()
+            {
+                owner.AbortCount++;
+                return Task.CompletedTask;
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
@@ -520,6 +673,56 @@ public sealed class EtlRunBackgroundJobExecutorTests
             {
                 RowObserved.TrySetResult(true);
                 await Release.Task.WaitAsync(cancellationToken);
+            }
+        }
+    }
+
+    private sealed class ShutdownGatedErrorReportWriter(Exception? shutdownException = null) : IErrorReportWriter
+    {
+        public TaskCompletionSource<bool> RowObserved { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> ShutdownStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> ReleaseShutdown { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> Terminated { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(
+            Stream output,
+            Guid runId,
+            IReadOnlyList<string> sourceFields,
+            IAsyncEnumerable<RowProcessingResult> rowResults,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await foreach (var _ in rowResults.WithCancellation(cancellationToken))
+                {
+                    RowObserved.TrySetResult(true);
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        ShutdownStarted.TrySetResult(true);
+                        await ReleaseShutdown.Task.ConfigureAwait(false);
+                        if (shutdownException is not null)
+                        {
+                            throw shutdownException;
+                        }
+
+                        throw;
+                    }
+                }
+            }
+            finally
+            {
+                Terminated.TrySetResult(true);
             }
         }
     }

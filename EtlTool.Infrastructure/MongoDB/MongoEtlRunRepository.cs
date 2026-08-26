@@ -107,6 +107,7 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
         DateTimeOffset completedAt,
         BatchExecutionProgress? finalProgress,
         string? systemError,
+        string? errorReportPath,
         CancellationToken cancellationToken)
     {
         ValidateId(runId);
@@ -126,7 +127,8 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
         var update = Builders<EtlRun>.Update
             .Set(run => run.Status, status)
             .Set(run => run.CompletedAt, completedAt)
-            .Set(run => run.SystemError, systemError);
+            .Set(run => run.SystemError, systemError)
+            .Set(run => run.ErrorReportPath, errorReportPath);
 
         if (finalProgress is not null)
         {

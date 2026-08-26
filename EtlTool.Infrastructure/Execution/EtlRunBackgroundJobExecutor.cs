@@ -5,6 +5,8 @@ using EtlTool.Application.Pipelines;
 using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Infrastructure.Reporting;
+using Microsoft.Extensions.Logging;
 
 namespace EtlTool.Infrastructure.Execution;
 
@@ -15,9 +17,10 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     private readonly IBatchOrchestrator _orchestrator;
     private readonly IDataLoader _loader;
     private readonly TimeProvider _timeProvider;
-    private readonly IRunSourceStreamFactory _sourceStreamFactory;
+    private readonly IRunSourceFileStore _sourceFileStore;
     private readonly IErrorReportWriter _errorReportWriter;
-    private readonly IErrorReportOutputStreamFactory _errorReportOutputFactory;
+    private readonly IErrorReportStore _errorReportStore;
+    private readonly ILogger<EtlRunBackgroundJobExecutor> _logger;
 
     public EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
@@ -25,17 +28,30 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
-        IErrorReportWriter errorReportWriter)
-        : this(
-            runRepository,
-            pipelineRepository,
-            orchestrator,
-            loader,
-            timeProvider,
-            new RunSourceStreamFactory(),
-            errorReportWriter,
-            new TransientErrorReportOutputStreamFactory())
+        IErrorReportWriter errorReportWriter,
+        IRunSourceFileStore sourceFileStore,
+        IErrorReportStore errorReportStore,
+        ILogger<EtlRunBackgroundJobExecutor> logger)
     {
+        ArgumentNullException.ThrowIfNull(runRepository);
+        ArgumentNullException.ThrowIfNull(pipelineRepository);
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(loader);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(sourceFileStore);
+        ArgumentNullException.ThrowIfNull(errorReportWriter);
+        ArgumentNullException.ThrowIfNull(errorReportStore);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _runRepository = runRepository;
+        _pipelineRepository = pipelineRepository;
+        _orchestrator = orchestrator;
+        _loader = loader;
+        _timeProvider = timeProvider;
+        _sourceFileStore = sourceFileStore;
+        _errorReportWriter = errorReportWriter;
+        _errorReportStore = errorReportStore;
+        _logger = logger;
     }
 
     internal EtlRunBackgroundJobExecutor(
@@ -44,27 +60,13 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
-        IRunSourceStreamFactory sourceStreamFactory,
+        IRunSourceFileStore sourceFileStore,
         IErrorReportWriter errorReportWriter,
-        IErrorReportOutputStreamFactory errorReportOutputFactory)
+        IErrorReportStore errorReportStore,
+        ILogger<EtlRunBackgroundJobExecutor> logger)
+        : this(runRepository, pipelineRepository, orchestrator, loader, timeProvider,
+            errorReportWriter, sourceFileStore, errorReportStore, logger)
     {
-        ArgumentNullException.ThrowIfNull(runRepository);
-        ArgumentNullException.ThrowIfNull(pipelineRepository);
-        ArgumentNullException.ThrowIfNull(orchestrator);
-        ArgumentNullException.ThrowIfNull(loader);
-        ArgumentNullException.ThrowIfNull(timeProvider);
-        ArgumentNullException.ThrowIfNull(sourceStreamFactory);
-        ArgumentNullException.ThrowIfNull(errorReportWriter);
-        ArgumentNullException.ThrowIfNull(errorReportOutputFactory);
-
-        _runRepository = runRepository;
-        _pipelineRepository = pipelineRepository;
-        _orchestrator = orchestrator;
-        _loader = loader;
-        _timeProvider = timeProvider;
-        _sourceStreamFactory = sourceStreamFactory;
-        _errorReportWriter = errorReportWriter;
-        _errorReportOutputFactory = errorReportOutputFactory;
     }
 
     public async Task ExecuteAsync(
@@ -76,6 +78,10 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         EtlRun? run = null;
         BatchExecutionProgress? latestProgress = null;
         var started = false;
+        Stream? source = null;
+        InvalidRowReportSession? errorReportSession = null;
+        var reportFinalizationAttempted = false;
+        var executionFailed = false;
 
         try
         {
@@ -99,13 +105,13 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 ?? throw new InvalidOperationException("The ETL run pipeline no longer exists.");
 
             cancellationToken.ThrowIfCancellationRequested();
-            await using var source = _sourceStreamFactory.Open(run);
+            source = _sourceFileStore.Open(run);
             var target = new MongoTarget(
                 pipeline.DestinationDatabase,
                 pipeline.DestinationCollection);
-            await using var errorReportSession = new InvalidRowReportSession(
+            errorReportSession = new InvalidRowReportSession(
                 _errorReportWriter,
-                _errorReportOutputFactory,
+                _errorReportStore,
                 run,
                 pipeline.ExpectedSchema.Select(field => field.Name).ToArray(),
                 cancellationToken);
@@ -131,7 +137,10 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     }
                 },
                 cancellationToken).ConfigureAwait(false);
-            await errorReportSession.CompleteAsync().ConfigureAwait(false);
+            reportFinalizationAttempted = true;
+            var reportReference = await errorReportSession
+                .CompleteAsync(cancellationToken)
+                .ConfigureAwait(false);
 
             if (latestProgress is null)
             {
@@ -139,20 +148,17 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     "The batch orchestrator completed without a final progress snapshot.");
             }
 
-            if (!await _runRepository.TryMarkTerminalAsync(
+            await MarkTerminalAsync(
                 run.Id,
                 EtlRunStatus.Completed,
-                _timeProvider.GetUtcNow(),
                 latestProgress,
                 systemError: null,
-                cancellationToken).ConfigureAwait(false))
-            {
-                throw new InvalidOperationException(
-                    "The running ETL run rejected its completion update.");
-            }
+                reportReference,
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {
+            executionFailed = true;
             if (exception is BatchExecutionCanceledException batchCancellation)
             {
                 latestProgress = batchCancellation.ConfirmedProgress;
@@ -165,6 +171,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     EtlRunStatus.Interrupted,
                     latestProgress,
                     "ETL execution was interrupted.",
+                    errorReportPath: null,
                     originalFailure: null).ConfigureAwait(false);
             }
 
@@ -172,6 +179,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         }
         catch (Exception exception)
         {
+            executionFailed = true;
             if (exception is BatchExecutionException batchFailure)
             {
                 latestProgress = batchFailure.ConfirmedProgress;
@@ -186,7 +194,8 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                         EtlRunStatus.Interrupted,
                         latestProgress,
                         "ETL execution was interrupted.",
-                        exception).ConfigureAwait(false);
+                        errorReportPath: null,
+                        originalFailure: exception).ConfigureAwait(false);
                 }
 
                 throw new OperationCanceledException(
@@ -197,6 +206,23 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
             if (started && run is not null)
             {
+                var failure = exception;
+                string? reportReference = null;
+                if (!reportFinalizationAttempted && errorReportSession?.HasInvalidRows == true)
+                {
+                    reportFinalizationAttempted = true;
+                    try
+                    {
+                        reportReference = await errorReportSession
+                            .CompleteAsync(CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception reportException)
+                    {
+                        failure = reportException;
+                    }
+                }
+
                 var status = HasCommittedTargetWork(latestProgress)
                     ? EtlRunStatus.PartiallyCompleted
                     : EtlRunStatus.Failed;
@@ -204,11 +230,53 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     run.Id,
                     status,
                     latestProgress,
-                    SafeError(exception),
-                    exception).ConfigureAwait(false);
+                    SafeError(failure),
+                    reportReference,
+                    failure).ConfigureAwait(false);
+
+                if (!ReferenceEquals(failure, exception))
+                {
+                    throw failure;
+                }
             }
 
             throw;
+        }
+        finally
+        {
+            if (errorReportSession is not null)
+            {
+                try
+                {
+                    await errorReportSession.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception cleanupException) when (executionFailed)
+                {
+                    _logger.LogDebug(cleanupException,
+                        "Error-report cleanup for ETL run {RunId} failed after execution had already ended.",
+                        run?.Id);
+                }
+            }
+
+            if (source is not null)
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (started && run is not null)
+            {
+                try
+                {
+                    await _sourceFileStore.DeleteAsync(run, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception cleanupException) when (cleanupException is IOException
+                    or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                {
+                    _logger.LogWarning(cleanupException,
+                        "Temporary source for ETL run {RunId} could not be removed and will be retried by orphan cleanup.",
+                        run.Id);
+                }
+            }
         }
     }
 
@@ -217,7 +285,32 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         EtlRunStatus status,
         BatchExecutionProgress? progress,
         string systemError,
+        string? errorReportPath,
         Exception? originalFailure)
+    {
+        try
+        {
+            await MarkTerminalAsync(
+                runId,
+                status,
+                progress,
+                systemError,
+                errorReportPath,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception terminalFailure) when (originalFailure is not null)
+        {
+            throw new AggregateException(originalFailure, terminalFailure);
+        }
+    }
+
+    private async Task MarkTerminalAsync(
+        Guid runId,
+        EtlRunStatus status,
+        BatchExecutionProgress? progress,
+        string? systemError,
+        string? errorReportPath,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -227,15 +320,32 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 _timeProvider.GetUtcNow(),
                 progress,
                 systemError,
-                CancellationToken.None).ConfigureAwait(false))
+                errorReportPath,
+                cancellationToken).ConfigureAwait(false))
             {
-                throw new InvalidOperationException(
-                    "The ETL run rejected its terminal status update.");
+                throw new InvalidOperationException("The ETL run rejected its terminal status update.");
             }
         }
-        catch (Exception terminalFailure) when (originalFailure is not null)
+        catch
         {
-            throw new AggregateException(originalFailure, terminalFailure);
+            if (errorReportPath is not null)
+            {
+                try
+                {
+                    await _errorReportStore.DeletePublishedAsync(
+                        new EtlRun { Id = runId, ErrorReportPath = errorReportPath },
+                        errorReportPath,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception cleanupException) when (cleanupException is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(cleanupException,
+                        "Published error report for ETL run {RunId} could not be removed after terminal persistence failed.",
+                        runId);
+                }
+            }
+
+            throw;
         }
     }
 

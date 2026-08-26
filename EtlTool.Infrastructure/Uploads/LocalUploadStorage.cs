@@ -107,7 +107,7 @@ public sealed class LocalUploadStorage : IUploadStorage
         ArgumentNullException.ThrowIfNull(upload);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!TryParseStoredFileName(upload.StoredFileName, out var expectedStoredFileName))
+        if (!StoredUploadFileName.TryParse(upload.StoredFileName, out var expectedStoredFileName))
         {
             throw new ArgumentException(
                 "The stored upload filename is not a service-generated upload name.",
@@ -152,7 +152,7 @@ public sealed class LocalUploadStorage : IUploadStorage
             cancellationToken.ThrowIfCancellationRequested();
 
             var fileName = Path.GetFileName(path);
-            if (!TryParseStoredFileName(fileName, out _))
+            if (!StoredUploadFileName.TryParse(fileName, out _))
             {
                 continue;
             }
@@ -178,7 +178,7 @@ public sealed class LocalUploadStorage : IUploadStorage
         for (var attempt = 0; attempt < MaximumNameAttempts; attempt++)
         {
             var token = Guid.NewGuid().ToString("N");
-            var storedFileName = $"{token}.upload";
+            var storedFileName = $"{token}{StoredUploadFileName.Extension}";
             var pendingPath = Path.Combine(_rootPath, $"{token}.partial");
             var finalPath = Path.Combine(_rootPath, storedFileName);
 
@@ -209,30 +209,6 @@ public sealed class LocalUploadStorage : IUploadStorage
         }
 
         throw new IOException("A unique upload filename could not be generated.");
-    }
-
-    private static bool TryParseStoredFileName(
-        string storedFileName,
-        out string expectedStoredFileName)
-    {
-        expectedStoredFileName = string.Empty;
-
-        if (string.IsNullOrEmpty(storedFileName)
-            || Path.GetFileName(storedFileName) != storedFileName
-            || !storedFileName.EndsWith(".upload", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var token = storedFileName[..^".upload".Length];
-
-        if (!Guid.TryParseExact(token, "N", out var identifier))
-        {
-            return false;
-        }
-
-        expectedStoredFileName = $"{identifier:N}.upload";
-        return string.Equals(storedFileName, expectedStoredFileName, StringComparison.Ordinal);
     }
 
     private sealed record PendingUpload(

@@ -1,6 +1,7 @@
 using EtlTool.Application.Execution;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Infrastructure.Reporting;
 using EtlTool.Web.Controllers;
 using EtlTool.Web.Models.Runs;
 using Microsoft.AspNetCore.Mvc;
@@ -96,6 +97,39 @@ public sealed class RunsControllerTests
         Assert.Equal(cancellationSource.Token, repository.RequestedCancellationToken);
     }
 
+    [Fact]
+    public async Task DownloadErrorReport_OwnerGetsFrameworkStreamedCsvWithSafeFilename()
+    {
+        var run = Run();
+        run.ErrorReportPath = $"error-report-{run.Id:N}.csv";
+        var result = await new RunsController(
+            new RecordingRunRepository(run),
+            new RecordingReportStore(run.Id)).DownloadErrorReport(run.Id, CancellationToken.None);
+
+        var file = Assert.IsType<FileStreamResult>(result);
+        Assert.Equal("text/csv; charset=utf-8", file.ContentType);
+        Assert.Equal($"error-report-{run.Id:N}.csv", file.FileDownloadName);
+        Assert.IsType<MemoryStream>(file.FileStream);
+    }
+
+    [Fact]
+    public async Task DownloadErrorReport_MissingOrWrongRunReportReturnsNotFound()
+    {
+        var owner = Run();
+        owner.ErrorReportPath = $"error-report-{owner.Id:N}.csv";
+        var other = Run();
+        other.ErrorReportPath = owner.ErrorReportPath;
+        var store = new RecordingReportStore(owner.Id);
+
+        var missing = await new RunsController(new RecordingRunRepository())
+            .DownloadErrorReport(Guid.NewGuid(), CancellationToken.None);
+        var wrong = await new RunsController(new RecordingRunRepository(other), store)
+            .DownloadErrorReport(other.Id, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(missing);
+        Assert.IsType<NotFoundResult>(wrong);
+    }
+
     private static EtlRun Run() => new()
     {
         Id = Guid.NewGuid(),
@@ -137,6 +171,19 @@ public sealed class RunsControllerTests
         public Task AddAsync(EtlRun value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, string? errorReportPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class RecordingReportStore(Guid ownerRunId) : IErrorReportStore
+    {
+        public IErrorReportOutput CreateOutput(EtlRun run) => throw new NotSupportedException();
+
+        public Stream? OpenRead(EtlRun run) => run.Id == ownerRunId
+            && run.ErrorReportPath == $"error-report-{run.Id:N}.csv"
+                ? new MemoryStream("csv"u8.ToArray())
+                : null;
+
+        public Task DeletePublishedAsync(EtlRun run, string reportReference, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

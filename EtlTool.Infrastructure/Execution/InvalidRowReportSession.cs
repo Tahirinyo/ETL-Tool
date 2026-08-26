@@ -1,39 +1,45 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
+using EtlTool.Infrastructure.Reporting;
 
 namespace EtlTool.Infrastructure.Execution;
 
 internal sealed class InvalidRowReportSession : IAsyncDisposable
 {
     private readonly IErrorReportWriter _writer;
-    private readonly IErrorReportOutputStreamFactory _outputFactory;
+    private readonly IErrorReportStore _reportStore;
     private readonly EtlRun _run;
     private readonly IReadOnlyList<string> _sourceFields;
     private readonly CancellationToken _executionToken;
     private readonly object _sync = new();
     private Channel<ReportEnvelope>? _channel;
-    private Stream? _output;
+    private IErrorReportOutput? _output;
     private Task? _writerTask;
-    private Task? _completionTask;
+    private Task<string?>? _completionTask;
+    private Task? _disposeTask;
     private ReportEnvelope? _inFlight;
+    private bool _inputCompleted;
+    private bool _disposeStarted;
+    private bool _published;
 
     public InvalidRowReportSession(
         IErrorReportWriter writer,
-        IErrorReportOutputStreamFactory outputFactory,
+        IErrorReportStore reportStore,
         EtlRun run,
         IReadOnlyList<string> sourceFields,
         CancellationToken executionToken)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        ArgumentNullException.ThrowIfNull(outputFactory);
+        ArgumentNullException.ThrowIfNull(reportStore);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(sourceFields);
 
         _writer = writer;
-        _outputFactory = outputFactory;
+        _reportStore = reportStore;
         _run = run;
         _sourceFields = sourceFields.ToArray();
         _executionToken = executionToken;
@@ -96,32 +102,71 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
         }
     }
 
-    public Task CompleteAsync()
+    public Task<string?> CompleteAsync(CancellationToken cancellationToken)
     {
         lock (_sync)
         {
-            return _completionTask ??= CompleteCoreAsync();
+            return _completionTask ??= CompleteCoreAsync(cancellationToken);
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        lock (_sync)
+        {
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Task? writerTask;
+        IErrorReportOutput? output;
+        bool published;
+
+        lock (_sync)
+        {
+            _disposeStarted = true;
+            CompleteInputLocked();
+            writerTask = _writerTask;
+            output = _output;
+            published = _published;
+        }
+
+        Exception? writerShutdownException = null;
         try
         {
-            await CompleteAsync().ConfigureAwait(false);
+            if (writerTask is not null)
+            {
+                await writerTask.ConfigureAwait(false);
+            }
         }
-        catch
+        catch (Exception exception)
         {
-            // Completion is explicitly awaited on the successful path. During failure unwinding,
-            // disposal must preserve the original orchestration/reporting exception.
+            writerShutdownException = exception;
         }
+
+        Exception? outputCleanupException = null;
+        if (output is not null && !published)
+        {
+            try
+            {
+                await output.AbortAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                outputCleanupException = exception;
+            }
+        }
+
+        ThrowShutdownFailure(writerShutdownException ?? outputCleanupException);
     }
 
     private void EnsureStarted()
     {
         lock (_sync)
         {
-            if (_completionTask is not null)
+            if (_completionTask is not null || _disposeStarted)
             {
                 throw new InvalidOperationException("The error-report session has already completed.");
             }
@@ -132,7 +177,7 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
             }
 
             _executionToken.ThrowIfCancellationRequested();
-            _output = _outputFactory.Open(_run);
+            _output = _reportStore.CreateOutput(_run);
             _channel = Channel.CreateBounded<ReportEnvelope>(new BoundedChannelOptions(1)
             {
                 SingleReader = true,
@@ -140,7 +185,7 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
                 AllowSynchronousContinuations = false,
                 FullMode = BoundedChannelFullMode.Wait
             });
-            _writerTask = RunWriterAsync(_output, _channel, _executionToken);
+            _writerTask = RunWriterAsync(_output.Stream, _channel, _executionToken);
         }
     }
 
@@ -191,37 +236,43 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
         }
     }
 
-    private async Task CompleteCoreAsync()
+    private async Task<string?> CompleteCoreAsync(CancellationToken cancellationToken)
     {
         Channel<ReportEnvelope>? channel;
         Task? writerTask;
-        Stream? output;
+        IErrorReportOutput? output;
         lock (_sync)
         {
             channel = _channel;
             writerTask = _writerTask;
             output = _output;
+            CompleteInputLocked();
         }
 
         if (channel is null || writerTask is null || output is null)
         {
-            return;
+            return null;
         }
 
         try
         {
-            channel.Writer.TryComplete();
             await writerTask.ConfigureAwait(false);
-            await output.DisposeAsync().ConfigureAwait(false);
+            var reference = await output.PublishAsync(cancellationToken).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _published = true;
+            }
+
+            return reference;
         }
         catch (OperationCanceledException) when (_executionToken.IsCancellationRequested)
         {
-            await DisposeAfterFailureAsync(output).ConfigureAwait(false);
+            await AbortAfterFailureAsync(output).ConfigureAwait(false);
             throw;
         }
         catch (Exception exception)
         {
-            await DisposeAfterFailureAsync(output).ConfigureAwait(false);
+            await AbortAfterFailureAsync(output).ConfigureAwait(false);
             throw exception is ErrorReportGenerationException
                 ? exception
                 : new ErrorReportGenerationException(exception);
@@ -245,19 +296,53 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
             queued.Completion.TrySetException(exception);
         }
 
-        channel.Writer.TryComplete(exception);
+        CompleteInput(exception);
     }
 
-    private static async Task DisposeAfterFailureAsync(Stream output)
+    private void CompleteInput(Exception? exception = null)
+    {
+        lock (_sync)
+        {
+            CompleteInputLocked(exception);
+        }
+    }
+
+    private void CompleteInputLocked(Exception? exception = null)
+    {
+        if (_inputCompleted || _channel is null)
+        {
+            return;
+        }
+
+        _inputCompleted = true;
+        _channel.Writer.TryComplete(exception);
+    }
+
+    private static async Task AbortAfterFailureAsync(IErrorReportOutput output)
     {
         try
         {
-            await output.DisposeAsync().ConfigureAwait(false);
+            await output.AbortAsync().ConfigureAwait(false);
         }
         catch
         {
             // Preserve the writer/cancellation failure that ended the reporting session.
         }
+    }
+
+    private static void ThrowShutdownFailure(Exception? exception)
+    {
+        if (exception is null)
+        {
+            return;
+        }
+
+        if (exception is OperationCanceledException or ErrorReportGenerationException)
+        {
+            ExceptionDispatchInfo.Capture(exception).Throw();
+        }
+
+        throw new ErrorReportGenerationException(exception);
     }
 
     private sealed class ReportEnvelope(RowProcessingResult result)

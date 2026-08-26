@@ -134,6 +134,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             completedAt,
             finalProgress,
             "Target database became unavailable.",
+            "error-report-0123456789abcdef0123456789abcdef.csv",
             CancellationToken.None);
         var progressAfterTerminal = await testDatabase.EtlRunRepository.TryUpdateProgressAsync(
             run.Id,
@@ -145,6 +146,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             completedAt.AddMinutes(1),
             finalProgress: null,
             "A later failure must not replace the first.",
+            errorReportPath: null,
             CancellationToken.None);
         var persisted = await testDatabase.EtlRunRepository.GetByIdAsync(
             run.Id,
@@ -157,6 +159,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         Assert.Equal(EtlRunStatus.PartiallyCompleted, persisted.Status);
         Assert.Equal(completedAt, persisted.CompletedAt);
         Assert.Equal("Target database became unavailable.", persisted.SystemError);
+        Assert.Equal("error-report-0123456789abcdef0123456789abcdef.csv", persisted.ErrorReportPath);
         Assert.Equal(5, persisted.ProcessedRows);
         Assert.Equal(2, persisted.InsertedRows);
         Assert.Equal(1, persisted.UpdatedRows);
@@ -176,6 +179,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             completedAt,
             finalProgress: null,
             "The application stopped before this run started.",
+            errorReportPath: null,
             CancellationToken.None);
         var persisted = await testDatabase.EtlRunRepository.GetByIdAsync(
             run.Id,
@@ -209,6 +213,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             DateTimeOffset.UtcNow,
             finalProgress: null,
             "Missing run.",
+            errorReportPath: null,
             CancellationToken.None));
     }
 

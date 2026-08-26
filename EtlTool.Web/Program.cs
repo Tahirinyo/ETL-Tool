@@ -16,6 +16,7 @@ using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Reporting;
+using EtlTool.Infrastructure.Storage;
 using EtlTool.Infrastructure.Uploads;
 using EtlTool.Web.Services;
 
@@ -51,6 +52,20 @@ var uploadValidationOptions = builder.Configuration
 
 uploadValidationOptions.Validate();
 
+var errorReportStorageOptions = builder.Configuration
+    .GetRequiredSection(ErrorReportStorageOptions.SectionName)
+    .Get<ErrorReportStorageOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{ErrorReportStorageOptions.SectionName}' is invalid.");
+
+errorReportStorageOptions.RootPath = errorReportStorageOptions.ResolveRootPath(
+    builder.Environment.ContentRootPath,
+    builder.Environment.WebRootPath);
+errorReportStorageOptions.Validate();
+StorageRootIsolation.EnsureSeparate(
+    uploadStorageOptions.RootPath,
+    errorReportStorageOptions.RootPath);
+
 var batchExecutionOptions = builder.Configuration
     .GetRequiredSection(BatchExecutionOptions.SectionName)
     .Get<BatchExecutionOptions>()
@@ -74,8 +89,11 @@ builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefini
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton<IDataLoader, MongoBulkUpsertLoader>();
 builder.Services.AddSingleton<IErrorReportWriter, CsvErrorReportWriter>();
+builder.Services.AddSingleton(errorReportStorageOptions);
+builder.Services.AddSingleton<IErrorReportStore, LocalErrorReportStore>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
+builder.Services.AddSingleton<IRunSourceFileStore, LocalRunSourceFileStore>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton(batchExecutionOptions);
 builder.Services.AddSingleton(backgroundJobQueueOptions);

@@ -29,5 +29,6 @@ public interface IEtlRunRepository
         DateTimeOffset completedAt,
         BatchExecutionProgress? finalProgress,
         string? systemError,
+        string? errorReportPath,
         CancellationToken cancellationToken);
 }
