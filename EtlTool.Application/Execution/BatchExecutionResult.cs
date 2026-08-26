@@ -7,13 +7,17 @@ public sealed class BatchExecutionResult
         long validRows,
         long invalidRows,
         long filteredRows,
-        long deduplicatedRows)
+        long deduplicatedRows,
+        long insertedRows = 0,
+        long updatedRows = 0)
     {
         ProcessedRows = processedRows;
         ValidRows = validRows;
         InvalidRows = invalidRows;
         FilteredRows = filteredRows;
         DeduplicatedRows = deduplicatedRows;
+        InsertedRows = insertedRows;
+        UpdatedRows = updatedRows;
     }
 
     public long ProcessedRows { get; }
@@ -25,4 +29,8 @@ public sealed class BatchExecutionResult
     public long FilteredRows { get; }
 
     public long DeduplicatedRows { get; }
+
+    public long InsertedRows { get; }
+
+    public long UpdatedRows { get; }
 }

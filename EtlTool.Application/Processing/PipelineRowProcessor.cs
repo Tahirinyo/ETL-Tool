@@ -1,4 +1,5 @@
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
@@ -45,7 +46,8 @@ public sealed class PipelineRowProcessor
             _transformationEngine.CreateExecution(transformationRules, sourceOptions),
             _validationEngine,
             validationRules.ToArray(),
-            sourceOptions);
+            sourceOptions,
+            pipeline.UpsertKeyField);
     }
 
     private static SourceOptions CopySourceOptions(SourceOptions sourceOptions) => new()
@@ -66,6 +68,8 @@ public sealed class PipelineRowProcessingSession
     private readonly ValidationEngine _validationEngine;
     private readonly IReadOnlyList<ValidationRule> _validationRules;
     private readonly SourceOptions _sourceOptions;
+    private readonly string _upsertKeyField;
+    private readonly HashSet<UpsertKeyIdentity> _seenUpsertKeys = [];
     private int _isProcessing;
 
     internal PipelineRowProcessingSession(
@@ -74,7 +78,8 @@ public sealed class PipelineRowProcessingSession
         TransformationExecution transformationExecution,
         ValidationEngine validationEngine,
         IReadOnlyList<ValidationRule> validationRules,
-        SourceOptions sourceOptions)
+        SourceOptions sourceOptions,
+        string upsertKeyField)
     {
         _fieldMappingService = fieldMappingService;
         _mappingPlan = mappingPlan;
@@ -82,6 +87,7 @@ public sealed class PipelineRowProcessingSession
         _validationEngine = validationEngine;
         _validationRules = validationRules;
         _sourceOptions = sourceOptions;
+        _upsertKeyField = upsertKeyField;
     }
 
     public RowProcessingResult Process(DataRow sourceRow)
@@ -141,9 +147,51 @@ public sealed class PipelineRowProcessingSession
             _validationRules,
             _sourceOptions);
 
+        if (validation.IsValid && !UpsertKeyValidationHandler.HasValue(
+                validation.Row,
+                _upsertKeyField))
+        {
+            return RowProcessingResult.Invalid(
+                validation.Row,
+                [
+                    new RowProcessingError(
+                        RowProcessingErrorStage.Validation,
+                        _upsertKeyField,
+                        $"Upsert key field '{_upsertKeyField}' is required.")
+                ]);
+        }
+
         if (validation.IsValid)
         {
+            UpsertKeyIdentity upsertKey;
+            try
+            {
+                upsertKey = UpsertKeyIdentity.Create(validation.Row, _upsertKeyField);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return RowProcessingResult.Invalid(
+                    validation.Row,
+                    [
+                        new RowProcessingError(
+                            RowProcessingErrorStage.Validation,
+                            _upsertKeyField,
+                            exception.Message)
+                    ]);
+            }
+
+            if (_seenUpsertKeys.Contains(upsertKey))
+            {
+                return RowProcessingResult.Duplicate(validation.Row);
+            }
+
             transformation.CommitDeduplication();
+            if (!_seenUpsertKeys.Add(upsertKey))
+            {
+                throw new InvalidOperationException(
+                    "The execution-scoped upsert key changed while the current row was being processed.");
+            }
+
             return RowProcessingResult.Valid(validation.Row);
         }
 

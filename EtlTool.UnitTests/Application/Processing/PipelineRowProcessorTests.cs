@@ -13,6 +13,49 @@ namespace EtlTool.UnitTests.Application.Processing;
 public sealed class PipelineRowProcessorTests
 {
     [Fact]
+    public void Process_EnforcesMandatoryFirstValidUpsertKeyWithoutConfiguredDeduplication()
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"), Mapping("Value", "value"));
+        pipeline.ValidationRules = [Validation(ValidationType.Required, "value")];
+        var session = Processor([], [new RequiredValidationHandler()]).CreateSession(pipeline);
+
+        var invalidFirst = session.Process(Row(2, ("Id", "A"), ("Value", null)));
+        var firstValid = session.Process(Row(3, ("Id", "A"), ("Value", "first")));
+        var laterDuplicate = session.Process(Row(4, ("Id", "A"), ("Value", "later")));
+
+        Assert.Equal(RowProcessingStatus.Invalid, invalidFirst.Status);
+        Assert.Equal(RowProcessingStatus.Valid, firstValid.Status);
+        Assert.Equal(RowProcessingStatus.Duplicate, laterDuplicate.Status);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Process_MandatoryUpsertKeyValidationRejectsAbsentOrEmptyValues(object? key)
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"));
+        var session = Processor([], []).CreateSession(pipeline);
+
+        var result = session.Process(Row(2, ("Id", key)));
+
+        Assert.Equal(RowProcessingStatus.Invalid, result.Status);
+        var error = Assert.Single(result.Errors);
+        Assert.Equal(RowProcessingErrorStage.Validation, error.Stage);
+        Assert.Equal("id", error.Field);
+    }
+
+    [Fact]
+    public void Process_MandatoryUpsertKeyValidationRejectsMissingFieldDefensively()
+    {
+        var pipeline = Pipeline(Mapping("Id", "id"), Mapping("Other", "other"));
+        var session = Processor([], []).CreateSession(pipeline);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            session.Process(Row(2, ("Other", "value"))));
+    }
+
+    [Fact]
     public void Process_MapsThenAppliesPersistedTransformationOrderBeforeValidation()
     {
         var pipeline = Pipeline(Mapping("Raw", "value"));

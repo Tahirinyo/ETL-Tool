@@ -92,6 +92,11 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
 
         Repository = new MongoPipelineDefinitionRepository(metadataDatabase);
         EtlRunRepository = new MongoEtlRunRepository(metadataDatabase);
+        Loader = new MongoBulkUpsertLoader(metadataDatabase, new MongoDbOptions
+        {
+            ConnectionString = connectionString,
+            MetadataDatabaseName = databaseName
+        });
         TargetAccessService = new MongoTargetAccessService(metadataDatabase, new MongoDbOptions
         {
             ConnectionString = connectionString,
@@ -110,6 +115,8 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
     public IPipelineDefinitionRepository Repository { get; }
 
     public IEtlRunRepository EtlRunRepository { get; }
+
+    public MongoBulkUpsertLoader Loader { get; }
 
     public MongoTargetAccessService TargetAccessService { get; }
 

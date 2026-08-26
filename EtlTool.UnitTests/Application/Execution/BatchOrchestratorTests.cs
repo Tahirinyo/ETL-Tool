@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
@@ -16,6 +17,200 @@ namespace EtlTool.UnitTests.Application.Execution;
 
 public sealed class BatchOrchestratorTests
 {
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_AccumulatesOnlyConfirmedLoadCounters()
+    {
+        var rows = new[]
+        {
+            Row(2, ("Value", "A")),
+            Row(3, ("Value", "B")),
+            Row(4, ("Value", "C"))
+        };
+        var results = new Queue<BatchLoadResult>(
+            [new BatchLoadResult(1, 1), new BatchLoadResult(1, 0)]);
+        var progress = new List<BatchExecutionProgress>();
+        await using var source = new MemoryStream([1]);
+
+        var result = await Orchestrator(
+                new SequenceExtractor(rows),
+                batchSize: 2)
+            .ExecuteWithLoadResultAsync(
+                source,
+                ReadyPipeline(),
+                (_, _) => Task.FromResult(results.Dequeue()),
+                (snapshot, _) =>
+                {
+                    progress.Add(snapshot);
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None);
+
+        Assert.Equal(2, result.InsertedRows);
+        Assert.Equal(1, result.UpdatedRows);
+        Assert.Equal((2L, 1L), (progress[^1].InsertedRows, progress[^1].UpdatedRows));
+        Assert.True(progress[^1].IsCompleted);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_PreservesPartialBatchCountsExactlyOnce()
+    {
+        var rows = new[]
+        {
+            Row(2, ("Value", "A")),
+            Row(3, ("Value", "B"))
+        };
+        var loadFailure = new BatchLoadException(
+            "Partial batch failure.",
+            new BatchLoadResult(1, 0),
+            new IOException("Simulated write failure."));
+        var attempts = 0;
+        await using var source = new MemoryStream([1]);
+
+        var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
+            Orchestrator(new SequenceExtractor(rows), batchSize: 2)
+                .ExecuteWithLoadResultAsync(
+                    source,
+                    ReadyPipeline(),
+                    (_, _) =>
+                    {
+                        attempts++;
+                        return Task.FromException<BatchLoadResult>(loadFailure);
+                    },
+                    IgnoreProgress,
+                    CancellationToken.None));
+
+        Assert.Equal(1, attempts);
+        Assert.Same(loadFailure, failure.InnerException);
+        Assert.Equal(1, failure.ConfirmedProgress.InsertedRows);
+        Assert.Equal(0, failure.ConfirmedProgress.UpdatedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MandatoryUpsertDeduplicationSpansBatchesWithoutConfiguredRule()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var rows = new[]
+        {
+            Row(2, ("Id", "A")),
+            Row(3, ("Id", "B")),
+            Row(4, ("Id", "A")),
+            Row(5, ("Id", "C"))
+        };
+        var batches = new List<IReadOnlyList<DataRow>>();
+        await using var source = new MemoryStream([1]);
+
+        var result = await Orchestrator(new SequenceExtractor(rows), batchSize: 2).ExecuteAsync(
+            source,
+            pipeline,
+            (batch, _) =>
+            {
+                batches.Add(batch);
+                return Task.CompletedTask;
+            },
+            IgnoreProgress,
+            CancellationToken.None);
+
+        Assert.Equal([2, 1], batches.Select(batch => batch.Count));
+        Assert.Equal(["A", "B", "C"], batches.SelectMany(batch => batch)
+            .Select(row => row.Values["id"]));
+        Assert.Equal(3, result.ValidRows);
+        Assert.Equal(1, result.DeduplicatedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DateKeysWithinOneBsonMillisecondKeepOnlyFirstValidRow()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var firstKey = new DateTime(2026, 8, 26, 12, 0, 0, DateTimeKind.Utc)
+            .AddTicks(1_234);
+        var loaded = new List<DataRow>();
+        await using var source = new MemoryStream([1]);
+
+        var result = await Orchestrator(
+                new SequenceExtractor(
+                [
+                    Row(2, ("Id", firstKey)),
+                    Row(3, ("Id", firstKey.AddTicks(1)))
+                ]),
+                batchSize: 10)
+            .ExecuteAsync(
+                source,
+                pipeline,
+                (batch, _) =>
+                {
+                    loaded.AddRange(batch);
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None);
+
+        var loadedRow = Assert.Single(loaded);
+        Assert.Equal(firstKey, loadedRow.Values["id"]);
+        Assert.Equal(1, result.ValidRows);
+        Assert.Equal(1, result.DeduplicatedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_EmptyUpsertKeysAreInvalidAndNeverLoaded()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var rows = new[]
+        {
+            Row(2, ("Id", null)),
+            Row(3, ("Id", "")),
+            Row(4, ("Id", " ")),
+            Row(5, ("Id", "A"))
+        };
+        var loaded = new List<DataRow>();
+        await using var source = new MemoryStream([1]);
+
+        var result = await Orchestrator(new SequenceExtractor(rows), batchSize: 10).ExecuteAsync(
+            source,
+            pipeline,
+            (batch, _) =>
+            {
+                loaded.AddRange(batch);
+                return Task.CompletedTask;
+            },
+            IgnoreProgress,
+            CancellationToken.None);
+
+        Assert.Equal(["A"], loaded.Select(row => row.Values["id"]));
+        Assert.Equal(3, result.InvalidRows);
+        Assert.Equal(1, result.ValidRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_CancellationAfterWriteCarriesConfirmedCounters()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await using var source = new MemoryStream([1]);
+
+        var failure = await Assert.ThrowsAsync<BatchExecutionCanceledException>(() =>
+            Orchestrator(
+                    new SequenceExtractor([Row(2, ("Value", "A"))]),
+                    batchSize: 1)
+                .ExecuteWithLoadResultAsync(
+                    source,
+                    ReadyPipeline(),
+                    (_, _) =>
+                    {
+                        cancellation.Cancel();
+                        return Task.FromResult(new BatchLoadResult(1, 0));
+                    },
+                    IgnoreProgress,
+                    cancellation.Token));
+
+        Assert.Equal(1, failure.ConfirmedProgress.InsertedRows);
+        Assert.Equal(1, failure.ConfirmedProgress.ValidRows);
+    }
+
     [Fact]
     public void Options_DefaultBatchSizeIsOneThousand()
     {

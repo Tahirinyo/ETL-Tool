@@ -73,7 +73,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             run.Id,
             DateTimeOffset.UtcNow,
             CancellationToken.None);
-        var progress = Progress(10, 5, 2, 1, 2);
+        var progress = Progress(10, 5, 2, 1, 2, insertedRows: 3, updatedRows: 2);
 
         var firstUpdate = await testDatabase.EtlRunRepository.TryUpdateProgressAsync(
             run.Id,
@@ -103,8 +103,8 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         Assert.Equal(progress.FilteredRows, persisted.FilteredRows);
         Assert.Equal(progress.DeduplicatedRows, persisted.DeduplicatedRows);
         Assert.Equal(run.TotalRows, persisted.TotalRows);
-        Assert.Equal(run.InsertedRows, persisted.InsertedRows);
-        Assert.Equal(run.UpdatedRows, persisted.UpdatedRows);
+        Assert.Equal(progress.InsertedRows, persisted.InsertedRows);
+        Assert.Equal(progress.UpdatedRows, persisted.UpdatedRows);
         Assert.Equal(run.ErrorReportPath, persisted.ErrorReportPath);
         Assert.Equal(run.SystemError, persisted.SystemError);
         Assert.Equal(run.OriginalFileName, persisted.OriginalFileName);
@@ -123,14 +123,16 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             CancellationToken.None);
         await testDatabase.EtlRunRepository.TryUpdateProgressAsync(
             run.Id,
-            Progress(4, 2, 1, 1, 0),
+            Progress(4, 2, 1, 1, 0, insertedRows: 1, updatedRows: 1),
             CancellationToken.None);
         var completedAt = new DateTimeOffset(2026, 8, 25, 11, 0, 0, TimeSpan.Zero);
+        var finalProgress = Progress(5, 3, 1, 1, 0, insertedRows: 2, updatedRows: 1);
 
         var completed = await testDatabase.EtlRunRepository.TryMarkTerminalAsync(
             run.Id,
             EtlRunStatus.PartiallyCompleted,
             completedAt,
+            finalProgress,
             "Target database became unavailable.",
             CancellationToken.None);
         var progressAfterTerminal = await testDatabase.EtlRunRepository.TryUpdateProgressAsync(
@@ -141,6 +143,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             run.Id,
             EtlRunStatus.Failed,
             completedAt.AddMinutes(1),
+            finalProgress: null,
             "A later failure must not replace the first.",
             CancellationToken.None);
         var persisted = await testDatabase.EtlRunRepository.GetByIdAsync(
@@ -154,7 +157,9 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         Assert.Equal(EtlRunStatus.PartiallyCompleted, persisted.Status);
         Assert.Equal(completedAt, persisted.CompletedAt);
         Assert.Equal("Target database became unavailable.", persisted.SystemError);
-        Assert.Equal(4, persisted.ProcessedRows);
+        Assert.Equal(5, persisted.ProcessedRows);
+        Assert.Equal(2, persisted.InsertedRows);
+        Assert.Equal(1, persisted.UpdatedRows);
     }
 
     [Fact]
@@ -169,6 +174,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             run.Id,
             EtlRunStatus.Interrupted,
             completedAt,
+            finalProgress: null,
             "The application stopped before this run started.",
             CancellationToken.None);
         var persisted = await testDatabase.EtlRunRepository.GetByIdAsync(
@@ -201,6 +207,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
             runId,
             EtlRunStatus.Failed,
             DateTimeOffset.UtcNow,
+            finalProgress: null,
             "Missing run.",
             CancellationToken.None));
     }
@@ -226,13 +233,17 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         long validRows,
         long invalidRows,
         long filteredRows,
-        long deduplicatedRows) => new(
+        long deduplicatedRows,
+        long insertedRows = 0,
+        long updatedRows = 0) => new(
             processedRows,
             validRows,
             invalidRows,
             filteredRows,
             deduplicatedRows,
-            isCompleted: false);
+            isCompleted: false,
+            insertedRows,
+            updatedRows);
 
     private static EtlRun CreateQueuedRun()
     {
@@ -245,6 +256,8 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         run.InvalidRows = 0;
         run.FilteredRows = 0;
         run.DeduplicatedRows = 0;
+        run.InsertedRows = 0;
+        run.UpdatedRows = 0;
         run.SystemError = null;
         return run;
     }

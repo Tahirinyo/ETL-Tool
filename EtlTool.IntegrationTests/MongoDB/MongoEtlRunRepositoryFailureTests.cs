@@ -31,6 +31,7 @@ public sealed class MongoEtlRunRepositoryFailureTests
                 Guid.NewGuid(),
                 EtlRunStatus.Running,
                 DateTimeOffset.UtcNow,
+                finalProgress: null,
                 null,
                 CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentException>(
@@ -38,6 +39,7 @@ public sealed class MongoEtlRunRepositoryFailureTests
                 Guid.NewGuid(),
                 (EtlRunStatus)99,
                 DateTimeOffset.UtcNow,
+                finalProgress: null,
                 null,
                 CancellationToken.None));
     }

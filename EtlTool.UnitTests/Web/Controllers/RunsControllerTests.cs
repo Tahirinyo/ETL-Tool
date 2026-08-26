@@ -137,6 +137,6 @@ public sealed class RunsControllerTests
         public Task AddAsync(EtlRun value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, string? systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

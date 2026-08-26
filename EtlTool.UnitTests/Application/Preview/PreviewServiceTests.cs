@@ -25,7 +25,10 @@ public sealed class PreviewServiceTests
         int availableRows,
         int expectedRows)
     {
-        var extractor = new GuardedExtractor(availableRows, throwIfRow101IsRequested: true);
+        var extractor = new GuardedExtractor(
+            availableRows,
+            throwIfRow101IsRequested: true,
+            uniqueValues: true);
         var service = Service(extractor, Processor([], []));
         await using var source = new MemoryStream([1]);
 
@@ -400,7 +403,8 @@ public sealed class PreviewServiceTests
         string sourceField = "Value",
         string sourceValue = "value",
         Exception? extractionFailure = null,
-        Action<int>? beforeYield = null) : IFileExtractor
+        Action<int>? beforeYield = null,
+        bool uniqueValues = false) : IFileExtractor
     {
         public SourceType SourceType => SourceType.Csv;
 
@@ -437,7 +441,9 @@ public sealed class PreviewServiceTests
                 beforeYield?.Invoke(index);
                 cancellationToken.ThrowIfCancellationRequested();
                 YieldedRows++;
-                yield return Row(index + 1, (sourceField, sourceValue));
+                yield return Row(
+                    index + 1,
+                    (sourceField, uniqueValues ? $"{sourceValue}-{index}" : sourceValue));
             }
         }
     }

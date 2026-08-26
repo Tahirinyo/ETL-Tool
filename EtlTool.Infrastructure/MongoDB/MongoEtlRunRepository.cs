@@ -80,14 +80,18 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
             Builders<EtlRun>.Filter.Lte(run => run.ValidRows, progress.ValidRows),
             Builders<EtlRun>.Filter.Lte(run => run.InvalidRows, progress.InvalidRows),
             Builders<EtlRun>.Filter.Lte(run => run.FilteredRows, progress.FilteredRows),
-            Builders<EtlRun>.Filter.Lte(run => run.DeduplicatedRows, progress.DeduplicatedRows));
+            Builders<EtlRun>.Filter.Lte(run => run.DeduplicatedRows, progress.DeduplicatedRows),
+            Builders<EtlRun>.Filter.Lte(run => run.InsertedRows, progress.InsertedRows),
+            Builders<EtlRun>.Filter.Lte(run => run.UpdatedRows, progress.UpdatedRows));
 
         var update = Builders<EtlRun>.Update
             .Set(run => run.ProcessedRows, progress.ProcessedRows)
             .Set(run => run.ValidRows, progress.ValidRows)
             .Set(run => run.InvalidRows, progress.InvalidRows)
             .Set(run => run.FilteredRows, progress.FilteredRows)
-            .Set(run => run.DeduplicatedRows, progress.DeduplicatedRows);
+            .Set(run => run.DeduplicatedRows, progress.DeduplicatedRows)
+            .Set(run => run.InsertedRows, progress.InsertedRows)
+            .Set(run => run.UpdatedRows, progress.UpdatedRows);
 
         var result = await _collection.UpdateOneAsync(
             filter,
@@ -101,6 +105,7 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
         Guid runId,
         EtlRunStatus status,
         DateTimeOffset completedAt,
+        BatchExecutionProgress? finalProgress,
         string? systemError,
         CancellationToken cancellationToken)
     {
@@ -113,14 +118,39 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
                 [EtlRunStatus.Queued, EtlRunStatus.Running])
             : Builders<EtlRun>.Filter.Eq(run => run.Status, EtlRunStatus.Running);
 
+        var filters = new List<FilterDefinition<EtlRun>>
+        {
+            Builders<EtlRun>.Filter.Eq(run => run.Id, runId),
+            statusFilter
+        };
+        var update = Builders<EtlRun>.Update
+            .Set(run => run.Status, status)
+            .Set(run => run.CompletedAt, completedAt)
+            .Set(run => run.SystemError, systemError);
+
+        if (finalProgress is not null)
+        {
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.ProcessedRows, finalProgress.ProcessedRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.ValidRows, finalProgress.ValidRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.InvalidRows, finalProgress.InvalidRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.FilteredRows, finalProgress.FilteredRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.DeduplicatedRows, finalProgress.DeduplicatedRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.InsertedRows, finalProgress.InsertedRows));
+            filters.Add(Builders<EtlRun>.Filter.Lte(run => run.UpdatedRows, finalProgress.UpdatedRows));
+
+            update = update
+                .Set(run => run.ProcessedRows, finalProgress.ProcessedRows)
+                .Set(run => run.ValidRows, finalProgress.ValidRows)
+                .Set(run => run.InvalidRows, finalProgress.InvalidRows)
+                .Set(run => run.FilteredRows, finalProgress.FilteredRows)
+                .Set(run => run.DeduplicatedRows, finalProgress.DeduplicatedRows)
+                .Set(run => run.InsertedRows, finalProgress.InsertedRows)
+                .Set(run => run.UpdatedRows, finalProgress.UpdatedRows);
+        }
+
         var result = await _collection.UpdateOneAsync(
-            Builders<EtlRun>.Filter.And(
-                Builders<EtlRun>.Filter.Eq(run => run.Id, runId),
-                statusFilter),
-            Builders<EtlRun>.Update
-                .Set(run => run.Status, status)
-                .Set(run => run.CompletedAt, completedAt)
-                .Set(run => run.SystemError, systemError),
+            Builders<EtlRun>.Filter.And(filters),
+            update,
             cancellationToken: cancellationToken);
 
         return result.MatchedCount > 0;

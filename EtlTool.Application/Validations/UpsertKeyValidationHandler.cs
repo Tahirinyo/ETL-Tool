@@ -19,8 +19,7 @@ public sealed class UpsertKeyValidationHandler : IValidationHandler
                 "An upsert-key validation rule must specify a field.");
         }
 
-        if (row.Values.TryGetValue(rule.Field, out var value)
-            && ValidationValuePresence.IsPresent(value))
+        if (HasValue(row, rule.Field))
         {
             return ValidationResult.Valid(row);
         }
@@ -33,4 +32,8 @@ public sealed class UpsertKeyValidationHandler : IValidationHandler
             row,
             new ValidationError(rule.Field, message));
     }
+
+    internal static bool HasValue(DataRow row, string field) =>
+        row.Values.TryGetValue(field, out var value)
+        && ValidationValuePresence.IsPresent(value);
 }

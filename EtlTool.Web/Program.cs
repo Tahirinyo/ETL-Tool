@@ -6,6 +6,7 @@ using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
@@ -69,6 +70,7 @@ builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
+builder.Services.AddSingleton<IDataLoader, MongoBulkUpsertLoader>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
@@ -121,6 +123,7 @@ builder.Services.AddScoped<IPipelineService, PipelineService>();
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
 builder.Services.AddScoped<IPreviewService, PreviewService>();
 builder.Services.AddScoped<IBatchOrchestrator, BatchOrchestrator>();
+builder.Services.AddScoped<IBackgroundJobExecutor, EtlRunBackgroundJobExecutor>();
 
 var app = builder.Build();
 

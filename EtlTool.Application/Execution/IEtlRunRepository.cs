@@ -27,6 +27,7 @@ public interface IEtlRunRepository
         Guid runId,
         EtlRunStatus status,
         DateTimeOffset completedAt,
+        BatchExecutionProgress? finalProgress,
         string? systemError,
         CancellationToken cancellationToken);
 }
