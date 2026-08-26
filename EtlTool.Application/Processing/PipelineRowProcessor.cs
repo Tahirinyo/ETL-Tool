@@ -120,6 +120,7 @@ public sealed class PipelineRowProcessingSession
             var failedRule = transformation.FailedRule!;
             var failure = transformation.Failure!;
             return RowProcessingResult.Invalid(
+                sourceRow,
                 transformation.Row,
                 [
                     new RowProcessingError(
@@ -134,12 +135,12 @@ public sealed class PipelineRowProcessingSession
         var transformed = transformation.Result!;
         if (transformed.IsFiltered)
         {
-            return RowProcessingResult.Filtered(transformed.Row);
+            return RowProcessingResult.Filtered(sourceRow, transformed.Row);
         }
 
         if (transformed.IsDuplicate)
         {
-            return RowProcessingResult.Duplicate(transformed.Row);
+            return RowProcessingResult.Duplicate(sourceRow, transformed.Row);
         }
 
         var validation = _validationEngine.Validate(
@@ -152,6 +153,7 @@ public sealed class PipelineRowProcessingSession
                 _upsertKeyField))
         {
             return RowProcessingResult.Invalid(
+                sourceRow,
                 validation.Row,
                 [
                     new RowProcessingError(
@@ -171,6 +173,7 @@ public sealed class PipelineRowProcessingSession
             catch (InvalidOperationException exception)
             {
                 return RowProcessingResult.Invalid(
+                    sourceRow,
                     validation.Row,
                     [
                         new RowProcessingError(
@@ -182,7 +185,7 @@ public sealed class PipelineRowProcessingSession
 
             if (_seenUpsertKeys.Contains(upsertKey))
             {
-                return RowProcessingResult.Duplicate(validation.Row);
+                return RowProcessingResult.Duplicate(sourceRow, validation.Row);
             }
 
             transformation.CommitDeduplication();
@@ -192,7 +195,7 @@ public sealed class PipelineRowProcessingSession
                     "The execution-scoped upsert key changed while the current row was being processed.");
             }
 
-            return RowProcessingResult.Valid(validation.Row);
+            return RowProcessingResult.Valid(sourceRow, validation.Row);
         }
 
         var errors = validation.Errors
@@ -202,6 +205,6 @@ public sealed class PipelineRowProcessingSession
                 error.Message))
             .ToArray();
 
-        return RowProcessingResult.Invalid(validation.Row, errors);
+        return RowProcessingResult.Invalid(sourceRow, validation.Row, errors);
     }
 }

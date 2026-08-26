@@ -6,13 +6,16 @@ namespace EtlTool.Application.Processing;
 public sealed class RowProcessingResult
 {
     private RowProcessingResult(
+        DataRow originalRow,
         DataRow row,
         RowProcessingStatus status,
         IReadOnlyList<RowProcessingError> errors)
     {
+        ArgumentNullException.ThrowIfNull(originalRow);
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(errors);
 
+        OriginalRow = originalRow;
         Row = row;
         Status = status;
         var copiedErrors = errors.ToArray();
@@ -26,16 +29,22 @@ public sealed class RowProcessingResult
         Errors = new ReadOnlyCollection<RowProcessingError>(copiedErrors);
     }
 
+    /// <summary>
+    /// Gets the unmodified row supplied by the extractor before mapping and transformation.
+    /// </summary>
+    public DataRow OriginalRow { get; }
+
     public DataRow Row { get; }
 
     public RowProcessingStatus Status { get; }
 
     public IReadOnlyList<RowProcessingError> Errors { get; }
 
-    internal static RowProcessingResult Valid(DataRow row) =>
-        new(row, RowProcessingStatus.Valid, []);
+    internal static RowProcessingResult Valid(DataRow originalRow, DataRow row) =>
+        new(originalRow, row, RowProcessingStatus.Valid, []);
 
     internal static RowProcessingResult Invalid(
+        DataRow originalRow,
         DataRow row,
         IReadOnlyList<RowProcessingError> errors)
     {
@@ -46,12 +55,12 @@ public sealed class RowProcessingResult
                 nameof(errors));
         }
 
-        return new RowProcessingResult(row, RowProcessingStatus.Invalid, errors);
+        return new RowProcessingResult(originalRow, row, RowProcessingStatus.Invalid, errors);
     }
 
-    internal static RowProcessingResult Filtered(DataRow row) =>
-        new(row, RowProcessingStatus.Filtered, []);
+    internal static RowProcessingResult Filtered(DataRow originalRow, DataRow row) =>
+        new(originalRow, row, RowProcessingStatus.Filtered, []);
 
-    internal static RowProcessingResult Duplicate(DataRow row) =>
-        new(row, RowProcessingStatus.Duplicate, []);
+    internal static RowProcessingResult Duplicate(DataRow originalRow, DataRow row) =>
+        new(originalRow, row, RowProcessingStatus.Duplicate, []);
 }

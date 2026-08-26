@@ -2,6 +2,7 @@ using EtlTool.Application.Execution;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 
@@ -15,20 +16,25 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     private readonly IDataLoader _loader;
     private readonly TimeProvider _timeProvider;
     private readonly IRunSourceStreamFactory _sourceStreamFactory;
+    private readonly IErrorReportWriter _errorReportWriter;
+    private readonly IErrorReportOutputStreamFactory _errorReportOutputFactory;
 
     public EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
         IPipelineDefinitionRepository pipelineRepository,
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IErrorReportWriter errorReportWriter)
         : this(
             runRepository,
             pipelineRepository,
             orchestrator,
             loader,
             timeProvider,
-            new RunSourceStreamFactory())
+            new RunSourceStreamFactory(),
+            errorReportWriter,
+            new TransientErrorReportOutputStreamFactory())
     {
     }
 
@@ -38,7 +44,9 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
-        IRunSourceStreamFactory sourceStreamFactory)
+        IRunSourceStreamFactory sourceStreamFactory,
+        IErrorReportWriter errorReportWriter,
+        IErrorReportOutputStreamFactory errorReportOutputFactory)
     {
         ArgumentNullException.ThrowIfNull(runRepository);
         ArgumentNullException.ThrowIfNull(pipelineRepository);
@@ -46,6 +54,8 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         ArgumentNullException.ThrowIfNull(loader);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(sourceStreamFactory);
+        ArgumentNullException.ThrowIfNull(errorReportWriter);
+        ArgumentNullException.ThrowIfNull(errorReportOutputFactory);
 
         _runRepository = runRepository;
         _pipelineRepository = pipelineRepository;
@@ -53,6 +63,8 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         _loader = loader;
         _timeProvider = timeProvider;
         _sourceStreamFactory = sourceStreamFactory;
+        _errorReportWriter = errorReportWriter;
+        _errorReportOutputFactory = errorReportOutputFactory;
     }
 
     public async Task ExecuteAsync(
@@ -91,6 +103,12 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
             var target = new MongoTarget(
                 pipeline.DestinationDatabase,
                 pipeline.DestinationCollection);
+            await using var errorReportSession = new InvalidRowReportSession(
+                _errorReportWriter,
+                _errorReportOutputFactory,
+                run,
+                pipeline.ExpectedSchema.Select(field => field.Name).ToArray(),
+                cancellationToken);
 
             _ = await _orchestrator.ExecuteWithLoadResultAsync(
                 source,
@@ -100,6 +118,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     target,
                     pipeline.UpsertKeyField,
                     token),
+                errorReportSession.ReportAsync,
                 async (progress, token) =>
                 {
                     latestProgress = progress;
@@ -112,6 +131,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                     }
                 },
                 cancellationToken).ConfigureAwait(false);
+            await errorReportSession.CompleteAsync().ConfigureAwait(false);
 
             if (latestProgress is null)
             {
@@ -230,6 +250,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         MongoTargetAccessException => "The MongoDB target is not accessible.",
         IOException => "The ETL source file could not be read.",
         UnauthorizedAccessException => "The ETL source file could not be accessed.",
+        ErrorReportGenerationException => "Error report generation failed.",
         _ => "ETL execution failed."
     };
 }

@@ -2,9 +2,13 @@ using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Processing;
+using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Execution;
+using EtlTool.Infrastructure.Reporting;
 
 namespace EtlTool.IntegrationTests.Execution;
 
@@ -25,13 +29,14 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal(0, harness.Runs.TerminalProgress.UpdatedRows);
         Assert.Null(harness.Runs.SystemError);
         Assert.Equal(1, harness.Runs.ProgressUpdates);
+        Assert.Equal(0, harness.Output.OpenCount);
     }
 
     [Fact]
     public async Task ExecuteAsync_FailureBeforeOrAfterConfirmedWorkUsesCorrectTerminalStatus()
     {
         var before = Harness();
-        before.Orchestrator.Execute = (_, _, _, _) =>
+        before.Orchestrator.Execute = (_, _, _, _, _) =>
             Task.FromException<BatchExecutionResult>(new InvalidOperationException("Before load."));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -42,7 +47,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         var after = Harness();
         after.Loader.Result = new BatchLoadResult(1, 0);
-        after.Orchestrator.Execute = async (load, report, _, token) =>
+        after.Orchestrator.Execute = async (load, _, report, _, token) =>
         {
             var loaded = await load([Row()], token);
             await report(Progress(1, 1, loaded.InsertedRows, loaded.UpdatedRows), token);
@@ -65,7 +70,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
             "Partial batch.",
             new BatchLoadResult(1, 0),
             new IOException("Simulated write failure."));
-        harness.Orchestrator.Execute = (_, _, _, _) =>
+        harness.Orchestrator.Execute = (_, _, _, _, _) =>
             Task.FromException<BatchExecutionResult>(
                 new BatchExecutionException(partialProgress, loadFailure));
 
@@ -99,7 +104,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         var harness = Harness();
         using var cancellation = new CancellationTokenSource();
         var progress = Progress(1, 1, insertedRows: 1, updatedRows: 0);
-        harness.Orchestrator.Execute = (_, _, _, token) =>
+        harness.Orchestrator.Execute = (_, _, _, _, token) =>
         {
             cancellation.Cancel();
             return Task.FromException<BatchExecutionResult>(
@@ -119,7 +124,137 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal("ETL execution was interrupted.", harness.Runs.SystemError);
     }
 
-    private static TestHarness Harness()
+    [Fact]
+    public async Task ExecuteAsync_StreamsInvalidFullRunResultsThroughCsvWriter()
+    {
+        var harness = Harness();
+        harness.Pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Name" },
+            new SourceFieldDefinition { Name = "Email" }
+        ];
+        harness.Orchestrator.Execute = async (_, reportInvalid, reportProgress, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            var progress = new BatchExecutionProgress(
+                processedRows: 1,
+                validRows: 0,
+                invalidRows: 1,
+                filteredRows: 0,
+                deduplicatedRows: 0,
+                isCompleted: true);
+            await reportProgress(progress, token);
+            return new BatchExecutionResult(1, 0, 1, 0, 0);
+        };
+
+        await harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            CancellationToken.None);
+
+        Assert.Equal(1, harness.Output.OpenCount);
+        var csv = System.Text.Encoding.UTF8.GetString(harness.Output.LastStream!.ToArray());
+        Assert.Contains("RunId,SourceRowNumber,ErrorStage,ErrorField", csv);
+        Assert.Contains("Name is required.", csv);
+        Assert.Contains("Email is invalid.", csv);
+        Assert.Contains("Ada", csv);
+        Assert.Equal(EtlRunStatus.Completed, harness.Runs.TerminalStatus);
+        Assert.Equal(1, harness.Runs.TerminalProgress!.InvalidRows);
+    }
+
+    [Theory]
+    [InlineData(false, EtlRunStatus.Failed)]
+    [InlineData(true, EtlRunStatus.PartiallyCompleted)]
+    public async Task ExecuteAsync_ReportFailureUsesConfirmedWorkForTerminalStatus(
+        bool commitBeforeFailure,
+        EtlRunStatus expectedStatus)
+    {
+        var harness = Harness(new FailingErrorReportWriter());
+        harness.Pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Name" },
+            new SourceFieldDefinition { Name = "Email" }
+        ];
+        harness.Loader.Result = new BatchLoadResult(1, 0);
+        harness.Orchestrator.Execute = async (load, reportInvalid, reportProgress, _, token) =>
+        {
+            if (commitBeforeFailure)
+            {
+                var loaded = await load([Row()], token);
+                await reportProgress(
+                    Progress(1, 1, loaded.InsertedRows, loaded.UpdatedRows),
+                    token);
+            }
+
+            await reportInvalid(InvalidResult(), token);
+            throw new InvalidOperationException("The reporting callback unexpectedly returned.");
+        };
+
+        await Assert.ThrowsAsync<ErrorReportGenerationException>(() =>
+            harness.Executor.ExecuteAsync(
+                new BackgroundJob(harness.Run.Id),
+                CancellationToken.None));
+
+        Assert.Equal(expectedStatus, harness.Runs.TerminalStatus);
+        Assert.Equal("Error report generation failed.", harness.Runs.SystemError);
+        Assert.Equal(commitBeforeFailure ? 1 : 0, harness.Runs.TerminalProgress?.InsertedRows ?? 0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AwaitsCsvConsumerBackpressureBeforeContinuingRun()
+    {
+        var writer = new BlockingErrorReportWriter();
+        var harness = Harness(writer);
+        harness.Pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name" }];
+        var callbackReturned = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Orchestrator.Execute = async (_, reportInvalid, reportProgress, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            callbackReturned.SetResult(true);
+            var progress = new BatchExecutionProgress(1, 0, 1, 0, 0, isCompleted: true);
+            await reportProgress(progress, token);
+            return new BatchExecutionResult(1, 0, 1, 0, 0);
+        };
+
+        var execution = harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            CancellationToken.None);
+
+        await writer.RowObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(callbackReturned.Task.IsCompleted);
+        Assert.False(execution.IsCompleted);
+        writer.Release.SetResult(true);
+        await execution;
+
+        Assert.True(callbackReturned.Task.IsCompletedSuccessfully);
+        Assert.Equal(EtlRunStatus.Completed, harness.Runs.TerminalStatus);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CancellationDuringReportConsumptionMarksRunInterrupted()
+    {
+        var writer = new BlockingErrorReportWriter();
+        var harness = Harness(writer);
+        harness.Pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name" }];
+        harness.Orchestrator.Execute = async (_, reportInvalid, _, _, token) =>
+        {
+            await reportInvalid(InvalidResult(), token);
+            throw new InvalidOperationException("The reporting callback unexpectedly returned.");
+        };
+        using var cancellation = new CancellationTokenSource();
+        var execution = harness.Executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            cancellation.Token);
+
+        await writer.RowObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        Assert.Equal(EtlRunStatus.Interrupted, harness.Runs.TerminalStatus);
+        Assert.Equal("ETL execution was interrupted.", harness.Runs.SystemError);
+    }
+
+    private static TestHarness Harness(IErrorReportWriter? errorReportWriter = null)
     {
         var run = new EtlRun
         {
@@ -133,14 +268,17 @@ public sealed class EtlRunBackgroundJobExecutorTests
         var pipelines = new StubPipelineRepository(pipeline);
         var orchestrator = new StubOrchestrator();
         var loader = new StubLoader();
+        var output = new RecordingOutputFactory();
         var executor = new EtlRunBackgroundJobExecutor(
             runs,
             pipelines,
             orchestrator,
             loader,
             new FixedTimeProvider(),
-            new MemorySourceFactory());
-        return new TestHarness(run, runs, orchestrator, loader, executor);
+            new MemorySourceFactory(),
+            errorReportWriter ?? new CsvErrorReportWriter(),
+            output);
+        return new TestHarness(run, pipeline, runs, orchestrator, loader, output, executor);
     }
 
     private static BatchExecutionProgress Progress(
@@ -164,11 +302,34 @@ public sealed class EtlRunBackgroundJobExecutorTests
         return row;
     }
 
+    private static RowProcessingResult InvalidResult()
+    {
+        var original = new DataRow { SourceRowNumber = 3 };
+        original.Values.Add("Name", "Ada");
+        original.Values.Add("Email", "invalid");
+        var processed = new DataRow { SourceRowNumber = 3 };
+        return RowProcessingResult.Invalid(
+            original,
+            processed,
+            [
+                new RowProcessingError(
+                    RowProcessingErrorStage.Validation,
+                    "Name",
+                    "Name is required."),
+                new RowProcessingError(
+                    RowProcessingErrorStage.Validation,
+                    "Email",
+                    "Email is invalid.")
+            ]);
+    }
+
     private sealed record TestHarness(
         EtlRun Run,
+        PipelineDefinition Pipeline,
         StubRunRepository Runs,
         StubOrchestrator Orchestrator,
         StubLoader Loader,
+        RecordingOutputFactory Output,
         EtlRunBackgroundJobExecutor Executor);
 
     private sealed class StubRunRepository(EtlRun run) : IEtlRunRepository
@@ -245,6 +406,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
     {
         public Func<
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>>,
+            Func<RowProcessingResult, CancellationToken, Task>,
             Func<BatchExecutionProgress, CancellationToken, Task>,
             Stream,
             CancellationToken,
@@ -263,10 +425,30 @@ public sealed class EtlRunBackgroundJobExecutorTests
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
             Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
             CancellationToken cancellationToken) =>
-            Execute(processBatchAsync, reportProgressAsync, source, cancellationToken);
+            Execute(
+                processBatchAsync,
+                static (_, _) => Task.CompletedTask,
+                reportProgressAsync,
+                source,
+                cancellationToken);
+
+        public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
+            Stream source,
+            PipelineDefinition pipeline,
+            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+            Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
+            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+            CancellationToken cancellationToken) =>
+            Execute(
+                processBatchAsync,
+                reportInvalidRowAsync,
+                reportProgressAsync,
+                source,
+                cancellationToken);
 
         private static async Task<BatchExecutionResult> DefaultExecute(
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> load,
+            Func<RowProcessingResult, CancellationToken, Task> reportInvalid,
             Func<BatchExecutionProgress, CancellationToken, Task> report,
             Stream source,
             CancellationToken cancellationToken)
@@ -292,6 +474,54 @@ public sealed class EtlRunBackgroundJobExecutorTests
     private sealed class MemorySourceFactory : IRunSourceStreamFactory
     {
         public Stream Open(EtlRun run) => new MemoryStream([1]);
+    }
+
+    private sealed class RecordingOutputFactory : IErrorReportOutputStreamFactory
+    {
+        public int OpenCount { get; private set; }
+
+        public MemoryStream? LastStream { get; private set; }
+
+        public Stream Open(EtlRun run)
+        {
+            OpenCount++;
+            LastStream = new MemoryStream();
+            return LastStream;
+        }
+    }
+
+    private sealed class FailingErrorReportWriter : IErrorReportWriter
+    {
+        public Task WriteAsync(
+            Stream output,
+            Guid runId,
+            IReadOnlyList<string> sourceFields,
+            IAsyncEnumerable<RowProcessingResult> rowResults,
+            CancellationToken cancellationToken) =>
+            Task.FromException(new IOException("Simulated error-report failure."));
+    }
+
+    private sealed class BlockingErrorReportWriter : IErrorReportWriter
+    {
+        public TaskCompletionSource<bool> RowObserved { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> Release { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(
+            Stream output,
+            Guid runId,
+            IReadOnlyList<string> sourceFields,
+            IAsyncEnumerable<RowProcessingResult> rowResults,
+            CancellationToken cancellationToken)
+        {
+            await foreach (var _ in rowResults.WithCancellation(cancellationToken))
+            {
+                RowObserved.TrySetResult(true);
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+        }
     }
 
     private sealed class FixedTimeProvider : TimeProvider

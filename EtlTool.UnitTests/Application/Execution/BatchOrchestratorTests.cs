@@ -432,6 +432,7 @@ public sealed class BatchOrchestratorTests
             Row(8, ("Kind", "keep"), ("Id", "D"), ("Value", "not-a-number"))
         };
         var batches = new List<IReadOnlyList<DataRow>>();
+        var invalidResults = new List<RowProcessingResult>();
         var progress = new List<BatchExecutionProgress>();
         var orchestrator = Orchestrator(
             new SequenceExtractor(rows),
@@ -446,12 +447,17 @@ public sealed class BatchOrchestratorTests
             validations: [new RequiredValidationHandler()]);
         await using var source = new MemoryStream([1]);
 
-        var result = await orchestrator.ExecuteAsync(
+        var result = await orchestrator.ExecuteWithLoadResultAsync(
             source,
             pipeline,
             (batch, _) =>
             {
                 batches.Add(batch);
+                return Task.FromResult(BatchLoadResult.Empty);
+            },
+            (invalidResult, _) =>
+            {
+                invalidResults.Add(invalidResult);
                 return Task.CompletedTask;
             },
             (snapshot, _) =>
@@ -469,6 +475,10 @@ public sealed class BatchOrchestratorTests
         Assert.Equal(2, result.InvalidRows);
         Assert.Equal(1, result.FilteredRows);
         Assert.Equal(2, result.DeduplicatedRows);
+        Assert.Equal([3L, 8L], invalidResults.Select(item => item.OriginalRow.SourceRowNumber));
+        Assert.Equal(
+            [RowProcessingErrorStage.Validation, RowProcessingErrorStage.Transformation],
+            invalidResults.Select(item => Assert.Single(item.Errors).Stage));
         Assert.Equal(
             result.ProcessedRows,
             result.ValidRows + result.InvalidRows + result.FilteredRows + result.DeduplicatedRows);
@@ -492,6 +502,122 @@ public sealed class BatchOrchestratorTests
         Assert.Equal(result.InvalidRows, completion.InvalidRows);
         Assert.Equal(result.FilteredRows, completion.FilteredRows);
         Assert.Equal(result.DeduplicatedRows, completion.DeduplicatedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_ReportsOneInvalidResultWithAllValidationErrors()
+    {
+        var pipeline = ReadyPipeline("Id", "Name", "Email");
+        pipeline.FieldMappings =
+        [
+            Mapping("Id", "id"),
+            Mapping("Name", "name"),
+            Mapping("Email", "email")
+        ];
+        pipeline.UpsertKeyField = "id";
+        pipeline.ValidationRules =
+        [
+            new ValidationRule { Type = ValidationType.Required, Field = "name" },
+            new ValidationRule { Type = ValidationType.EmailFormat, Field = "email" }
+        ];
+        var reported = new List<RowProcessingResult>();
+        await using var source = new MemoryStream([1]);
+
+        var result = await Orchestrator(
+                new SequenceExtractor(
+                [
+                    Row(2, ("Id", "A"), ("Name", " "), ("Email", "invalid"))
+                ]),
+                validations: [new RequiredValidationHandler(), new EmailValidationHandler()])
+            .ExecuteWithLoadResultAsync(
+                source,
+                pipeline,
+                (_, _) => Task.FromResult(BatchLoadResult.Empty),
+                (invalidResult, _) =>
+                {
+                    reported.Add(invalidResult);
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None);
+
+        var invalid = Assert.Single(reported);
+        Assert.Equal(["name", "email"], invalid.Errors.Select(error => error.Field));
+        Assert.Equal(1, result.InvalidRows);
+        Assert.Equal(0, result.ValidRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_AwaitsInvalidSinkAndStopsAfterItsFailure()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var extractor = new SequenceExtractor(
+        [
+            Row(2, ("Id", null)),
+            Row(3, ("Id", null))
+        ]);
+        var callbackStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("Error report output failed.");
+        await using var source = new MemoryStream([1]);
+
+        var execution = Orchestrator(extractor).ExecuteWithLoadResultAsync(
+            source,
+            pipeline,
+            (_, _) => Task.FromResult(BatchLoadResult.Empty),
+            async (_, cancellationToken) =>
+            {
+                callbackStarted.SetResult(true);
+                await releaseCallback.Task.WaitAsync(cancellationToken);
+                throw failure;
+            },
+            IgnoreProgress,
+            CancellationToken.None);
+
+        await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, extractor.YieldedRows);
+        Assert.False(execution.IsCompleted);
+        releaseCallback.SetResult(true);
+
+        var actual = await Assert.ThrowsAsync<IOException>(() => execution);
+        Assert.Same(failure, actual);
+        Assert.Equal(1, extractor.YieldedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_PropagatesCancellationThroughInvalidSink()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var extractor = new SequenceExtractor([Row(2, ("Id", null)), Row(3, ("Id", null))]);
+        var callbackStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        await using var source = new MemoryStream([1]);
+
+        var execution = Orchestrator(extractor).ExecuteWithLoadResultAsync(
+            source,
+            pipeline,
+            (_, _) => Task.FromResult(BatchLoadResult.Empty),
+            async (_, cancellationToken) =>
+            {
+                callbackStarted.SetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            IgnoreProgress,
+            cancellation.Token);
+
+        await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        var exception = await Assert.ThrowsAsync<BatchExecutionCanceledException>(() => execution);
+        Assert.Equal(1, exception.ConfirmedProgress.InvalidRows);
+        Assert.Equal(1, extractor.YieldedRows);
     }
 
     [Fact]

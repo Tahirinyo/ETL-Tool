@@ -74,6 +74,7 @@ public sealed class PipelineRowProcessorTests
         var result = session.Process(source);
 
         Assert.Equal(RowProcessingStatus.Valid, result.Status);
+        Assert.Same(source, result.OriginalRow);
         Assert.Equal("Unknown", result.Row.Values["value"]);
         Assert.Equal("   ", source.Values["Raw"]);
     }
@@ -379,9 +380,11 @@ public sealed class PipelineRowProcessorTests
                 [new RequiredValidationHandler(), new EmailValidationHandler()])
             .CreateSession(pipeline);
 
-        var result = session.Process(Row(2, ("Name", " "), ("Email", "invalid")));
+        var source = Row(2, ("Name", " "), ("Email", "invalid"));
+        var result = session.Process(source);
 
         Assert.Equal(RowProcessingStatus.Invalid, result.Status);
+        Assert.Same(source, result.OriginalRow);
         Assert.Equal(2, result.Errors.Count);
         Assert.All(result.Errors, error =>
             Assert.Equal(RowProcessingErrorStage.Validation, error.Stage));

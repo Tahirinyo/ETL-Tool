@@ -58,16 +58,32 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             cancellationToken);
     }
 
+    public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
+        Stream source,
+        PipelineDefinition pipeline,
+        Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+        CancellationToken cancellationToken) =>
+        ExecuteWithLoadResultAsync(
+            source,
+            pipeline,
+            processBatchAsync,
+            static (_, _) => Task.CompletedTask,
+            reportProgressAsync,
+            cancellationToken);
+
     public async Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
         Stream source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+        Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
         Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(pipeline);
         ArgumentNullException.ThrowIfNull(processBatchAsync);
+        ArgumentNullException.ThrowIfNull(reportInvalidRowAsync);
         ArgumentNullException.ThrowIfNull(reportProgressAsync);
 
         if (!source.CanRead)
@@ -151,6 +167,8 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
                         break;
                     case RowProcessingStatus.Invalid:
                         invalidRows++;
+                        await reportInvalidRowAsync(result, cancellationToken).ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
                         break;
                     case RowProcessingStatus.Filtered:
                         filteredRows++;

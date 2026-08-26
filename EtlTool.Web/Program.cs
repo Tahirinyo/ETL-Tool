@@ -1,6 +1,7 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Processing;
+using EtlTool.Application.Reporting;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
@@ -14,6 +15,7 @@ using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
+using EtlTool.Infrastructure.Reporting;
 using EtlTool.Infrastructure.Uploads;
 using EtlTool.Web.Services;
 
@@ -71,6 +73,7 @@ builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessServic
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton<IDataLoader, MongoBulkUpsertLoader>();
+builder.Services.AddSingleton<IErrorReportWriter, CsvErrorReportWriter>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton(uploadValidationOptions);
