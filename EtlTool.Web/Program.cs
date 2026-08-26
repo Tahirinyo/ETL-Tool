@@ -6,6 +6,7 @@ using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Infrastructure.Extraction;
@@ -65,6 +66,7 @@ backgroundJobQueueOptions.Validate();
 
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
+builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton(uploadStorageOptions);

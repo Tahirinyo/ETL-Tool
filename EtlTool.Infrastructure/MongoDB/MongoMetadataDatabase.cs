@@ -5,6 +5,7 @@ namespace EtlTool.Infrastructure.MongoDB;
 
 public sealed class MongoMetadataDatabase
 {
+    private readonly IMongoClient _client;
     private readonly IMongoDatabase _database;
 
     public MongoMetadataDatabase(MongoDbOptions options)
@@ -13,8 +14,8 @@ public sealed class MongoMetadataDatabase
         options.Validate();
         MongoBsonMappings.Register();
 
-        var client = new MongoClient(options.ConnectionString);
-        _database = client.GetDatabase(options.MetadataDatabaseName);
+        _client = new MongoClient(options.ConnectionString);
+        _database = _client.GetDatabase(options.MetadataDatabaseName);
     }
 
     internal IMongoCollection<PipelineDefinition> PipelineDefinitions =>
@@ -23,4 +24,7 @@ public sealed class MongoMetadataDatabase
 
     internal IMongoCollection<EtlRun> EtlRuns =>
         _database.GetCollection<EtlRun>(MongoMetadataCollectionNames.EtlRuns);
+
+    internal IMongoDatabase GetDatabase(string databaseName) =>
+        _client.GetDatabase(databaseName);
 }

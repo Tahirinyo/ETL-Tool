@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Processing;
@@ -308,7 +309,10 @@ public sealed class PreviewServiceTests
         IFileExtractorResolver resolver,
         PipelineRowProcessor processor) => new(
             resolver,
-            new PipelineReadinessService(new NullRepository(), new FieldMappingService()),
+            new PipelineReadinessService(
+                new NullRepository(),
+                new FieldMappingService(),
+                AllowedTargetAccessService.Instance),
             processor);
 
     private static PipelineRowProcessor Processor(
@@ -536,5 +540,16 @@ public sealed class PreviewServiceTests
 
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public static AllowedTargetAccessService Instance { get; } = new();
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }

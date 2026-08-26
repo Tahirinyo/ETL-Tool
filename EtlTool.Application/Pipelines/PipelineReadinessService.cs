@@ -1,5 +1,6 @@
 using System.Globalization;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
@@ -19,16 +20,20 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
 
     private readonly IPipelineDefinitionRepository _repository;
     private readonly FieldMappingService _fieldMappingService;
+    private readonly IMongoTargetAccessService _targetAccessService;
 
     public PipelineReadinessService(
         IPipelineDefinitionRepository repository,
-        FieldMappingService fieldMappingService)
+        FieldMappingService fieldMappingService,
+        IMongoTargetAccessService targetAccessService)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(fieldMappingService);
+        ArgumentNullException.ThrowIfNull(targetAccessService);
 
         _repository = repository;
         _fieldMappingService = fieldMappingService;
+        _targetAccessService = targetAccessService;
     }
 
     public async Task<PipelineReadinessResult?> EvaluateAsync(
@@ -385,20 +390,36 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         }
     }
 
-    private static void EvaluateDestination(
+    private void EvaluateDestination(
         PipelineDefinition pipeline,
         List<PipelineReadinessProblem> problems)
     {
-        if (string.IsNullOrWhiteSpace(pipeline.DestinationDatabase))
+        var hasDatabase = !string.IsNullOrWhiteSpace(pipeline.DestinationDatabase);
+        var hasCollection = !string.IsNullOrWhiteSpace(pipeline.DestinationCollection);
+
+        if (!hasDatabase)
         {
             AddProblem(problems, DestinationComponent,
                 "The destination database must be configured.");
         }
 
-        if (string.IsNullOrWhiteSpace(pipeline.DestinationCollection))
+        if (!hasCollection)
         {
             AddProblem(problems, DestinationComponent,
                 "The destination collection must be configured.");
+        }
+
+        if (!hasDatabase || !hasCollection)
+        {
+            return;
+        }
+
+        var validation = _targetAccessService.Validate(new MongoTarget(
+            pipeline.DestinationDatabase,
+            pipeline.DestinationCollection));
+        if (!validation.IsAllowed)
+        {
+            AddProblem(problems, DestinationComponent, validation.FailureMessage!);
         }
     }
 

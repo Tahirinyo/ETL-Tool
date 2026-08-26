@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
@@ -16,7 +17,8 @@ public sealed class PipelineReadinessServiceTests
         var pipeline = ReadyPipeline();
         var service = new PipelineReadinessService(
             new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
-            new FieldMappingService());
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
 
         var result = service.Evaluate(pipeline);
 
@@ -336,6 +338,24 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Theory]
+    [InlineData("The configured destination database cannot be used as an ETL target.")]
+    [InlineData("The configured MongoDB destination name is not valid.")]
+    public void Evaluate_ReportsTargetPolicyRejectionAsDestinationConfigurationFailure(
+        string rejectionMessage)
+    {
+        var pipeline = ReadyPipeline();
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            new RejectedTargetAccessService(rejectionMessage));
+
+        var result = service.Evaluate(pipeline);
+
+        var problem = Assert.Single(result.Problems, problem => problem.Component == "Destination");
+        Assert.Equal(rejectionMessage, problem.Message);
+    }
+
+    [Theory]
     [InlineData("yyyy'")]
     [InlineData("yyyy%")]
     [InlineData("yyyy-MM-ddz")]
@@ -473,11 +493,11 @@ public sealed class PipelineReadinessServiceTests
     {
         var cancelled = new Repository(_ => Task.FromCanceled<PipelineDefinition?>(new CancellationToken(canceled: true)));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            new PipelineReadinessService(cancelled, new FieldMappingService()).EvaluateAsync(Guid.NewGuid(), CancellationToken.None));
+            new PipelineReadinessService(cancelled, new FieldMappingService(), AllowedTargetAccessService.Instance).EvaluateAsync(Guid.NewGuid(), CancellationToken.None));
 
         var failing = new Repository(_ => Task.FromException<PipelineDefinition?>(new InvalidOperationException("Repository unavailable.")));
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new PipelineReadinessService(failing, new FieldMappingService()).EvaluateAsync(Guid.NewGuid(), CancellationToken.None));
+            new PipelineReadinessService(failing, new FieldMappingService(), AllowedTargetAccessService.Instance).EvaluateAsync(Guid.NewGuid(), CancellationToken.None));
         Assert.Equal("Repository unavailable.", exception.Message);
     }
 
@@ -602,14 +622,16 @@ public sealed class PipelineReadinessServiceTests
         var id = pipeline?.Id ?? Guid.NewGuid();
         return await new PipelineReadinessService(
             new Repository(requestedId => Task.FromResult(requestedId == id ? pipeline : null)),
-            new FieldMappingService()).EvaluateAsync(id, CancellationToken.None);
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance).EvaluateAsync(id, CancellationToken.None);
     }
 
     private static async Task<PipelineReadinessResult?> EvaluateAsync(Guid id)
     {
         return await new PipelineReadinessService(
             new Repository(_ => Task.FromResult<PipelineDefinition?>(null)),
-            new FieldMappingService()).EvaluateAsync(id, CancellationToken.None);
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance).EvaluateAsync(id, CancellationToken.None);
     }
 
     private static PipelineDefinition ReadyPipeline() => new()
@@ -649,5 +671,25 @@ public sealed class PipelineReadinessServiceTests
         public Task<bool> UpdateAsync(PipelineDefinition pipeline, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public static AllowedTargetAccessService Instance { get; } = new();
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RejectedTargetAccessService(string rejectionMessage) : IMongoTargetAccessService
+    {
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Rejected(rejectionMessage);
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

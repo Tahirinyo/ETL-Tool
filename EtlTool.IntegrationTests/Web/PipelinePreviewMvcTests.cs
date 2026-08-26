@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Processing;
@@ -172,6 +173,7 @@ public sealed class PipelinePreviewMvcTests
             builder.Services.AddSingleton<IWizardSourceStore>(new MemoryWizardSourceStore(source));
             builder.Services.AddSingleton<PipelineSourceCommitCoordinator>();
             builder.Services.AddSingleton<FieldMappingService>();
+            builder.Services.AddSingleton<IMongoTargetAccessService, AllowedTargetAccessService>();
             builder.Services.AddSingleton<IPipelineReadinessService, PipelineReadinessService>();
             builder.Services.AddSingleton<CsvFileExtractor>();
             builder.Services.AddSingleton<XlsxFileExtractor>();
@@ -277,5 +279,14 @@ public sealed class PipelinePreviewMvcTests
 
             public ValueTask DisposeAsync() => Content.DisposeAsync();
         }
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }

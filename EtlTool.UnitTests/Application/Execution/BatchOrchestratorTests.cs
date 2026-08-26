@@ -3,6 +3,7 @@ using System.Text.Json;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Transformations;
@@ -81,6 +82,61 @@ public sealed class BatchOrchestratorTests
         Assert.Equal(0, resolver.InvocationCount);
         Assert.Equal(0, extractor.EnumerationCount);
         Assert.Equal(0, callbackInvocations);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ClassifiesInvalidTargetAsReadinessFailureBeforeAccessProbeOrExtraction()
+    {
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        var resolver = new TrackingResolver(extractor);
+        var targetAccess = new RejectedTargetAccessService();
+        var orchestrator = Orchestrator(resolver, targetAccessService: targetAccess);
+        var callbackInvocations = 0;
+        await using var source = new MemoryStream([1]);
+
+        var exception = await Assert.ThrowsAsync<PipelineNotReadyException>(() =>
+            orchestrator.ExecuteAsync(
+                source,
+                ReadyPipeline(),
+                (_, _) =>
+                {
+                    callbackInvocations++;
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None));
+
+        var problem = Assert.Single(
+            exception.Problems,
+            problem => problem.Component == "Destination");
+        Assert.Equal("The configured MongoDB destination name is not valid.", problem.Message);
+        Assert.Equal(0, targetAccess.AccessProbeInvocationCount);
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, extractor.EnumerationCount);
+        Assert.Equal(0, callbackInvocations);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PropagatesTargetAccessFailureBeforeExtraction()
+    {
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        var resolver = new TrackingResolver(extractor);
+        var targetAccess = new FailingTargetAccessService();
+        var orchestrator = Orchestrator(resolver, targetAccessService: targetAccess);
+        await using var source = new MemoryStream([1]);
+
+        var exception = await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
+            orchestrator.ExecuteAsync(
+                source,
+                ReadyPipeline(),
+                IgnoreBatch,
+                IgnoreProgress,
+                CancellationToken.None));
+
+        Assert.Same(targetAccess.Failure, exception);
+        Assert.Equal(1, targetAccess.InvocationCount);
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, extractor.EnumerationCount);
     }
 
     [Theory]
@@ -738,27 +794,36 @@ public sealed class BatchOrchestratorTests
         IFileExtractor extractor,
         int batchSize = 1000,
         IEnumerable<ITransformationHandler>? transformations = null,
-        IEnumerable<IValidationHandler>? validations = null) =>
+        IEnumerable<IValidationHandler>? validations = null,
+        IMongoTargetAccessService? targetAccessService = null) =>
         Orchestrator(
             new TrackingResolver(extractor),
             batchSize,
             transformations,
-            validations);
+            validations,
+            targetAccessService);
 
     private static BatchOrchestrator Orchestrator(
         IFileExtractorResolver resolver,
         int batchSize = 1000,
         IEnumerable<ITransformationHandler>? transformations = null,
-        IEnumerable<IValidationHandler>? validations = null)
+        IEnumerable<IValidationHandler>? validations = null,
+        IMongoTargetAccessService? targetAccessService = null)
     {
         var mappingService = new FieldMappingService();
+        var resolvedTargetAccessService =
+            targetAccessService ?? AllowedTargetAccessService.Instance;
         return new BatchOrchestrator(
             resolver,
-            new PipelineReadinessService(new NullRepository(), mappingService),
+            new PipelineReadinessService(
+                new NullRepository(),
+                mappingService,
+                resolvedTargetAccessService),
             new PipelineRowProcessor(
                 mappingService,
                 new TransformationEngine(new TransformationHandlerRegistry(transformations ?? [])),
                 new ValidationEngine(new ValidationHandlerRegistry(validations ?? []))),
+            resolvedTargetAccessService,
             new BatchExecutionOptions { BatchSize = batchSize });
     }
 
@@ -892,5 +957,48 @@ public sealed class BatchOrchestratorTests
 
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public static AllowedTargetAccessService Instance { get; } = new();
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class FailingTargetAccessService : IMongoTargetAccessService
+    {
+        public MongoTargetAccessException Failure { get; } =
+            new();
+
+        public int InvocationCount { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            return Task.FromException(Failure);
+        }
+    }
+
+    private sealed class RejectedTargetAccessService : IMongoTargetAccessService
+    {
+        public int AccessProbeInvocationCount { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Rejected(
+                "The configured MongoDB destination name is not valid.");
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken)
+        {
+            AccessProbeInvocationCount++;
+            throw new InvalidOperationException("The access probe must not run for an invalid target.");
+        }
     }
 }

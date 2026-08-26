@@ -2,6 +2,7 @@ using System.Text;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Transformations;
@@ -44,6 +45,7 @@ public sealed class BatchOrchestratorIntegrationTests
         services.AddSingleton<ValidationHandlerRegistry>();
         services.AddSingleton<ValidationEngine>();
         services.AddSingleton<PipelineRowProcessor>();
+        services.AddSingleton<IMongoTargetAccessService, AllowedTargetAccessService>();
         services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
         services.AddScoped<IBatchOrchestrator, BatchOrchestrator>();
 
@@ -135,5 +137,14 @@ public sealed class BatchOrchestratorIntegrationTests
 
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }

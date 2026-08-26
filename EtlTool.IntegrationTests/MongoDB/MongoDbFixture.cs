@@ -79,6 +79,7 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
     {
         _fixture = fixture;
         DatabaseName = databaseName;
+        ConnectionString = connectionString;
         Client = new MongoClient(connectionString);
         Database = Client.GetDatabase(databaseName);
 
@@ -91,9 +92,16 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
 
         Repository = new MongoPipelineDefinitionRepository(metadataDatabase);
         EtlRunRepository = new MongoEtlRunRepository(metadataDatabase);
+        TargetAccessService = new MongoTargetAccessService(metadataDatabase, new MongoDbOptions
+        {
+            ConnectionString = connectionString,
+            MetadataDatabaseName = databaseName
+        });
     }
 
     public string DatabaseName { get; }
+
+    public string ConnectionString { get; }
 
     public MongoClient Client { get; }
 
@@ -102,6 +110,8 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
     public IPipelineDefinitionRepository Repository { get; }
 
     public IEtlRunRepository EtlRunRepository { get; }
+
+    public MongoTargetAccessService TargetAccessService { get; }
 
     public ValueTask DisposeAsync()
     {

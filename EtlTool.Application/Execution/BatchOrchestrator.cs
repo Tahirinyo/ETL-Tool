@@ -1,4 +1,5 @@
 using EtlTool.Application.Extraction;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Processing;
 using EtlTool.Domain.Entities;
@@ -10,17 +11,20 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
     private readonly IFileExtractorResolver _extractorResolver;
     private readonly IPipelineReadinessService _readinessService;
     private readonly PipelineRowProcessor _rowProcessor;
+    private readonly IMongoTargetAccessService _targetAccessService;
     private readonly int _batchSize;
 
     public BatchOrchestrator(
         IFileExtractorResolver extractorResolver,
         IPipelineReadinessService readinessService,
         PipelineRowProcessor rowProcessor,
+        IMongoTargetAccessService targetAccessService,
         BatchExecutionOptions options)
     {
         ArgumentNullException.ThrowIfNull(extractorResolver);
         ArgumentNullException.ThrowIfNull(readinessService);
         ArgumentNullException.ThrowIfNull(rowProcessor);
+        ArgumentNullException.ThrowIfNull(targetAccessService);
         ArgumentNullException.ThrowIfNull(options);
 
         options.Validate();
@@ -28,6 +32,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
         _extractorResolver = extractorResolver;
         _readinessService = readinessService;
         _rowProcessor = rowProcessor;
+        _targetAccessService = targetAccessService;
         _batchSize = options.BatchSize;
     }
 
@@ -55,6 +60,10 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
         {
             throw new PipelineNotReadyException(readiness.Problems);
         }
+
+        await _targetAccessService.EnsureAccessibleAsync(
+            new MongoTarget(pipeline.DestinationDatabase, pipeline.DestinationCollection),
+            cancellationToken).ConfigureAwait(false);
 
         var extractor = _extractorResolver.Resolve(pipeline.SourceType);
         var session = _rowProcessor.CreateSession(pipeline);
