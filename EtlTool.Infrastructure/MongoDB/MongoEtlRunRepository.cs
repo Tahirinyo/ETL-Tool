@@ -46,6 +46,18 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(
+        Guid pipelineId,
+        CancellationToken cancellationToken)
+    {
+        ValidateId(pipelineId);
+
+        return await _collection
+            .Find(run => run.PipelineId == pipelineId)
+            .SortByDescending(run => run.StartedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<bool> TryStartAsync(
         Guid runId,
         DateTimeOffset startedAt,

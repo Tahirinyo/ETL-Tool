@@ -1,0 +1,60 @@
+@model EtlTool.Web.Models.Runs.RunHistoryViewModel
+
+@{
+    ViewData["Title"] = "Run history";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="mb-1">Run history</h1>
+        <p class="text-muted mb-0">@Model.PipelineName</p>
+    </div>
+    <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+</div>
+
+@if (Model.Runs.Count == 0)
+{
+    <div class="alert alert-info" role="status">No runs have been recorded for this pipeline.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Status</th>
+                    <th scope="col">Started</th>
+                    <th scope="col">Completed</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Rows (total / processed)</th>
+                    <th scope="col">Valid</th>
+                    <th scope="col">Invalid</th>
+                    <th scope="col">Filtered</th>
+                    <th scope="col">Duplicate</th>
+                    <th scope="col">Inserted</th>
+                    <th scope="col">Updated</th>
+                    <th scope="col" class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var run in Model.Runs)
+                {
+                    <tr>
+                        <td>@run.Status</td>
+                        <td>@run.StartedAtDisplay</td>
+                        <td>@run.CompletedAtDisplay</td>
+                        <td>@run.DurationDisplay</td>
+                        <td>@run.TotalRows / @run.ProcessedRows</td>
+                        <td>@run.ValidRows</td>
+                        <td>@run.InvalidRows</td>
+                        <td>@run.FilteredRows</td>
+                        <td>@run.DeduplicatedRows</td>
+                        <td>@run.InsertedRows</td>
+                        <td>@run.UpdatedRows</td>
+                        <td class="text-end"><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-pipelineId="@Model.PipelineId" asp-route-runId="@run.Id">Details</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

@@ -457,6 +457,9 @@ public sealed class EtlRunBackgroundJobExecutorTests
         public Task<EtlRun?> GetByIdAsync(Guid runId, CancellationToken cancellationToken) =>
             Task.FromResult<EtlRun?>(runId == run.Id ? run : null);
 
+        public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid pipelineId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<EtlRun>>([]);
+
         public Task<bool> TryStartAsync(
             Guid runId,
             DateTimeOffset startedAt,

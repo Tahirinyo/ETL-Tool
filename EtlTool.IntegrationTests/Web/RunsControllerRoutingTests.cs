@@ -104,6 +104,9 @@ public sealed class RunsControllerRoutingTests
         public Task<EtlRun?> GetByIdAsync(Guid runId, CancellationToken cancellationToken) =>
             Task.FromResult<EtlRun?>(runId == run.Id ? run : null);
 
+        public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid pipelineId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<EtlRun>>([]);
+
         public Task AddAsync(EtlRun value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();

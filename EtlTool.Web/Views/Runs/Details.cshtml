@@ -1,0 +1,48 @@
+@model EtlTool.Web.Models.Runs.RunDetailsViewModel
+
+@{
+    ViewData["Title"] = "Run details";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h1 class="mb-1">Run details</h1>
+        <p class="text-muted mb-0">@Model.PipelineName</p>
+    </div>
+    <a class="btn btn-outline-secondary" asp-action="History" asp-route-pipelineId="@Model.PipelineId">Back to run history</a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <dl class="row mb-0">
+            <dt class="col-sm-3">Run ID</dt><dd class="col-sm-9">@Model.Id</dd>
+            <dt class="col-sm-3">Pipeline</dt><dd class="col-sm-9">@Model.PipelineName</dd>
+            <dt class="col-sm-3">Source file</dt><dd class="col-sm-9">@Model.OriginalFileName</dd>
+            <dt class="col-sm-3">Status</dt><dd class="col-sm-9">@Model.Status</dd>
+            <dt class="col-sm-3">Started</dt><dd class="col-sm-9">@Model.StartedAtDisplay</dd>
+            <dt class="col-sm-3">Completed</dt><dd class="col-sm-9">@Model.CompletedAtDisplay</dd>
+            <dt class="col-sm-3">Duration</dt><dd class="col-sm-9">@Model.DurationDisplay</dd>
+        </dl>
+    </div>
+</div>
+
+<div class="row row-cols-1 row-cols-md-2 row-cols-lg-4 g-3 mb-3">
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Total rows</div><div class="fs-4">@Model.TotalRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Processed rows</div><div class="fs-4">@Model.ProcessedRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Valid rows</div><div class="fs-4">@Model.ValidRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Invalid rows</div><div class="fs-4">@Model.InvalidRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Filtered rows</div><div class="fs-4">@Model.FilteredRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Duplicate rows</div><div class="fs-4">@Model.DeduplicatedRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Inserted rows</div><div class="fs-4">@Model.InsertedRows</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Updated rows</div><div class="fs-4">@Model.UpdatedRows</div></div></div></div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Model.SystemError))
+{
+    <div class="alert alert-danger" role="alert"><strong>System error:</strong> @Model.SystemError</div>
+}
+
+@if (Model.HasErrorReport)
+{
+    <a class="btn btn-outline-danger" asp-action="DownloadErrorReport" asp-route-runId="@Model.Id">Error CSV download</a>
+}

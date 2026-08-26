@@ -24,6 +24,29 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
     }
 
     [Fact]
+    public async Task ListByPipelineIdAsync_ReturnsOnlyMatchingRunsNewestFirst()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        var pipelineId = Guid.NewGuid();
+        var older = CreateRun();
+        older.PipelineId = pipelineId;
+        older.StartedAt = new DateTimeOffset(2026, 8, 24, 9, 0, 0, TimeSpan.Zero);
+        var newer = CreateRun();
+        newer.PipelineId = pipelineId;
+        newer.StartedAt = new DateTimeOffset(2026, 8, 25, 9, 0, 0, TimeSpan.Zero);
+        var unrelated = CreateRun();
+
+        await testDatabase.EtlRunRepository.AddAsync(older, CancellationToken.None);
+        await testDatabase.EtlRunRepository.AddAsync(unrelated, CancellationToken.None);
+        await testDatabase.EtlRunRepository.AddAsync(newer, CancellationToken.None);
+
+        var runs = await testDatabase.EtlRunRepository.ListByPipelineIdAsync(pipelineId, CancellationToken.None);
+
+        Assert.Equal([newer.Id, older.Id], runs.Select(run => run.Id));
+        Assert.DoesNotContain(runs, run => run.PipelineId != pipelineId);
+    }
+
+    [Fact]
     public async Task TryStartAsync_ClaimsQueuedRunOnceAndPreservesOtherFields()
     {
         await using var testDatabase = fixture.CreateDatabase();

@@ -13,6 +13,10 @@ public interface IEtlRunRepository
         Guid runId,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(
+        Guid pipelineId,
+        CancellationToken cancellationToken);
+
     Task<bool> TryStartAsync(
         Guid runId,
         DateTimeOffset startedAt,

@@ -1,4 +1,5 @@
 using EtlTool.Application.Execution;
+using EtlTool.Application.Pipelines;
 using EtlTool.Infrastructure.Reporting;
 using EtlTool.Web.Models.Runs;
 using Microsoft.AspNetCore.Mvc;
@@ -10,14 +11,50 @@ public sealed class RunsController : Controller
 {
     private readonly IEtlRunRepository _runRepository;
     private readonly IErrorReportStore? _errorReportStore;
+    private readonly IPipelineService? _pipelineService;
 
     public RunsController(
         IEtlRunRepository runRepository,
-        IErrorReportStore? errorReportStore = null)
+        IErrorReportStore? errorReportStore = null,
+        IPipelineService? pipelineService = null)
     {
         ArgumentNullException.ThrowIfNull(runRepository);
         _runRepository = runRepository;
         _errorReportStore = errorReportStore;
+        _pipelineService = pipelineService;
+    }
+
+    [HttpGet("/Pipelines/{pipelineId:guid}/Runs")]
+    public async Task<IActionResult> History(
+        Guid pipelineId,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty) return NotFound();
+
+        var pipeline = await GetPipelineAsync(pipelineId, cancellationToken);
+        if (pipeline is null) return NotFound();
+
+        var runs = await _runRepository.ListByPipelineIdAsync(pipelineId, cancellationToken);
+        return View(new RunHistoryViewModel
+        {
+            PipelineId = pipelineId,
+            PipelineName = pipeline.Name,
+            Runs = runs.Select(RunHistoryItemViewModel.From).ToList()
+        });
+    }
+
+    [HttpGet("/Pipelines/{pipelineId:guid}/Runs/{runId:guid}")]
+    public async Task<IActionResult> Details(
+        Guid pipelineId,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty || runId == Guid.Empty) return NotFound();
+
+        var run = await _runRepository.GetByIdAsync(runId, cancellationToken);
+        if (run is null || run.PipelineId != pipelineId) return NotFound();
+
+        return View(RunDetailsViewModel.From(run));
     }
 
     [HttpGet("{runId:guid}")]
@@ -57,5 +94,17 @@ public sealed class RunsController : Controller
             report,
             "text/csv; charset=utf-8",
             $"error-report-{runId:N}.csv");
+    }
+
+    private async Task<EtlTool.Domain.Entities.PipelineDefinition?> GetPipelineAsync(
+        Guid pipelineId,
+        CancellationToken cancellationToken)
+    {
+        if (_pipelineService is null)
+        {
+            throw new InvalidOperationException("Run history is not configured.");
+        }
+
+        return await _pipelineService.GetByIdAsync(pipelineId, cancellationToken);
     }
 }
