@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -221,6 +222,10 @@ public sealed class PipelinesControllerTests
         {
             new() { SourceField = "customer_id", TargetField = "customerId" }
         };
+        var expectedSchema = new List<SourceFieldDefinition>
+        {
+            new() { Name = "customer_id", DataType = SourceFieldType.String }
+        };
         var transformations = new List<TransformationRule>
         {
             new() { Id = Guid.NewGuid(), Order = 1 }
@@ -236,6 +241,7 @@ public sealed class PipelinesControllerTests
             Description = "Before description",
             SourceType = SourceType.Csv,
             SourceOptions = sourceOptions,
+            ExpectedSchema = expectedSchema,
             FieldMappings = mappings,
             TransformationRules = transformations,
             ValidationRules = validations,
@@ -269,6 +275,7 @@ public sealed class PipelinesControllerTests
         Assert.Equal("After", existing.Name);
         Assert.Equal("After description", existing.Description);
         Assert.Same(sourceOptions, existing.SourceOptions);
+        Assert.Same(expectedSchema, existing.ExpectedSchema);
         Assert.Same(mappings, existing.FieldMappings);
         Assert.Same(transformations, existing.TransformationRules);
         Assert.Same(validations, existing.ValidationRules);
@@ -277,6 +284,200 @@ public sealed class PipelinesControllerTests
         Assert.Equal("customerId", existing.UpsertKeyField);
         Assert.Equal(cancellationSource.Token, service.GetByIdCancellationTokens.Single());
         Assert.Equal(cancellationSource.Token, service.UpdateCancellationToken);
+    }
+
+    [Fact]
+    public async Task Edit_ValidMongoDestinationAndMappedUpsertKeyAreCheckedAndSaved()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Import",
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }],
+            FieldMappings = [new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var targetAccess = new RecordingTargetAccessService();
+        var controller = new PipelinesController(service, targetAccessService: targetAccess);
+
+        var result = await controller.Edit(id, new PipelineFormViewModel
+        {
+            Name = "Import",
+            DestinationDatabase = "warehouse",
+            DestinationCollection = "customers",
+            UpsertKeyField = "email"
+        }, CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(new MongoTarget("warehouse", "customers"), targetAccess.ValidatedTarget);
+        Assert.Equal(new MongoTarget("warehouse", "customers"), targetAccess.AccessibilityCheckedTarget);
+        Assert.Equal(1, service.UpdateCallCount);
+        Assert.Equal("warehouse", pipeline.DestinationDatabase);
+        Assert.Equal("customers", pipeline.DestinationCollection);
+        Assert.Equal("email", pipeline.UpsertKeyField);
+    }
+
+    [Theory]
+    [InlineData("admin", "The configured destination database cannot be used as an ETL target.")]
+    [InlineData("pipeline_metadata", "The configured destination database cannot be used as an ETL target.")]
+    [InlineData("invalid/name", "The configured MongoDB destination name is not valid.")]
+    public async Task Edit_ProtectedMetadataOrInvalidMongoDestinationIsNotPersisted(
+        string databaseName,
+        string rejectionMessage)
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Import",
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }],
+            FieldMappings = [new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var targetAccess = new RecordingTargetAccessService
+        {
+            ValidationResult = MongoTargetValidationResult.Rejected(rejectionMessage)
+        };
+        var controller = new PipelinesController(service, targetAccessService: targetAccess);
+        var model = new PipelineFormViewModel
+        {
+            Name = "Import",
+            DestinationDatabase = databaseName,
+            DestinationCollection = "customers",
+            UpsertKeyField = "email"
+        };
+
+        var result = await controller.Edit(id, model, CancellationToken.None);
+
+        Assert.Same(model, Assert.IsType<ViewResult>(result).Model);
+        Assert.Contains(
+            controller.ModelState[string.Empty]!.Errors,
+            error => error.ErrorMessage == rejectionMessage);
+        Assert.Null(targetAccess.AccessibilityCheckedTarget);
+        Assert.Equal(0, service.UpdateCallCount);
+        Assert.Equal(string.Empty, pipeline.DestinationDatabase);
+    }
+
+    [Fact]
+    public async Task Edit_StaleOrMissingUpsertKeyIsNotPersisted()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Import",
+            ExpectedSchema = [
+                new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String },
+                new SourceFieldDefinition { Name = "Ignored", DataType = SourceFieldType.String }
+            ],
+            FieldMappings = [
+                new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true },
+                new FieldMapping { SourceField = "Ignored", TargetField = "ignored", IsIncluded = false }
+            ]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var targetAccess = new RecordingTargetAccessService();
+        var controller = new PipelinesController(service, targetAccessService: targetAccess);
+
+        var result = await controller.Edit(id, new PipelineFormViewModel
+        {
+            Name = "Import",
+            DestinationDatabase = "warehouse",
+            DestinationCollection = "customers",
+            UpsertKeyField = "ignored"
+        }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains(
+            controller.ModelState[nameof(PipelineFormViewModel.UpsertKeyField)]!.Errors,
+            error => error.ErrorMessage == "Choose an included mapped output field as the upsert key.");
+        Assert.Null(targetAccess.AccessibilityCheckedTarget);
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Edit_IncompleteDestinationIsNotPersisted()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Import",
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }],
+            FieldMappings = [new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var targetAccess = new RecordingTargetAccessService
+        {
+            ValidationResult = MongoTargetValidationResult.Rejected(
+                "The destination collection must be configured.")
+        };
+        var controller = new PipelinesController(service, targetAccessService: targetAccess);
+
+        var result = await controller.Edit(id, new PipelineFormViewModel
+        {
+            Name = "Import",
+            DestinationDatabase = "warehouse",
+            UpsertKeyField = "email"
+        }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains(
+            controller.ModelState[nameof(PipelineFormViewModel.DestinationCollection)]!.Errors,
+            error => error.ErrorMessage == "The destination collection must be configured.");
+        Assert.Null(targetAccess.AccessibilityCheckedTarget);
+        Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Edit_MongoAccessFailureReturnsSafeMessageWithoutPersisting()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            Id = id,
+            Name = "Import",
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }],
+            FieldMappings = [new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true }]
+        };
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(pipeline),
+            UpdateHandler = (_, _, _) => Task.FromResult(true)
+        };
+        var targetAccess = new RecordingTargetAccessService { ThrowAccessException = true };
+        var controller = new PipelinesController(service, targetAccessService: targetAccess);
+
+        var result = await controller.Edit(id, new PipelineFormViewModel
+        {
+            Name = "Import",
+            DestinationDatabase = "warehouse",
+            DestinationCollection = "customers",
+            UpsertKeyField = "email"
+        }, CancellationToken.None);
+
+        Assert.IsType<ViewResult>(result);
+        var message = Assert.Single(controller.ModelState[string.Empty]!.Errors).ErrorMessage;
+        Assert.Equal("The MongoDB destination could not be accessed. Check the destination and try again.", message);
+        Assert.DoesNotContain("mongodb://", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, service.UpdateCallCount);
     }
 
     [Fact]
@@ -300,9 +501,30 @@ public sealed class PipelinesControllerTests
 
         var view = Assert.IsType<ViewResult>(result);
         Assert.Same(model, view.Model);
-        Assert.Equal(["id"], model.AvailableMappedFields);
+        Assert.Empty(model.AvailableMappedFields);
         Assert.Equal(1, service.GetByIdCallCount);
         Assert.Equal(0, service.UpdateCallCount);
+    }
+
+    [Fact]
+    public async Task Edit_GetDoesNotOfferOutputFieldsFromAnInvalidMapping()
+    {
+        var id = Guid.NewGuid();
+        var service = new RecordingPipelineService
+        {
+            GetByIdHandler = (_, _) => Task.FromResult<PipelineDefinition?>(new PipelineDefinition
+            {
+                Id = id,
+                Name = "Existing",
+                ExpectedSchema = [new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String }],
+                FieldMappings = [new FieldMapping { SourceField = "StaleEmail", TargetField = "staleEmail" }]
+            })
+        };
+
+        var result = await new PipelinesController(service).Edit(id, CancellationToken.None);
+
+        var model = Assert.IsType<PipelineFormViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Empty(model.AvailableMappedFields);
     }
 
     [Fact]
@@ -1440,6 +1662,34 @@ public sealed class PipelinesControllerTests
 
             return DeleteHandler?.Invoke(id, cancellationToken)
                 ?? Task.FromResult(false);
+        }
+    }
+
+    private sealed class RecordingTargetAccessService : IMongoTargetAccessService
+    {
+        public MongoTargetValidationResult ValidationResult { get; init; } = MongoTargetValidationResult.Allowed;
+
+        public bool ThrowAccessException { get; init; }
+
+        public MongoTarget? ValidatedTarget { get; private set; }
+
+        public MongoTarget? AccessibilityCheckedTarget { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target)
+        {
+            ValidatedTarget = target;
+            return ValidationResult;
+        }
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken)
+        {
+            AccessibilityCheckedTarget = target;
+            if (ThrowAccessException)
+            {
+                throw new MongoTargetAccessException();
+            }
+
+            return Task.CompletedTask;
         }
     }
 

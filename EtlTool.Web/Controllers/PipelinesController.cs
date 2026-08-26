@@ -2,6 +2,7 @@ using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.MongoDB;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -20,6 +21,7 @@ public sealed class PipelinesController : Controller
     private readonly IPreviewService? _previewService;
     private readonly ILogger<PipelinesController>? _logger;
     private readonly PipelineSourceCommitCoordinator? _sourceCommitCoordinator;
+    private readonly IMongoTargetAccessService? _targetAccessService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -29,7 +31,8 @@ public sealed class PipelinesController : Controller
         IPipelineReadinessService? readinessService = null,
         IPreviewService? previewService = null,
         ILogger<PipelinesController>? logger = null,
-        PipelineSourceCommitCoordinator? sourceCommitCoordinator = null)
+        PipelineSourceCommitCoordinator? sourceCommitCoordinator = null,
+        IMongoTargetAccessService? targetAccessService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -40,6 +43,7 @@ public sealed class PipelinesController : Controller
         _previewService = previewService;
         _logger = logger;
         _sourceCommitCoordinator = sourceCommitCoordinator;
+        _targetAccessService = targetAccessService;
     }
 
     public async Task<IActionResult> Mapping(Guid id, CancellationToken cancellationToken)
@@ -591,8 +595,22 @@ public sealed class PipelinesController : Controller
 
         PopulateAvailableMappedFields(model, pipeline);
 
-        if (!string.IsNullOrWhiteSpace(model.UpsertKeyField)
-            && !model.AvailableMappedFields.Contains(model.UpsertKeyField, StringComparer.Ordinal))
+        var hasDestinationConfiguration = !string.IsNullOrWhiteSpace(model.DestinationDatabase)
+            || !string.IsNullOrWhiteSpace(model.DestinationCollection);
+        if (hasDestinationConfiguration)
+        {
+            ValidateDestination(model);
+
+            if (string.IsNullOrWhiteSpace(model.UpsertKeyField)
+                || !model.AvailableMappedFields.Contains(model.UpsertKeyField, StringComparer.Ordinal))
+            {
+                ModelState.AddModelError(
+                    nameof(PipelineFormViewModel.UpsertKeyField),
+                    "Choose an included mapped output field as the upsert key.");
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(model.UpsertKeyField)
+                 && !model.AvailableMappedFields.Contains(model.UpsertKeyField, StringComparer.Ordinal))
         {
             ModelState.AddModelError(
                 nameof(PipelineFormViewModel.UpsertKeyField),
@@ -602,6 +620,23 @@ public sealed class PipelinesController : Controller
         if (!ModelState.IsValid)
         {
             return View(model);
+        }
+
+        if (hasDestinationConfiguration && _targetAccessService is not null)
+        {
+            try
+            {
+                await _targetAccessService.EnsureAccessibleAsync(
+                    new MongoTarget(model.DestinationDatabase!, model.DestinationCollection!),
+                    cancellationToken);
+            }
+            catch (MongoTargetAccessException)
+            {
+                ModelState.AddModelError(
+                    string.Empty,
+                    "The MongoDB destination could not be accessed. Check the destination and try again.");
+                return View(model);
+            }
         }
 
         pipeline.Name = model.Name;
@@ -770,15 +805,47 @@ public sealed class PipelinesController : Controller
         return RedirectToAction(nameof(Index));
     }
 
-    private static void PopulateAvailableMappedFields(
+    private void PopulateAvailableMappedFields(
         PipelineFormViewModel model,
-        PipelineDefinition pipeline) =>
-        model.AvailableMappedFields = pipeline.FieldMappings
-            .Where(mapping => mapping is not null
-                && mapping.IsIncluded
-                && !string.IsNullOrWhiteSpace(mapping.TargetField))
-            .Select(mapping => mapping.TargetField)
-            .ToList();
+        PipelineDefinition pipeline)
+    {
+        try
+        {
+            _ = _fieldMappingService.Prepare(pipeline);
+            model.AvailableMappedFields = pipeline.FieldMappings
+                .Where(mapping => mapping.IsIncluded)
+                .Select(mapping => mapping.TargetField)
+                .ToList();
+        }
+        catch (InvalidOperationException)
+        {
+            // An invalid mapping has no effective output fields to select from.
+            model.AvailableMappedFields = [];
+        }
+    }
+
+    private void ValidateDestination(PipelineFormViewModel model)
+    {
+        if (_targetAccessService is null)
+        {
+            return;
+        }
+
+        var result = _targetAccessService.Validate(new MongoTarget(
+            model.DestinationDatabase ?? string.Empty,
+            model.DestinationCollection ?? string.Empty));
+        if (result.IsAllowed)
+        {
+            return;
+        }
+
+        var errorKey = string.IsNullOrWhiteSpace(model.DestinationDatabase)
+            ? nameof(PipelineFormViewModel.DestinationDatabase)
+            : string.IsNullOrWhiteSpace(model.DestinationCollection)
+                ? nameof(PipelineFormViewModel.DestinationCollection)
+                : string.Empty;
+        ModelState.AddModelError(errorKey, result.FailureMessage!);
+    }
 
     private static bool IsPreviewSystemFailure(Exception exception) =>
         exception is InvalidDataException

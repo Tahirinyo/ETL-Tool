@@ -6,7 +6,7 @@
 }
 
 <h1>Edit pipeline</h1>
-<p class="text-muted">Update the draft name and description.</p>
+<p class="text-muted">Update the draft details and MongoDB destination configuration.</p>
 
 <div class="row">
     <div class="col-lg-7">
@@ -14,8 +14,8 @@
             <partial name="_PipelineForm" model="Model" />
 
             <fieldset class="mt-4">
-                <legend class="h4">Preview readiness</legend>
-                <p class="text-muted">These draft values satisfy the existing pipeline readiness contract. MongoDB discovery and connectivity are configured later.</p>
+                <legend class="h4">MongoDB destination</legend>
+                <p class="text-muted">Enter a permitted database and collection. The destination is checked before it is saved; a permitted new collection can be used.</p>
                 <div class="mb-3">
                     <label asp-for="DestinationDatabase" class="form-label"></label>
                     <input asp-for="DestinationDatabase" class="form-control" />
