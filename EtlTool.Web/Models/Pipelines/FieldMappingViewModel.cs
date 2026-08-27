@@ -8,6 +8,10 @@ public sealed class FieldMappingViewModel
     public List<FieldMappingFieldViewModel> Fields { get; set; } = [];
 
     public bool IsSaved { get; set; }
+
+    public Guid? PendingSourceReferenceId { get; set; }
+
+    public SchemaDifferenceViewModel? SchemaDifference { get; set; }
 }
 
 public sealed class FieldMappingFieldViewModel

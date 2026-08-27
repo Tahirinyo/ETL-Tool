@@ -23,6 +23,12 @@ public interface ISourceInspectionService
         string worksheetName,
         CancellationToken cancellationToken,
         SourceOptions? sourceOptions = null);
+
+    Task<PendingSourceInspection?> GetPendingSourceAsync(
+        Guid pipelineId,
+        Guid sourceReferenceId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<PendingSourceInspection?>(null);
 }
 
 public sealed class SourceInspectionResult
@@ -36,4 +42,13 @@ public sealed class SourceInspectionResult
     public Guid? SourceReferenceId { get; init; }
     public string? ErrorMessage { get; init; }
     public bool IsSuccess => ErrorMessage is null;
+}
+
+public sealed class PendingSourceInspection
+{
+    public required SourceType SourceType { get; init; }
+
+    public required SourceOptions SourceOptions { get; init; }
+
+    public required IReadOnlyList<SourceFieldDefinition> DetectedSchema { get; init; }
 }

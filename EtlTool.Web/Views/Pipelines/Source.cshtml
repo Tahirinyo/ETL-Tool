@@ -59,6 +59,32 @@
             <tbody>@foreach (var row in Model.SampleRows) { <tr><td>@row.SourceRowNumber</td>@foreach (var value in row.Values) { <td>@value</td> }</tr> }</tbody>
         </table></div>
         @if (Model.SampleRows.Count == 0) { <p class="text-muted">The source contains headers but no data rows.</p> }
+        @if (Model.SchemaDifference is not null)
+        {
+            <div class="alert @(Model.SchemaDifference.RequiresRemapping ? "alert-warning" : "alert-info") mt-3" role="status">
+                <h2 class="h5">Schema differences</h2>
+                @if (Model.SchemaDifference.MissingFields.Count > 0)
+                {
+                    <p class="mb-1">Missing fields: @string.Join(", ", Model.SchemaDifference.MissingFields.Select(field => field.Name))</p>
+                }
+                @if (Model.SchemaDifference.NewFields.Count > 0)
+                {
+                    <p class="mb-1">New fields: @string.Join(", ", Model.SchemaDifference.NewFields.Select(field => field.Name))</p>
+                }
+                @if (Model.SchemaDifference.TypeChanges.Count > 0)
+                {
+                    <p class="mb-1">Type suggestions changed: @string.Join(", ", Model.SchemaDifference.TypeChanges.Select(change => $"{change.FieldName} ({change.SavedType} to {change.InspectedType})"))</p>
+                }
+                @if (Model.SchemaDifference.UnresolvedMappings.Count > 0)
+                {
+                    <p class="mb-2">Mappings needing repair: @string.Join(", ", Model.SchemaDifference.UnresolvedMappings.Select(mapping => $"{mapping.SourceField} to {mapping.TargetField}"))</p>
+                }
+                @if (Model.SchemaDifference.RequiresRemapping && Model.PendingSourceReferenceId is Guid pendingSourceReferenceId)
+                {
+                    <a class="btn btn-warning" asp-action="Mapping" asp-route-id="@pipelineId" asp-route-pendingSourceReferenceId="@pendingSourceReferenceId">Repair mappings</a>
+                }
+            </div>
+        }
         <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
     }
 </div></div>

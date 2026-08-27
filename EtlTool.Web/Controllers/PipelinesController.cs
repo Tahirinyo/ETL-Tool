@@ -22,6 +22,7 @@ public sealed class PipelinesController : Controller
     private readonly ILogger<PipelinesController>? _logger;
     private readonly PipelineSourceCommitCoordinator? _sourceCommitCoordinator;
     private readonly IMongoTargetAccessService? _targetAccessService;
+    private readonly SourceSchemaComparisonService _schemaComparisonService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -32,7 +33,8 @@ public sealed class PipelinesController : Controller
         IPreviewService? previewService = null,
         ILogger<PipelinesController>? logger = null,
         PipelineSourceCommitCoordinator? sourceCommitCoordinator = null,
-        IMongoTargetAccessService? targetAccessService = null)
+        IMongoTargetAccessService? targetAccessService = null,
+        SourceSchemaComparisonService? schemaComparisonService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -44,14 +46,26 @@ public sealed class PipelinesController : Controller
         _logger = logger;
         _sourceCommitCoordinator = sourceCommitCoordinator;
         _targetAccessService = targetAccessService;
+        _schemaComparisonService = schemaComparisonService ?? new SourceSchemaComparisonService();
     }
 
-    public async Task<IActionResult> Mapping(Guid id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Mapping(
+        Guid id,
+        CancellationToken cancellationToken,
+        Guid? pendingSourceReferenceId = null)
     {
         if (id == Guid.Empty) return NotFound();
 
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
         if (pipeline is null) return NotFound();
+
+        if (pendingSourceReferenceId is Guid sourceReferenceId)
+        {
+            return await CreateRemappingViewAsync(
+                pipeline,
+                sourceReferenceId,
+                cancellationToken);
+        }
 
         if (pipeline.ExpectedSchema.Count == 0)
         {
@@ -79,6 +93,16 @@ public sealed class PipelinesController : Controller
 
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
         if (pipeline is null) return NotFound();
+
+        if (model.PendingSourceReferenceId is Guid sourceReferenceId)
+        {
+            return await SaveRemappingAsync(
+                id,
+                pipeline,
+                sourceReferenceId,
+                model,
+                cancellationToken);
+        }
 
         if (pipeline.ExpectedSchema.Count == 0)
         {
@@ -174,15 +198,28 @@ public sealed class PipelinesController : Controller
             model.SourceFile.FileName,
             options,
             cancellationToken);
-        var result = ApplyInspection(model, inspection);
+        var comparison = inspection.IsSuccess && pipeline.ExpectedSchema.Count > 0
+            ? _schemaComparisonService.Compare(
+                pipeline.ExpectedSchema,
+                inspection.DetectedSchema,
+                pipeline.FieldMappings ?? [])
+            : null;
+        var result = ApplyInspection(model, inspection, comparison);
         if (inspection.IsSuccess)
         {
+            if (comparison?.HasUnresolvedMappings == true)
+            {
+                model.PendingSourceReferenceId = inspection.SourceReferenceId;
+                return result;
+            }
+
             var commitStatus = await CommitSourceAsync(
                 id,
                 pipeline,
                 SourceType.Csv,
                 options,
                 inspection,
+                ReconcileMappings(pipeline, inspection.DetectedSchema),
                 cancellationToken);
             if (commitStatus == PipelineSourceCommitStatus.PersistenceRejected)
             {
@@ -220,15 +257,28 @@ public sealed class PipelinesController : Controller
             model.WorksheetName,
             cancellationToken,
             options);
-        var result = ApplyInspection(model, inspection);
+        var comparison = inspection.IsSuccess && pipeline.ExpectedSchema.Count > 0
+            ? _schemaComparisonService.Compare(
+                pipeline.ExpectedSchema,
+                inspection.DetectedSchema,
+                pipeline.FieldMappings ?? [])
+            : null;
+        var result = ApplyInspection(model, inspection, comparison);
         if (inspection.IsSuccess)
         {
+            if (comparison?.HasUnresolvedMappings == true)
+            {
+                model.PendingSourceReferenceId = inspection.SourceReferenceId;
+                return result;
+            }
+
             var commitStatus = await CommitSourceAsync(
                 id,
                 pipeline,
                 SourceType.Xlsx,
                 options,
                 inspection,
+                ReconcileMappings(pipeline, inspection.DetectedSchema),
                 cancellationToken);
             if (commitStatus == PipelineSourceCommitStatus.PersistenceRejected)
             {
@@ -239,6 +289,134 @@ public sealed class PipelinesController : Controller
         }
 
         return result;
+    }
+
+    private async Task<IActionResult> CreateRemappingViewAsync(
+        PipelineDefinition pipeline,
+        Guid sourceReferenceId,
+        CancellationToken cancellationToken)
+    {
+        var pending = await GetPendingSourceAsync(
+            pipeline.Id,
+            sourceReferenceId,
+            cancellationToken);
+        if (pending is null)
+        {
+            return PendingSourceUnavailable(pipeline);
+        }
+
+        var comparison = _schemaComparisonService.Compare(
+            pipeline.ExpectedSchema,
+            pending.DetectedSchema,
+            pipeline.FieldMappings ?? []);
+        var model = CreateMappingModelFromSchema(
+            pending.DetectedSchema,
+            pipeline.FieldMappings ?? [],
+            includeNewFieldsByDefault: false);
+        model.PendingSourceReferenceId = sourceReferenceId;
+        model.SchemaDifference = CreateSchemaDifferenceModel(comparison);
+        return View("Mapping", model);
+    }
+
+    private async Task<IActionResult> SaveRemappingAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        Guid sourceReferenceId,
+        FieldMappingViewModel model,
+        CancellationToken cancellationToken)
+    {
+        var pending = await GetPendingSourceAsync(id, sourceReferenceId, cancellationToken);
+        if (pending is null)
+        {
+            return PendingSourceUnavailable(pipeline);
+        }
+
+        var comparison = _schemaComparisonService.Compare(
+            pipeline.ExpectedSchema,
+            pending.DetectedSchema,
+            pipeline.FieldMappings ?? []);
+        model.SchemaDifference = CreateSchemaDifferenceModel(comparison);
+
+        if (!MatchesExpectedSchema(model.Fields, pending.DetectedSchema))
+        {
+            ModelState.Clear();
+            ModelState.AddModelError(
+                string.Empty,
+                "The submitted mapping fields do not match the inspected source schema. Reload the page and try again.");
+            return await CreateRemappingViewAsync(pipeline, sourceReferenceId, cancellationToken);
+        }
+
+        ApplyTrustedFieldTypes(model, pending.DetectedSchema);
+        if (!ModelState.IsValid)
+        {
+            return View("Mapping", model);
+        }
+
+        var mappings = model.Fields.Select(field => new FieldMapping
+        {
+            SourceField = field.SourceField,
+            TargetField = field.TargetField ?? string.Empty,
+            IsIncluded = field.IsIncluded
+        }).ToList();
+        var configuration = new PipelineDefinition
+        {
+            ExpectedSchema = CopySchema(pending.DetectedSchema),
+            FieldMappings = mappings
+        };
+
+        try
+        {
+            _fieldMappingService.Prepare(configuration);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return View("Mapping", model);
+        }
+
+        var commitStatus = await CommitPendingSourceAsync(
+            id,
+            pipeline,
+            sourceReferenceId,
+            pending,
+            mappings,
+            cancellationToken);
+        if (commitStatus == PipelineSourceCommitStatus.PersistenceRejected)
+        {
+            return NotFound();
+        }
+
+        AddActivationFailure(commitStatus);
+        if (commitStatus == PipelineSourceCommitStatus.Succeeded)
+        {
+            model.IsSaved = true;
+        }
+
+        return View("Mapping", model);
+    }
+
+    private async Task<PendingSourceInspection?> GetPendingSourceAsync(
+        Guid pipelineId,
+        Guid sourceReferenceId,
+        CancellationToken cancellationToken)
+    {
+        if (_sourceInspectionService is null)
+        {
+            throw new InvalidOperationException("Source inspection is not configured.");
+        }
+
+        return await _sourceInspectionService.GetPendingSourceAsync(
+            pipelineId,
+            sourceReferenceId,
+            cancellationToken);
+    }
+
+    private IActionResult PendingSourceUnavailable(PipelineDefinition pipeline)
+    {
+        ModelState.AddModelError(
+            string.Empty,
+            "The uploaded source is no longer available. Upload and inspect it again.");
+        return View("Source", CreateSourceModel(pipeline));
     }
 
     private static SourceUploadViewModel CreateSourceModel(PipelineDefinition pipeline) => new()
@@ -264,36 +442,19 @@ public sealed class PipelinesController : Controller
 
         if (mappings.Count > 0)
         {
-            if (MatchesExpectedSchema(mappings, schema))
+            try
             {
-                try
+                _fieldMappingService.Prepare(new PipelineDefinition
                 {
-                    _fieldMappingService.Prepare(new PipelineDefinition
-                    {
-                        ExpectedSchema = CopySchema(schema),
-                        FieldMappings = mappings.Select(mapping => new FieldMapping
-                        {
-                            SourceField = mapping.SourceField,
-                            TargetField = mapping.TargetField,
-                            IsIncluded = mapping.IsIncluded
-                        }).ToList()
-                    });
+                    ExpectedSchema = CopySchema(schema),
+                    FieldMappings = CopyMappings(mappings)
+                });
 
-                    return new FieldMappingViewModel
-                    {
-                        Fields = schema.Select((field, index) => new FieldMappingFieldViewModel
-                        {
-                            SourceField = field.Name,
-                            TargetField = mappings[index].TargetField,
-                            DataType = field.DataType,
-                            IsIncluded = mappings[index].IsIncluded
-                        }).ToList()
-                    };
-                }
-                catch (InvalidOperationException)
-                {
-                    // Fall through to authoritative defaults below.
-                }
+                return CreateMappingModelFromSchema(schema, mappings, includeNewFieldsByDefault: false);
+            }
+            catch (InvalidOperationException)
+            {
+                // Fall through to authoritative defaults below.
             }
 
             mappingError = "The saved mapping configuration is invalid. Review and save the mapping again.";
@@ -313,6 +474,37 @@ public sealed class PipelinesController : Controller
             IsIncluded = true
         }).ToList()
     };
+
+    private static FieldMappingViewModel CreateMappingModelFromSchema(
+        IReadOnlyList<SourceFieldDefinition> schema,
+        IReadOnlyList<FieldMapping> mappings,
+        bool includeNewFieldsByDefault)
+    {
+        var mappingsBySource = new Dictionary<string, FieldMapping>(StringComparer.Ordinal);
+        foreach (var mapping in mappings.Where(mapping => mapping is not null))
+        {
+            mappingsBySource.TryAdd(mapping.SourceField, mapping);
+        }
+
+        return new FieldMappingViewModel
+        {
+            Fields = schema.Select(field => mappingsBySource.TryGetValue(field.Name, out var mapping)
+                ? new FieldMappingFieldViewModel
+                {
+                    SourceField = field.Name,
+                    TargetField = mapping.TargetField,
+                    DataType = field.DataType,
+                    IsIncluded = mapping.IsIncluded
+                }
+                : new FieldMappingFieldViewModel
+                {
+                    SourceField = field.Name,
+                    TargetField = includeNewFieldsByDefault ? field.Name : string.Empty,
+                    DataType = field.DataType,
+                    IsIncluded = includeNewFieldsByDefault
+                }).ToList()
+        };
+    }
 
     private static bool MatchesExpectedSchema(
         IReadOnlyList<FieldMapping> mappings,
@@ -365,6 +557,56 @@ public sealed class PipelinesController : Controller
         .Select(field => new SourceFieldDefinition { Name = field.Name, DataType = field.DataType })
         .ToList();
 
+    private static List<FieldMapping> CopyMappings(
+        IEnumerable<FieldMapping> mappings) => mappings
+        .Select(mapping => new FieldMapping
+        {
+            SourceField = mapping.SourceField,
+            TargetField = mapping.TargetField,
+            IsIncluded = mapping.IsIncluded
+        })
+        .ToList();
+
+    private static PipelineDefinition CopyPipeline(PipelineDefinition pipeline) => new()
+    {
+        Id = pipeline.Id,
+        Name = pipeline.Name,
+        Description = pipeline.Description,
+        SourceType = pipeline.SourceType,
+        SourceOptions = CopySourceOptions(pipeline.SourceOptions),
+        ExpectedSchema = CopySchema(pipeline.ExpectedSchema),
+        FieldMappings = CopyMappings(pipeline.FieldMappings ?? []),
+        TransformationRules = (pipeline.TransformationRules ?? [])
+            .Select(rule => new TransformationRule
+            {
+                Id = rule.Id,
+                Type = rule.Type,
+                Order = rule.Order,
+                SourceField = rule.SourceField,
+                Configuration = new Dictionary<string, string>(
+                    rule.Configuration,
+                    StringComparer.Ordinal)
+            })
+            .ToList(),
+        ValidationRules = (pipeline.ValidationRules ?? [])
+            .Select(rule => new ValidationRule
+            {
+                Id = rule.Id,
+                Type = rule.Type,
+                Field = rule.Field,
+                Configuration = new Dictionary<string, string>(
+                    rule.Configuration,
+                    StringComparer.Ordinal),
+                ErrorMessage = rule.ErrorMessage
+            })
+            .ToList(),
+        DestinationDatabase = pipeline.DestinationDatabase,
+        DestinationCollection = pipeline.DestinationCollection,
+        UpsertKeyField = pipeline.UpsertKeyField,
+        CreatedAt = pipeline.CreatedAt,
+        UpdatedAt = pipeline.UpdatedAt
+    };
+
     private static PipelineDefinition CopyPipelineWithMappings(
         PipelineDefinition pipeline,
         List<FieldMapping> fieldMappings) => new()
@@ -391,6 +633,57 @@ public sealed class PipelinesController : Controller
         DateFormat = pipeline.SourceOptions.DateFormat
     };
 
+    private static SourceOptions CopySourceOptions(SourceOptions options) => new()
+    {
+        Delimiter = options.Delimiter,
+        WorksheetName = options.WorksheetName,
+        FirstRowIsHeader = options.FirstRowIsHeader,
+        CultureName = options.CultureName,
+        DateFormat = options.DateFormat
+    };
+
+    private static List<FieldMapping> ReconcileMappings(
+        PipelineDefinition pipeline,
+        IReadOnlyList<SourceFieldDefinition> inspectedSchema)
+    {
+        var persistedMappings = pipeline.FieldMappings ?? [];
+        if (pipeline.ExpectedSchema.Count == 0)
+        {
+            return CopyMappings(persistedMappings);
+        }
+
+        var inspectedNames = new HashSet<string>(
+            inspectedSchema.Select(field => field.Name),
+            StringComparer.Ordinal);
+        var reconciled = persistedMappings
+            .Where(mapping => mapping is not null && inspectedNames.Contains(mapping.SourceField))
+            .Select(mapping => new FieldMapping
+            {
+                SourceField = mapping.SourceField,
+                TargetField = mapping.TargetField,
+                IsIncluded = mapping.IsIncluded
+            })
+            .ToList();
+        var mappedNames = new HashSet<string>(
+            reconciled.Select(mapping => mapping.SourceField),
+            StringComparer.Ordinal);
+
+        foreach (var field in inspectedSchema)
+        {
+            if (mappedNames.Add(field.Name))
+            {
+                reconciled.Add(new FieldMapping
+                {
+                    SourceField = field.Name,
+                    TargetField = string.Empty,
+                    IsIncluded = false
+                });
+            }
+        }
+
+        return reconciled;
+    }
+
     private static bool IsSupportedDelimiter(CsvDelimiter delimiter) =>
         delimiter is CsvDelimiter.Comma or CsvDelimiter.Semicolon or CsvDelimiter.Tab;
 
@@ -400,18 +693,27 @@ public sealed class PipelinesController : Controller
         SourceType type,
         SourceOptions options,
         IReadOnlyList<SourceFieldDefinition> schema,
+        IReadOnlyList<FieldMapping> mappings,
         CancellationToken ct)
     {
-        pipeline.SourceType = type;
-        pipeline.SourceOptions = options;
-        pipeline.ExpectedSchema = schema
-            .Select(field => new SourceFieldDefinition
-            {
-                Name = field.Name,
-                DataType = field.DataType
-            })
-            .ToList();
-        return await _pipelineService.UpdateAsync(id, pipeline, ct);
+        var replacement = new PipelineDefinition
+        {
+            Id = pipeline.Id,
+            Name = pipeline.Name,
+            Description = pipeline.Description,
+            SourceType = type,
+            SourceOptions = CopySourceOptions(options),
+            ExpectedSchema = CopySchema(schema),
+            FieldMappings = CopyMappings(mappings),
+            TransformationRules = pipeline.TransformationRules,
+            ValidationRules = pipeline.ValidationRules,
+            DestinationDatabase = pipeline.DestinationDatabase,
+            DestinationCollection = pipeline.DestinationCollection,
+            UpsertKeyField = pipeline.UpsertKeyField,
+            CreatedAt = pipeline.CreatedAt,
+            UpdatedAt = pipeline.UpdatedAt
+        };
+        return await _pipelineService.UpdateAsync(id, replacement, ct);
     }
 
     private async Task<PipelineSourceCommitStatus> CommitSourceAsync(
@@ -420,6 +722,7 @@ public sealed class PipelinesController : Controller
         SourceType type,
         SourceOptions options,
         SourceInspectionResult inspection,
+        IReadOnlyList<FieldMapping> mappings,
         CancellationToken cancellationToken)
     {
         if (_sourceCommitCoordinator is null)
@@ -435,6 +738,7 @@ public sealed class PipelinesController : Controller
                     type,
                     options,
                     inspection.DetectedSchema,
+                    mappings,
                     cancellationToken)
                 ? PipelineSourceCommitStatus.Succeeded
                 : PipelineSourceCommitStatus.PersistenceRejected;
@@ -454,6 +758,53 @@ public sealed class PipelinesController : Controller
                 type,
                 options,
                 inspection.DetectedSchema,
+                mappings,
+                token),
+            cancellationToken);
+    }
+
+    private async Task<PipelineSourceCommitStatus> CommitPendingSourceAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        Guid sourceReferenceId,
+        PendingSourceInspection pending,
+        IReadOnlyList<FieldMapping> mappings,
+        CancellationToken cancellationToken)
+    {
+        if (_sourceCommitCoordinator is null)
+        {
+            if (_wizardSourceStore is not null)
+            {
+                throw new InvalidOperationException("Pipeline source commit coordination is not configured.");
+            }
+
+            return await SaveSourceAsync(
+                    id,
+                    pipeline,
+                    pending.SourceType,
+                    pending.SourceOptions,
+                    pending.DetectedSchema,
+                    mappings,
+                    cancellationToken)
+                ? PipelineSourceCommitStatus.Succeeded
+                : PipelineSourceCommitStatus.PersistenceRejected;
+        }
+
+        var priorPipeline = CopyPipeline(pipeline);
+        return await _sourceCommitCoordinator.CommitRemapAsync(
+            id,
+            sourceReferenceId,
+            token => SaveSourceAsync(
+                id,
+                pipeline,
+                pending.SourceType,
+                pending.SourceOptions,
+                pending.DetectedSchema,
+                mappings,
+                token),
+            token => _pipelineService.UpdateAsync(
+                id,
+                CopyPipeline(priorPipeline),
                 token),
             cancellationToken);
     }
@@ -468,7 +819,37 @@ public sealed class PipelinesController : Controller
         }
     }
 
-    private IActionResult ApplyInspection(SourceUploadViewModel model, SourceInspectionResult inspection)
+    private static SchemaDifferenceViewModel CreateSchemaDifferenceModel(
+        SourceSchemaComparisonResult comparison) => new()
+    {
+        MissingFields = comparison.MissingFields.Select(field => new SchemaFieldViewModel
+        {
+            Name = field.Name,
+            DataType = field.DataType
+        }).ToList(),
+        NewFields = comparison.NewFields.Select(field => new SchemaFieldViewModel
+        {
+            Name = field.Name,
+            DataType = field.DataType
+        }).ToList(),
+        TypeChanges = comparison.TypeChanges.Select(change => new SchemaTypeChangeViewModel
+        {
+            FieldName = change.FieldName,
+            SavedType = change.SavedType,
+            InspectedType = change.InspectedType
+        }).ToList(),
+        UnresolvedMappings = comparison.UnresolvedMappings.Select(mapping => new UnresolvedMappingViewModel
+        {
+            SourceField = mapping.SourceField,
+            TargetField = mapping.TargetField,
+            IsIncluded = mapping.IsIncluded
+        }).ToList()
+    };
+
+    private IActionResult ApplyInspection(
+        SourceUploadViewModel model,
+        SourceInspectionResult inspection,
+        SourceSchemaComparisonResult? comparison = null)
     {
         if (!inspection.IsSuccess) ModelState.AddModelError(string.Empty, inspection.ErrorMessage!);
         model.StageId = inspection.StageId;
@@ -479,6 +860,10 @@ public sealed class PipelinesController : Controller
             SourceRowNumber = row.SourceRowNumber,
             Values = inspection.Columns.Select(column => Convert.ToString(row.Values.GetValueOrDefault(column), System.Globalization.CultureInfo.InvariantCulture)).ToList()
         }).ToList();
+        model.SchemaDifference = comparison is not null
+            && (comparison.HasDifferences || comparison.HasUnresolvedMappings)
+                ? CreateSchemaDifferenceModel(comparison)
+                : null;
         return View("Source", model);
     }
 

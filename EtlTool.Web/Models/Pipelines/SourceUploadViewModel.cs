@@ -13,7 +13,38 @@ public sealed class SourceUploadViewModel
     public IReadOnlyList<string> WorksheetNames { get; set; } = [];
     public IReadOnlyList<string> Columns { get; set; } = [];
     public IReadOnlyList<SourceSampleRowViewModel> SampleRows { get; set; } = [];
+    public SchemaDifferenceViewModel? SchemaDifference { get; set; }
+    public Guid? PendingSourceReferenceId { get; set; }
     public bool HasInspection => Columns.Count > 0 || SampleRows.Count > 0;
+}
+
+public sealed class SchemaDifferenceViewModel
+{
+    public IReadOnlyList<SchemaFieldViewModel> MissingFields { get; init; } = [];
+    public IReadOnlyList<SchemaFieldViewModel> NewFields { get; init; } = [];
+    public IReadOnlyList<SchemaTypeChangeViewModel> TypeChanges { get; init; } = [];
+    public IReadOnlyList<UnresolvedMappingViewModel> UnresolvedMappings { get; init; } = [];
+    public bool RequiresRemapping => UnresolvedMappings.Count > 0;
+}
+
+public sealed class SchemaFieldViewModel
+{
+    public string Name { get; init; } = string.Empty;
+    public SourceFieldType DataType { get; init; }
+}
+
+public sealed class SchemaTypeChangeViewModel
+{
+    public string FieldName { get; init; } = string.Empty;
+    public SourceFieldType SavedType { get; init; }
+    public SourceFieldType InspectedType { get; init; }
+}
+
+public sealed class UnresolvedMappingViewModel
+{
+    public string SourceField { get; init; } = string.Empty;
+    public string TargetField { get; init; } = string.Empty;
+    public bool IsIncluded { get; init; }
 }
 
 public sealed class SourceSampleRowViewModel

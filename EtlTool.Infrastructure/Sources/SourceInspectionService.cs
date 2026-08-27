@@ -93,6 +93,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                     pipelineId,
                     SourceType.Csv,
                     CopyOptions(options),
+                    CopySchema(inspection.DetectedSchema),
                     _timeProvider.GetUtcNow().Add(StageLifetime));
             }
 
@@ -225,6 +226,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                         pipelineId,
                         SourceType.Xlsx,
                         CopyOptions(options),
+                        CopySchema(inspectionResult.DetectedSchema),
                         _timeProvider.GetUtcNow().Add(StageLifetime));
                 }
 
@@ -296,10 +298,49 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
         if (retired is not null)
         {
-            await DeleteUploadsAsync([retired.Upload]);
+            try
+            {
+                await DeleteUploadsAsync([retired.Upload]);
+            }
+            catch (Exception exception)
+                when (exception is IOException or UnauthorizedAccessException)
+            {
+                // DeleteAsync releases ownership before physical deletion. A failed deletion is
+                // therefore an orphan-cleanup concern, not a failure of the completed source swap.
+            }
         }
 
         return true;
+    }
+
+    public async Task<PendingSourceInspection?> GetPendingSourceAsync(
+        Guid pipelineId,
+        Guid sourceReferenceId,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty || sourceReferenceId == Guid.Empty)
+        {
+            return null;
+        }
+
+        await PurgeExpiredAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_stateLock)
+        {
+            if (!_pending.TryGetValue(sourceReferenceId, out var pending)
+                || pending.PipelineId != pipelineId)
+            {
+                return null;
+            }
+
+            return new PendingSourceInspection
+            {
+                SourceType = pending.SourceType,
+                SourceOptions = CopyOptions(pending.Options),
+                DetectedSchema = CopySchema(pending.Schema)
+            };
+        }
     }
 
     public async Task DiscardAsync(
@@ -626,6 +667,15 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         FirstRowIsHeader = options.FirstRowIsHeader
     };
 
+    private static IReadOnlyList<SourceFieldDefinition> CopySchema(
+        IReadOnlyList<SourceFieldDefinition> schema) => schema
+        .Select(field => new SourceFieldDefinition
+        {
+            Name = field.Name,
+            DataType = field.DataType
+        })
+        .ToArray();
+
     private static bool OptionsMatch(SourceOptions retained, SourceOptions current) =>
         string.Equals(retained.CultureName, current.CultureName, StringComparison.OrdinalIgnoreCase)
         && string.Equals(retained.DateFormat, current.DateFormat, StringComparison.Ordinal)
@@ -649,6 +699,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         Guid PipelineId,
         SourceType SourceType,
         SourceOptions Options,
+        IReadOnlyList<SourceFieldDefinition> Schema,
         DateTimeOffset ExpiresAt);
 
     private sealed class ActiveSource(

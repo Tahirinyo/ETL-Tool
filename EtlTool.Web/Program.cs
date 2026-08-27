@@ -108,6 +108,7 @@ builder.Services.AddSingleton<IFileExtractor>(provider => provider.GetRequiredSe
 builder.Services.AddSingleton<IFileExtractorResolver, FileExtractorResolver>();
 builder.Services.AddSingleton<IUploadValidationService, UploadValidationService>();
 builder.Services.AddSingleton<SourceSchemaInferenceService>();
+builder.Services.AddSingleton<SourceSchemaComparisonService>();
 builder.Services.AddSingleton<FieldMappingService>();
 builder.Services.AddSingleton<ITransformationHandler, TrimTransformationHandler>();
 builder.Services.AddSingleton<ITransformationHandler, ToUpperTransformationHandler>();

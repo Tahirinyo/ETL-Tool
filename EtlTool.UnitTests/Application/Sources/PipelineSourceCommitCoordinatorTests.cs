@@ -98,6 +98,196 @@ public sealed class PipelineSourceCommitCoordinatorTests
     }
 
     [Fact]
+    public async Task CommitRemapAsync_ActivationFailureRestoresAndPreservesPriorActiveSource()
+    {
+        var store = new RecordingSourceStore { ActivationSucceeds = false };
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var pipelineId = Guid.NewGuid();
+        var sourceReferenceId = Guid.NewGuid();
+        var persistedState = "old";
+        CancellationToken restoreToken = default;
+        using var cancellation = new CancellationTokenSource();
+
+        var status = await coordinator.CommitRemapAsync(
+            pipelineId,
+            sourceReferenceId,
+            _ =>
+            {
+                persistedState = "new";
+                cancellation.Cancel();
+                return Task.FromResult(true);
+            },
+            token =>
+            {
+                restoreToken = token;
+                persistedState = "old";
+                return Task.FromResult(true);
+            },
+            cancellation.Token);
+
+        Assert.Equal(PipelineSourceCommitStatus.ActivationFailed, status);
+        Assert.Equal("old", persistedState);
+        Assert.Contains(sourceReferenceId, store.DiscardedSourceReferenceIds);
+        Assert.Empty(store.RetiredPipelineIds);
+        Assert.False(restoreToken.CanBeCanceled);
+        Assert.All(store.DiscardTokens, token => Assert.False(token.CanBeCanceled));
+    }
+
+    [Fact]
+    public async Task CommitRemapAsync_PersistenceRejectionDiscardsWithoutActivationOrRestoration()
+    {
+        var store = new RecordingSourceStore();
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var pipelineId = Guid.NewGuid();
+        var sourceReferenceId = Guid.NewGuid();
+        var restoreCallCount = 0;
+
+        var status = await coordinator.CommitRemapAsync(
+            pipelineId,
+            sourceReferenceId,
+            _ => Task.FromResult(false),
+            _ =>
+            {
+                restoreCallCount++;
+                return Task.FromResult(true);
+            },
+            CancellationToken.None);
+
+        Assert.Equal(PipelineSourceCommitStatus.PersistenceRejected, status);
+        Assert.Equal(0, restoreCallCount);
+        Assert.Empty(store.ActivatedSourceReferenceIds);
+        Assert.Contains(sourceReferenceId, store.DiscardedSourceReferenceIds);
+        Assert.Empty(store.RetiredPipelineIds);
+        Assert.Equal(
+            PipelineSourceCommitStatus.Succeeded,
+            await coordinator.CommitRemapAsync(
+                pipelineId,
+                Guid.NewGuid(),
+                _ => Task.FromResult(true),
+                _ => Task.FromResult(true),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CommitRemapAsync_PersistenceExceptionCompensatesAndPreservesPrimaryFailure()
+    {
+        var store = new RecordingSourceStore();
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var pipelineId = Guid.NewGuid();
+        var sourceReferenceId = Guid.NewGuid();
+        var expected = new IOException("Persistence failed.");
+        var restored = false;
+
+        var actual = await Assert.ThrowsAsync<IOException>(() => coordinator.CommitRemapAsync(
+            pipelineId,
+            sourceReferenceId,
+            _ => throw expected,
+            _ =>
+            {
+                restored = true;
+                return Task.FromResult(true);
+            },
+            CancellationToken.None));
+
+        Assert.Same(expected, actual);
+        Assert.True(restored);
+        Assert.Contains(sourceReferenceId, store.DiscardedSourceReferenceIds);
+        Assert.Empty(store.ActivatedSourceReferenceIds);
+        Assert.Equal(
+            PipelineSourceCommitStatus.Succeeded,
+            await coordinator.CommitAsync(
+                pipelineId,
+                Guid.NewGuid(),
+                _ => Task.FromResult(true),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CommitRemapAsync_SuccessActivatesExactSourceWithoutRestoration()
+    {
+        var store = new RecordingSourceStore();
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var sourceReferenceId = Guid.NewGuid();
+        var restoreCallCount = 0;
+
+        var status = await coordinator.CommitRemapAsync(
+            Guid.NewGuid(),
+            sourceReferenceId,
+            _ => Task.FromResult(true),
+            _ =>
+            {
+                restoreCallCount++;
+                return Task.FromResult(true);
+            },
+            CancellationToken.None);
+
+        Assert.Equal(PipelineSourceCommitStatus.Succeeded, status);
+        Assert.Equal(sourceReferenceId, Assert.Single(store.ActivatedSourceReferenceIds));
+        Assert.Equal(0, restoreCallCount);
+        Assert.Empty(store.DiscardedSourceReferenceIds);
+    }
+
+    [Fact]
+    public async Task CommitRemapAsync_ActivationExceptionPreservesCompensationFailures()
+    {
+        var activationFailure = new IOException("Activation failed.");
+        var restorationFailure = new InvalidOperationException("Restoration failed.");
+        var discardFailure = new UnauthorizedAccessException("Discard failed.");
+        var store = new RecordingSourceStore
+        {
+            ActivationException = activationFailure,
+            DiscardException = discardFailure
+        };
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var pipelineId = Guid.NewGuid();
+
+        var actual = await Assert.ThrowsAsync<IOException>(() => coordinator.CommitRemapAsync(
+            pipelineId,
+            Guid.NewGuid(),
+            _ => Task.FromResult(true),
+            _ => throw restorationFailure,
+            CancellationToken.None));
+
+        Assert.Same(activationFailure, actual);
+        Assert.Same(restorationFailure, actual.Data["EtlTool.PipelineRestoreFailure"]);
+        Assert.Same(discardFailure, actual.Data["EtlTool.SourceDiscardFailure"]);
+        Assert.Empty(store.RetiredPipelineIds);
+        store.ActivationException = null;
+        Assert.Equal(
+            PipelineSourceCommitStatus.Succeeded,
+            await coordinator.CommitRemapAsync(
+                pipelineId,
+                Guid.NewGuid(),
+                _ => Task.FromResult(true),
+                _ => Task.FromResult(true),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CommitRemapAsync_FailedRestorationDoesNotReportSafeActivationFailure()
+    {
+        var store = new RecordingSourceStore { ActivationSucceeds = false };
+        var coordinator = new PipelineSourceCommitCoordinator(store);
+        var pipelineId = Guid.NewGuid();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.CommitRemapAsync(
+            pipelineId,
+            Guid.NewGuid(),
+            _ => Task.FromResult(true),
+            _ => Task.FromResult(false),
+            CancellationToken.None));
+
+        Assert.Equal(
+            PipelineSourceCommitStatus.PersistenceRejected,
+            await coordinator.CommitRemapAsync(
+                pipelineId,
+                Guid.NewGuid(),
+                _ => Task.FromResult(false),
+                _ => Task.FromResult(true),
+                CancellationToken.None));
+    }
+
+    [Fact]
     public async Task CommitAsync_CancellationWhileQueuedLeavesOwnerAndGateUsable()
     {
         var store = new RecordingSourceStore();
@@ -211,11 +401,17 @@ public sealed class PipelineSourceCommitCoordinatorTests
     {
         public bool ActivationSucceeds { get; init; } = true;
 
+        public Exception? ActivationException { get; set; }
+
+        public Exception? DiscardException { get; init; }
+
         public List<Guid> ActivatedPipelineIds { get; } = [];
 
         public List<Guid> ActivatedSourceReferenceIds { get; } = [];
 
         public List<Guid> DiscardedSourceReferenceIds { get; } = [];
+
+        public List<CancellationToken> DiscardTokens { get; } = [];
 
         public List<Guid> RetiredPipelineIds { get; } = [];
 
@@ -228,12 +424,23 @@ public sealed class PipelineSourceCommitCoordinatorTests
         {
             ActivatedPipelineIds.Add(pipelineId);
             ActivatedSourceReferenceIds.Add(sourceReferenceId);
+            if (ActivationException is not null)
+            {
+                throw ActivationException;
+            }
+
             return Task.FromResult(ActivationSucceeds);
         }
 
         public Task DiscardAsync(Guid sourceReferenceId, CancellationToken cancellationToken)
         {
             DiscardedSourceReferenceIds.Add(sourceReferenceId);
+            DiscardTokens.Add(cancellationToken);
+            if (DiscardException is not null)
+            {
+                throw DiscardException;
+            }
+
             return Task.CompletedTask;
         }
 

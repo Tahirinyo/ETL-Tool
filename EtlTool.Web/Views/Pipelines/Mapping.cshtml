@@ -17,6 +17,20 @@
 
 <form asp-action="Mapping" asp-route-id="@pipelineId" method="post">
     <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+    <input asp-for="PendingSourceReferenceId" type="hidden" />
+
+    @if (Model.SchemaDifference?.RequiresRemapping == true)
+    {
+        <div class="alert alert-warning" role="status">
+            <strong>Repair the unresolved mappings before using this uploaded source.</strong>
+            <ul class="mb-0">
+                @foreach (var mapping in Model.SchemaDifference.UnresolvedMappings)
+                {
+                    <li>@mapping.SourceField to @mapping.TargetField</li>
+                }
+            </ul>
+        </div>
+    }
 
     <div class="table-responsive">
         <table class="table align-middle">

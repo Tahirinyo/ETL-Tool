@@ -749,6 +749,53 @@ public sealed class SourceInspectionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RetainedSource_PostSwapCleanupFailureKeepsReplacementActiveAndRecoverable()
+    {
+        var localStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var storage = new ReleaseThenFailStorage(
+            localStorage,
+            _clock.GetUtcNow().AddMinutes(-16),
+            failureCount: 1);
+        var service = CreateService(storage);
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        await using var originalContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\noriginal"));
+        var original = await service.InspectCsvAsync(
+            pipelineId, originalContent, "original.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(original.SourceReferenceId),
+            CancellationToken.None));
+
+        await using var replacementContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nreplacement"));
+        var replacement = await service.InspectCsvAsync(
+            pipelineId, replacementContent, "replacement.csv", options, CancellationToken.None);
+
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(replacement.SourceReferenceId),
+            CancellationToken.None));
+        var orphanPath = Assert.IsType<string>(storage.LastFailedUploadPath);
+        Assert.True(File.Exists(orphanPath));
+        await using (var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None)))
+        {
+            using var reader = new StreamReader(lease.Content, leaveOpen: true);
+            _ = await reader.ReadLineAsync();
+            Assert.Equal("replacement", await reader.ReadLineAsync());
+        }
+
+        await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(orphanPath));
+        await using var replacementLease = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var replacementReader = new StreamReader(replacementLease.Content, leaveOpen: true);
+        _ = await replacementReader.ReadLineAsync();
+        Assert.Equal("replacement", await replacementReader.ReadLineAsync());
+    }
+
+    [Fact]
     public async Task RetireActiveSource_DoesNotDiscardAnotherPendingCommit()
     {
         var pipelineId = Guid.NewGuid();
@@ -868,6 +915,44 @@ public sealed class SourceInspectionServiceTests : IDisposable
         }
 
         await lease.DisposeAsync();
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
+    }
+
+    [Fact]
+    public async Task PendingSourceSnapshot_RequiresOwnerExpiresAndReturnsCopies()
+    {
+        var pipelineId = Guid.NewGuid();
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id,Name\n1,Ada"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId,
+            content,
+            "customers.csv",
+            new SourceOptions { Delimiter = CsvDelimiter.Comma, CultureName = "en-US" },
+            CancellationToken.None);
+        var sourceReferenceId = Assert.IsType<Guid>(inspection.SourceReferenceId);
+
+        Assert.Null(await service.GetPendingSourceAsync(
+            Guid.NewGuid(), sourceReferenceId, CancellationToken.None));
+        Assert.Null(await service.GetPendingSourceAsync(
+            pipelineId, Guid.NewGuid(), CancellationToken.None));
+
+        var snapshot = Assert.IsType<PendingSourceInspection>(await service.GetPendingSourceAsync(
+            pipelineId, sourceReferenceId, CancellationToken.None));
+        Assert.Equal(SourceType.Csv, snapshot.SourceType);
+        Assert.Equal("en-US", snapshot.SourceOptions.CultureName);
+        Assert.Equal(["Id", "Name"], snapshot.DetectedSchema.Select(field => field.Name));
+
+        snapshot.SourceOptions.CultureName = "tr-TR";
+        snapshot.DetectedSchema[0].Name = "Mutated";
+        var secondSnapshot = Assert.IsType<PendingSourceInspection>(await service.GetPendingSourceAsync(
+            pipelineId, sourceReferenceId, CancellationToken.None));
+        Assert.Equal("en-US", secondSnapshot.SourceOptions.CultureName);
+        Assert.Equal("Id", secondSnapshot.DetectedSchema[0].Name);
+
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        Assert.Null(await service.GetPendingSourceAsync(
+            pipelineId, sourceReferenceId, CancellationToken.None));
         Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
     }
 

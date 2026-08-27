@@ -90,6 +90,84 @@ public sealed class PipelineSourceCommitCoordinator
         }
     }
 
+    public async Task<PipelineSourceCommitStatus> CommitRemapAsync(
+        Guid pipelineId,
+        Guid sourceReferenceId,
+        Func<CancellationToken, Task<bool>> persistAsync,
+        Func<CancellationToken, Task<bool>> restoreAsync,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty)
+        {
+            throw new ArgumentException("Pipeline identifier cannot be empty.", nameof(pipelineId));
+        }
+
+        if (sourceReferenceId == Guid.Empty)
+        {
+            throw new ArgumentException("Source reference identifier cannot be empty.", nameof(sourceReferenceId));
+        }
+
+        ArgumentNullException.ThrowIfNull(persistAsync);
+        ArgumentNullException.ThrowIfNull(restoreAsync);
+
+        var gate = GetGate(pipelineId);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            bool persisted;
+            try
+            {
+                persisted = await persistAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                await CompensateRemapPreservingFailureAsync(
+                        sourceReferenceId,
+                        restoreAsync,
+                        exception)
+                    .ConfigureAwait(false);
+                throw;
+            }
+
+            if (!persisted)
+            {
+                await _sourceStore.DiscardAsync(sourceReferenceId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return PipelineSourceCommitStatus.PersistenceRejected;
+            }
+
+            try
+            {
+                if (await _sourceStore.ActivateAsync(
+                        pipelineId,
+                        sourceReferenceId,
+                        CancellationToken.None)
+                    .ConfigureAwait(false))
+                {
+                    return PipelineSourceCommitStatus.Succeeded;
+                }
+            }
+            catch (Exception exception)
+            {
+                await CompensateRemapPreservingFailureAsync(
+                        sourceReferenceId,
+                        restoreAsync,
+                        exception)
+                    .ConfigureAwait(false);
+                throw;
+            }
+
+            await CompensateRemapAsync(sourceReferenceId, restoreAsync)
+                .ConfigureAwait(false);
+            return PipelineSourceCommitStatus.ActivationFailed;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<PipelinePreviewSnapshot> CapturePreviewAsync(
         Guid pipelineId,
         Func<CancellationToken, Task<PipelineDefinition?>> loadPipelineAsync,
@@ -170,6 +248,77 @@ public sealed class PipelineSourceCommitCoordinator
         }
         catch (Exception cleanupFailure)
             when (cleanupFailure is IOException or UnauthorizedAccessException)
+        {
+            primaryFailure.Data["EtlTool.SourceDiscardFailure"] = cleanupFailure;
+        }
+    }
+
+    private async Task CompensateRemapAsync(
+        Guid sourceReferenceId,
+        Func<CancellationToken, Task<bool>> restoreAsync)
+    {
+        List<Exception>? failures = null;
+
+        try
+        {
+            if (!await restoreAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                failures =
+                [
+                    new InvalidOperationException(
+                        "The previous pipeline configuration could not be restored.")
+                ];
+            }
+        }
+        catch (Exception exception)
+        {
+            failures = [exception];
+        }
+
+        try
+        {
+            await _sourceStore.DiscardAsync(sourceReferenceId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failures ??= [];
+            failures.Add(exception);
+        }
+
+        if (failures is { Count: > 0 })
+        {
+            throw new InvalidOperationException(
+                "The failed remap could not be compensated safely.",
+                new AggregateException(failures));
+        }
+    }
+
+    private async Task CompensateRemapPreservingFailureAsync(
+        Guid sourceReferenceId,
+        Func<CancellationToken, Task<bool>> restoreAsync,
+        Exception primaryFailure)
+    {
+        try
+        {
+            if (!await restoreAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                primaryFailure.Data["EtlTool.PipelineRestoreFailure"] =
+                    new InvalidOperationException(
+                        "The previous pipeline configuration could not be restored.");
+            }
+        }
+        catch (Exception restorationFailure)
+        {
+            primaryFailure.Data["EtlTool.PipelineRestoreFailure"] = restorationFailure;
+        }
+
+        try
+        {
+            await _sourceStore.DiscardAsync(sourceReferenceId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception cleanupFailure)
         {
             primaryFailure.Data["EtlTool.SourceDiscardFailure"] = cleanupFailure;
         }

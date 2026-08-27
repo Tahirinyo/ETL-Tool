@@ -652,10 +652,10 @@ public sealed class PipelinesControllerTests
         Assert.Equal(delimiter, inspection.CsvOptions!.Delimiter);
         Assert.Equal(["Id", "Name"], model.Columns);
         Assert.Single(model.SampleRows);
-        Assert.Equal(SourceType.Csv, pipeline.SourceType);
+        Assert.Equal(SourceType.Csv, service.UpdatedPipeline!.SourceType);
         Assert.Equal(
             [("Id", SourceFieldType.Integer), ("Name", SourceFieldType.String)],
-            pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)));
+            service.UpdatedPipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)));
     }
 
     [Fact]
@@ -690,14 +690,14 @@ public sealed class PipelinesControllerTests
         Assert.Equal("Second", inspection.WorksheetName);
         Assert.Equal("tr-TR", inspection.XlsxOptions!.CultureName);
         Assert.Equal("dd.MM.yyyy", inspection.XlsxOptions.DateFormat);
-        Assert.Equal(SourceType.Xlsx, pipeline.SourceType);
-        Assert.Equal("Second", pipeline.SourceOptions.WorksheetName);
+        Assert.Equal(SourceType.Xlsx, service.UpdatedPipeline!.SourceType);
+        Assert.Equal("Second", service.UpdatedPipeline.SourceOptions.WorksheetName);
         Assert.Equal("Keep me", pipeline.Name);
         Assert.Equal("Unchanged", pipeline.Description);
         Assert.Equal(["SecondId"], model.Columns);
         Assert.Equal(
             [("SecondId", SourceFieldType.Integer)],
-            pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)));
+            service.UpdatedPipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)));
     }
 
     [Fact]
@@ -754,8 +754,8 @@ public sealed class PipelinesControllerTests
 
         Assert.IsType<ViewResult>(selected);
         Assert.Equal(1, service.UpdateCallCount);
-        Assert.Equal(SourceType.Xlsx, owner.SourceType);
-        Assert.Equal("Data", owner.SourceOptions.WorksheetName);
+        Assert.Equal(SourceType.Xlsx, service.UpdatedPipeline!.SourceType);
+        Assert.Equal("Data", service.UpdatedPipeline.SourceOptions.WorksheetName);
     }
 
     [Fact]

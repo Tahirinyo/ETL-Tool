@@ -146,6 +146,7 @@ public sealed class PipelinesControllerPreviewTests
     public async Task InspectSource_ActivatesPendingSourceOnlyAfterPipelinePersistence()
     {
         var pipeline = ReadyPipeline();
+        pipeline.FieldMappings.RemoveAll(mapping => mapping.SourceField == "Ignored");
         var pipelineService = new StubPipelineService(pipeline);
         var sourceReferenceId = Guid.NewGuid();
         var inspection = new StubInspectionService(sourceReferenceId);
@@ -187,6 +188,7 @@ public sealed class PipelinesControllerPreviewTests
     public async Task InspectSource_FailedPipelinePersistenceDiscardsPendingSourceWithoutActivation()
     {
         var pipeline = ReadyPipeline();
+        pipeline.FieldMappings.RemoveAll(mapping => mapping.SourceField == "Ignored");
         var pipelineService = new StubPipelineService(pipeline, updateResult: false);
         var sourceReferenceId = Guid.NewGuid();
         var sourceStore = new RecordingWizardSourceStore();
