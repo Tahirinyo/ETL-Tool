@@ -62,6 +62,9 @@ public sealed class RunAdmissionServiceTests
         Assert.Equal(EtlRunStatus.Queued, run.Status);
         Assert.Equal("customers.csv", run.OriginalFileName);
         Assert.Equal("C:\\safe\\generated.upload", run.StoredFilePath);
+        Assert.NotNull(run.ExecutionConfiguration);
+        Assert.Equal(pipeline.SourceType, run.ExecutionConfiguration.SourceType);
+        Assert.Equal(pipeline.SourceOptions.CultureName, run.ExecutionConfiguration.SourceOptions.CultureName);
         Assert.Null(run.StartedAt);
         Assert.Null(run.CompletedAt);
         Assert.Equal(0, run.ProcessedRows);
@@ -568,8 +571,25 @@ public sealed class RunAdmissionServiceTests
         public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid id, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+            Guid runId,
+            DateTimeOffset completedAt,
+            string systemError,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> TryInterruptAsync(
+            Guid runId,
+            EtlRunStatus expectedStatus,
+            DateTimeOffset completedAt,
+            long observedRows,
+            string systemError,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

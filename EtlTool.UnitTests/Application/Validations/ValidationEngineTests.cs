@@ -27,11 +27,16 @@ public sealed class ValidationEngineTests
     }
 
     [Fact]
-    public void Validate_ReturnsFirstFailureWithoutEvaluatingLaterRules()
+    public void Validate_ContinuesAfterEarlierFailureAndInvokesLaterRule()
     {
         var row = Row(("Name", null));
+        var laterHandler = new TrackingHandler(ValidationType.EmailFormat);
+        var engine = new ValidationEngine(new ValidationHandlerRegistry([
+            new RequiredValidationHandler(),
+            laterHandler
+        ]));
 
-        var result = _engine.Validate(row, [Rule(ValidationType.Required, "Name"), new ValidationRule
+        var result = engine.Validate(row, [Rule(ValidationType.Required, "Name"), new ValidationRule
         {
             Type = ValidationType.EmailFormat,
             Field = "Email"
@@ -39,6 +44,7 @@ public sealed class ValidationEngineTests
 
         Assert.False(result.IsValid);
         Assert.Equal("Name", Assert.Single(result.Errors).Field);
+        Assert.Equal(1, laterHandler.InvocationCount);
     }
 
     [Fact]
@@ -66,6 +72,25 @@ public sealed class ValidationEngineTests
         Assert.False(result.IsValid);
         Assert.Equal("Email", error.Field);
         Assert.Equal("Field 'Email' is required.", error.Message);
+    }
+
+    [Fact]
+    public void Validate_ComposesRequiredAndEmailFormatForPresentValues()
+    {
+        var rules = new[]
+        {
+            Rule(ValidationType.Required, "Email"),
+            Rule(ValidationType.EmailFormat, "Email")
+        };
+
+        var malformed = _engine.Validate(Row(("Email", "invalid")), rules, Options());
+        var valid = _engine.Validate(Row(("Email", "ada@example.com")), rules, Options());
+
+        Assert.False(malformed.IsValid);
+        Assert.Equal(
+            "Field 'Email' must be a valid email address.",
+            Assert.Single(malformed.Errors).Message);
+        Assert.True(valid.IsValid);
     }
 
     [Fact]
@@ -101,6 +126,26 @@ public sealed class ValidationEngineTests
     }
 
     [Fact]
+    public void Validate_ComposesRequiredAndNumericRangeWithoutSharingResponsibilities()
+    {
+        var range = Rule(ValidationType.NumericRange, "Amount");
+        range.Configuration["Minimum"] = "10";
+        var rules = new[]
+        {
+            Rule(ValidationType.Required, "Amount"),
+            range
+        };
+
+        var missing = _engine.Validate(Row(("Amount", " ")), rules, Options());
+        var unsupported = _engine.Validate(Row(("Amount", "10")), rules, Options());
+        var valid = _engine.Validate(Row(("Amount", 10L)), rules, Options());
+
+        Assert.Equal("Field 'Amount' is required.", Assert.Single(missing.Errors).Message);
+        Assert.Equal("Field 'Amount' must be at least 10.", Assert.Single(unsupported.Errors).Message);
+        Assert.True(valid.IsValid);
+    }
+
+    [Fact]
     public void Validate_ThrowsForNullArgumentsAndInvalidRuleCollectionEntry()
     {
         Assert.Throws<ArgumentNullException>(() => _engine.Validate(null!, [], Options()));
@@ -131,4 +176,18 @@ public sealed class ValidationEngineTests
     {
         CultureName = cultureName ?? string.Empty
     };
+
+    private sealed class TrackingHandler(ValidationType type) : IValidationHandler
+    {
+        public ValidationType Type { get; } = type;
+
+        public int InvocationCount { get; private set; }
+
+        public ValidationResult Validate(DataRow row, ValidationRule rule)
+        {
+            InvocationCount++;
+            return ValidationResult.Valid(row);
+        }
+    }
+
 }

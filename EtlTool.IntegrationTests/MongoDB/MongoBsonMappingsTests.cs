@@ -1,6 +1,9 @@
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.MongoDB;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace EtlTool.IntegrationTests.MongoDB;
 
@@ -29,5 +32,82 @@ public sealed class MongoBsonMappingsTests
         var pipelineId = Assert.IsType<BsonBinaryData>(document[nameof(EtlRun.PipelineId)]);
         Assert.Equal(BsonBinarySubType.UuidStandard, runId.SubType);
         Assert.Equal(BsonBinarySubType.UuidStandard, pipelineId.SubType);
+    }
+
+    [Fact]
+    public void EtlRunMapping_RoundTripsNestedExecutionConfigurationAndAllowsLegacyDocuments()
+    {
+        _ = new MongoMetadataDatabase(new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_bson_mapping_tests"
+        });
+        var transformationId = Guid.NewGuid();
+        var validationId = Guid.NewGuid();
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            PipelineId = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(new PipelineDefinition
+            {
+                SourceType = SourceType.Csv,
+                SourceOptions = new SourceOptions
+                {
+                    CultureName = "tr-TR",
+                    DateFormat = "dd.MM.yyyy",
+                    Delimiter = CsvDelimiter.Semicolon
+                },
+                ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
+                FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
+                TransformationRules =
+                [
+                    new TransformationRule
+                    {
+                        Id = transformationId,
+                        Type = TransformationType.Trim,
+                        Order = 1,
+                        SourceField = "id",
+                        Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["Mode"] = "Both"
+                        }
+                    }
+                ],
+                ValidationRules =
+                [
+                    new ValidationRule
+                    {
+                        Id = validationId,
+                        Type = ValidationType.Required,
+                        Field = "id",
+                        ErrorMessage = "Id is required."
+                    }
+                ],
+                DestinationDatabase = "etl_target",
+                DestinationCollection = "customers",
+                UpsertKeyField = "id"
+            })
+        };
+
+        var document = run.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<EtlRun>(document);
+        var legacyDocument = new BsonDocument(document);
+        legacyDocument.Remove(nameof(EtlRun.ExecutionConfiguration));
+        var legacy = BsonSerializer.Deserialize<EtlRun>(legacyDocument);
+
+        Assert.NotNull(roundTripped.ExecutionConfiguration);
+        Assert.Equal(
+            run.ExecutionConfiguration!.ToBsonDocument(),
+            roundTripped.ExecutionConfiguration.ToBsonDocument());
+        Assert.Equal(
+            BsonBinarySubType.UuidStandard,
+            document[nameof(EtlRun.ExecutionConfiguration)]
+                .AsBsonDocument[nameof(EtlRunExecutionConfiguration.TransformationRules)]
+                .AsBsonArray[0]
+                .AsBsonDocument["_id"]
+                .AsBsonBinaryData.SubType);
+        Assert.Equal(transformationId, roundTripped.ExecutionConfiguration.TransformationRules[0].Id);
+        Assert.Equal(validationId, roundTripped.ExecutionConfiguration.ValidationRules[0].Id);
+        Assert.Null(legacy.ExecutionConfiguration);
     }
 }

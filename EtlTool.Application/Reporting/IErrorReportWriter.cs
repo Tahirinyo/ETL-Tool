@@ -11,6 +11,7 @@ public interface IErrorReportWriter
         Stream output,
         Guid runId,
         IReadOnlyList<string> sourceFields,
+        string upsertKeyField,
         IAsyncEnumerable<RowProcessingResult> rowResults,
         CancellationToken cancellationToken);
 }

@@ -90,6 +90,16 @@ public sealed class DomainContractTests
     }
 
     [Fact]
+    public void PipelineDefinition_DoesNotContainMongoConnectionOrCredentialState()
+    {
+        Assert.DoesNotContain(
+            typeof(PipelineDefinition).GetProperties(),
+            property => property.Name.Contains("connection", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("credential", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("secret", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void SourceOptions_ResolveCultureUsesInvariantForOmittedNullAndEmptyNames()
     {
         var omitted = new SourceOptions();

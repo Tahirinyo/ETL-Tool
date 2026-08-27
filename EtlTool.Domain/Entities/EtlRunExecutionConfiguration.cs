@@ -1,0 +1,96 @@
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+
+namespace EtlTool.Domain.Entities;
+
+public sealed class EtlRunExecutionConfiguration
+{
+    public SourceType SourceType { get; set; }
+
+    public SourceOptions SourceOptions { get; set; } = new();
+
+    public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
+
+    public List<FieldMapping> FieldMappings { get; set; } = [];
+
+    public List<TransformationRule> TransformationRules { get; set; } = [];
+
+    public List<ValidationRule> ValidationRules { get; set; } = [];
+
+    public string DestinationDatabase { get; set; } = string.Empty;
+
+    public string DestinationCollection { get; set; } = string.Empty;
+
+    public string UpsertKeyField { get; set; } = string.Empty;
+
+    public static EtlRunExecutionConfiguration Capture(PipelineDefinition pipeline)
+    {
+        ArgumentNullException.ThrowIfNull(pipeline);
+
+        return new EtlRunExecutionConfiguration
+        {
+            SourceType = pipeline.SourceType,
+            SourceOptions = Copy(pipeline.SourceOptions),
+            ExpectedSchema = pipeline.ExpectedSchema.Select(Copy).ToList(),
+            FieldMappings = pipeline.FieldMappings.Select(Copy).ToList(),
+            TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
+            ValidationRules = pipeline.ValidationRules.Select(Copy).ToList(),
+            DestinationDatabase = pipeline.DestinationDatabase,
+            DestinationCollection = pipeline.DestinationCollection,
+            UpsertKeyField = pipeline.UpsertKeyField
+        };
+    }
+
+    public PipelineDefinition ToPipelineDefinition() => new()
+    {
+        SourceType = SourceType,
+        SourceOptions = Copy(SourceOptions),
+        ExpectedSchema = ExpectedSchema.Select(Copy).ToList(),
+        FieldMappings = FieldMappings.Select(Copy).ToList(),
+        TransformationRules = TransformationRules.Select(Copy).ToList(),
+        ValidationRules = ValidationRules.Select(Copy).ToList(),
+        DestinationDatabase = DestinationDatabase,
+        DestinationCollection = DestinationCollection,
+        UpsertKeyField = UpsertKeyField
+    };
+
+    private static SourceOptions Copy(SourceOptions value) => new()
+    {
+        CultureName = value.CultureName,
+        DateFormat = value.DateFormat,
+        Delimiter = value.Delimiter,
+        WorksheetName = value.WorksheetName,
+        FirstRowIsHeader = value.FirstRowIsHeader
+    };
+
+    private static SourceFieldDefinition Copy(SourceFieldDefinition value) => new()
+    {
+        Name = value.Name,
+        DataType = value.DataType
+    };
+
+    private static FieldMapping Copy(FieldMapping value) => new()
+    {
+        SourceField = value.SourceField,
+        TargetField = value.TargetField,
+        IsIncluded = value.IsIncluded
+    };
+
+    private static TransformationRule Copy(TransformationRule value) => new()
+    {
+        Id = value.Id,
+        Type = value.Type,
+        Order = value.Order,
+        SourceField = value.SourceField,
+        Configuration = new Dictionary<string, string>(value.Configuration, StringComparer.Ordinal)
+    };
+
+    private static ValidationRule Copy(ValidationRule value) => new()
+    {
+        Id = value.Id,
+        Type = value.Type,
+        Field = value.Field,
+        Configuration = new Dictionary<string, string>(value.Configuration, StringComparer.Ordinal),
+        ErrorMessage = value.ErrorMessage
+    };
+}

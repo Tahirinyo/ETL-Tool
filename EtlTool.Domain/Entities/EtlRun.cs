@@ -16,6 +16,8 @@ public sealed class EtlRun
 
     public string StoredFilePath { get; set; } = string.Empty;
 
+    public EtlRunExecutionConfiguration? ExecutionConfiguration { get; set; }
+
     public DateTimeOffset? StartedAt { get; set; }
 
     public DateTimeOffset? CompletedAt { get; set; }

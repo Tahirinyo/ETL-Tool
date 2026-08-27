@@ -99,6 +99,17 @@ public sealed class NumericRangeValidationHandlerTests
         Assert.True(result.IsValid);
     }
 
+    [Fact]
+    public void Validate_UsesOrdinalConfiguredFieldLookup()
+    {
+        var result = _handler.Validate(
+            Row(7, ("Amount", 20L)),
+            Rule("amount", maximum: "10"),
+            InvariantCulture);
+
+        Assert.True(result.IsValid);
+    }
+
     [Theory]
     [InlineData("10")]
     [InlineData(10.0)]

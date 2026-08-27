@@ -196,6 +196,8 @@ public sealed class RunsControllerTests
         Assert.Equal(run.SystemError, model.SystemError);
         Assert.True(model.HasErrorReport);
         Assert.Equal("00:02:00", model.DurationDisplay);
+        Assert.Equal(run.TotalRows, model.TotalRows);
+        Assert.Equal(run.ProcessedRows, model.ProcessedRows);
         Assert.Equal(run.UpdatedRows, model.UpdatedRows);
     }
 
@@ -274,8 +276,12 @@ public sealed class RunsControllerTests
             return Task.FromResult(runs ?? (IReadOnlyList<EtlRun>)[]);
         }
 
+        public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
         public Task AddAsync(EtlRun value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(Guid runId, DateTimeOffset completedAt, string systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryInterruptAsync(Guid runId, EtlRunStatus expectedStatus, DateTimeOffset completedAt, long observedRows, string systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, string? errorReportPath, CancellationToken cancellationToken) => throw new NotSupportedException();
     }

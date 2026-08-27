@@ -126,7 +126,8 @@ public sealed class RunAdmissionService : IRunAdmissionService
             PipelineName = pipeline.Name,
             Status = EtlRunStatus.Queued,
             OriginalFileName = source.OriginalFileName,
-            StoredFilePath = source.StoredFilePath
+            StoredFilePath = source.StoredFilePath,
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(pipeline)
         };
 
         try

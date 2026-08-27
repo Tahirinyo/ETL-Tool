@@ -24,7 +24,10 @@ public sealed class SchemaDifferenceViewModel
     public IReadOnlyList<SchemaFieldViewModel> NewFields { get; init; } = [];
     public IReadOnlyList<SchemaTypeChangeViewModel> TypeChanges { get; init; } = [];
     public IReadOnlyList<UnresolvedMappingViewModel> UnresolvedMappings { get; init; } = [];
-    public bool RequiresRemapping => UnresolvedMappings.Count > 0;
+    public bool RequiresRemapping => MissingFields.Count > 0
+        || NewFields.Count > 0
+        || TypeChanges.Count > 0
+        || UnresolvedMappings.Count > 0;
 }
 
 public sealed class SchemaFieldViewModel

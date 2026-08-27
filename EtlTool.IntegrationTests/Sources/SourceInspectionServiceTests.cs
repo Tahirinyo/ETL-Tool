@@ -5,6 +5,7 @@ using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.Uploads;
 using static EtlTool.IntegrationTests.Extraction.OpenXmlWorkbookFixture;
@@ -1014,6 +1015,97 @@ public sealed class SourceInspectionServiceTests : IDisposable
             await service.AcquireAsync(pipelineId, SourceType.Xlsx, options, CancellationToken.None));
         Assert.True(lease.Content.CanRead);
         Assert.True(lease.Content.CanSeek);
+    }
+
+    [Fact]
+    public async Task RunReservation_BlocksReplacementAndExpirationUntilRollbackRestoresSource()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id\nactive"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId, content, "active.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(inspection.SourceReferenceId),
+            CancellationToken.None));
+        var reservation = Assert.IsAssignableFrom<IWizardRunSourceReservation>(
+            await service.ReserveForRunAsync(
+                pipelineId,
+                SourceType.Csv,
+                options,
+                CancellationToken.None));
+
+        await using var replacementContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\nreplacement"));
+        var replacement = await service.InspectCsvAsync(
+            pipelineId, replacementContent, "replacement.csv", options, CancellationToken.None);
+        Assert.False(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(replacement.SourceReferenceId),
+            CancellationToken.None));
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        await service.PurgeExpiredAsync();
+
+        Assert.True(File.Exists(reservation.StoredFilePath));
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+
+        await reservation.DisposeAsync();
+
+        await using var restored = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(
+                pipelineId, SourceType.Csv, options, CancellationToken.None));
+        using var reader = new StreamReader(restored.Content, leaveOpen: true);
+        Assert.Equal("Id", await reader.ReadLineAsync());
+        Assert.Equal("active", await reader.ReadLineAsync());
+    }
+
+    [Fact]
+    public async Task RunReservation_TransferUsesExistingRunSourceOpenAndCleanupPath()
+    {
+        var pipelineId = Guid.NewGuid();
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma };
+        var service = CreateService();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id\nowned"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId, content, "customers.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            pipelineId,
+            Assert.IsType<Guid>(inspection.SourceReferenceId),
+            CancellationToken.None));
+        var reservation = Assert.IsAssignableFrom<IWizardRunSourceReservation>(
+            await service.ReserveForRunAsync(
+                pipelineId,
+                SourceType.Csv,
+                options,
+                CancellationToken.None));
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            PipelineId = pipelineId,
+            OriginalFileName = reservation.OriginalFileName,
+            StoredFilePath = reservation.StoredFilePath
+        };
+
+        reservation.TransferToRun();
+        await reservation.DisposeAsync();
+
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Csv, options, CancellationToken.None));
+        var uploadStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
+        var runStore = new LocalRunSourceFileStore(
+            new UploadStorageOptions { RootPath = _root },
+            uploadStorage);
+        await using (var source = runStore.Open(run))
+        using (var reader = new StreamReader(source, leaveOpen: true))
+        {
+            Assert.Equal("Id", await reader.ReadLineAsync());
+            Assert.Equal("owned", await reader.ReadLineAsync());
+        }
+
+        await runStore.DeleteAsync(run, CancellationToken.None);
+        Assert.False(File.Exists(run.StoredFilePath));
     }
 
     public void Dispose()

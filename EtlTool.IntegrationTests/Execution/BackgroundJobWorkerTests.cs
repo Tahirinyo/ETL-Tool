@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using EtlTool.Application.Execution;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -164,6 +167,129 @@ public sealed class BackgroundJobWorkerTests
     }
 
     [Fact]
+    public async Task StopAsync_InterruptsQueuedPersistedRunAndCleansItsSourceOnce()
+    {
+        await using var harness = new WorkerHarness(expectedExecutions: 1, expectedDisposals: 1);
+        var activeRun = new EtlRun { Id = Guid.NewGuid(), Status = EtlRunStatus.Running };
+        var queuedRun = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            Status = EtlRunStatus.Queued,
+            StoredFilePath = "queued.upload"
+        };
+        var activeEntered = NewSignal();
+        harness.Probe.Execute = async (job, _, token) =>
+        {
+            activeEntered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+
+        await harness.StartAsync();
+        harness.RunRepository.Add(activeRun);
+        harness.RunRepository.Add(queuedRun);
+        await harness.Queue.EnqueueAsync(new BackgroundJob(activeRun.Id), CancellationToken.None);
+        await activeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await harness.Queue.EnqueueAsync(new BackgroundJob(queuedRun.Id), CancellationToken.None);
+
+        await harness.StopAsync();
+        await harness.RecoveryService.RecoverAbandonedQueuedRunAsync(
+            new BackgroundJob(queuedRun.Id),
+            CancellationToken.None);
+
+        Assert.Equal(EtlRunStatus.Running, activeRun.Status);
+        Assert.Equal(EtlRunStatus.Interrupted, queuedRun.Status);
+        Assert.NotNull(queuedRun.CompletedAt);
+        Assert.Contains("stopped", queuedRun.SystemError!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal([queuedRun.Id], harness.SourceFiles.DeletedRunIds);
+    }
+
+    [Fact]
+    public async Task StartAsync_ClassifiesStaleRunsAndCleansEachRecoveredSourceOnce()
+    {
+        await using var harness = new WorkerHarness(expectedExecutions: 0, expectedDisposals: 0);
+        var queued = new EtlRun { Id = Guid.NewGuid(), Status = EtlRunStatus.Queued };
+        var legacyRunning = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            Status = EtlRunStatus.Running,
+            ExecutionConfiguration = null,
+            TotalRows = 6,
+            ProcessedRows = 7,
+            ValidRows = 4,
+            InvalidRows = 1,
+            FilteredRows = 1,
+            DeduplicatedRows = 1,
+            InsertedRows = 3,
+            UpdatedRows = 1
+        };
+        var running = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            Status = EtlRunStatus.Running,
+            ExecutionConfiguration = ValidExecutionConfiguration(),
+            ProcessedRows = 8,
+            ValidRows = 5,
+            InvalidRows = 1,
+            FilteredRows = 1,
+            DeduplicatedRows = 1,
+            InsertedRows = 4,
+            UpdatedRows = 1
+        };
+        var terminalRuns = new[]
+        {
+            Terminal(EtlRunStatus.Completed),
+            Terminal(EtlRunStatus.PartiallyCompleted),
+            Terminal(EtlRunStatus.Failed),
+            Terminal(EtlRunStatus.Interrupted)
+        };
+        harness.RunRepository.Add(queued);
+        harness.RunRepository.Add(legacyRunning);
+        harness.RunRepository.Add(running);
+        foreach (var terminal in terminalRuns)
+        {
+            harness.RunRepository.Add(terminal);
+        }
+
+        await harness.StartAsync();
+        await harness.RecoveryService.RecoverStaleRunsAsync(CancellationToken.None);
+        await harness.StopAsync();
+
+        Assert.Equal(EtlRunStatus.Interrupted, queued.Status);
+        Assert.NotNull(queued.CompletedAt);
+        Assert.Equal(0, queued.TotalRows);
+        Assert.Equal(EtlRunStatus.Failed, legacyRunning.Status);
+        Assert.NotNull(legacyRunning.CompletedAt);
+        Assert.Equal(
+            "The admitted ETL execution configuration is unavailable.",
+            legacyRunning.SystemError);
+        Assert.Equal(6, legacyRunning.TotalRows);
+        Assert.Equal((7L, 4L, 1L, 1L, 1L, 3L, 1L), Counters(legacyRunning));
+        Assert.Equal(EtlRunStatus.Interrupted, running.Status);
+        Assert.NotNull(running.CompletedAt);
+        Assert.Equal(8, running.TotalRows);
+        Assert.Equal((8L, 5L, 1L, 1L, 1L, 4L, 1L), Counters(running));
+        Assert.Equal(
+            new[]
+            {
+                EtlRunStatus.Completed,
+                EtlRunStatus.PartiallyCompleted,
+                EtlRunStatus.Failed,
+                EtlRunStatus.Interrupted
+            },
+            terminalRuns.Select(run => run.Status));
+        Assert.All(terminalRuns, terminal =>
+        {
+            Assert.Equal($"Historical {terminal.Status}.", terminal.SystemError);
+            Assert.Equal(new DateTimeOffset(2026, 8, 27, 9, 0, 0, TimeSpan.Zero), terminal.CompletedAt);
+        });
+        Assert.Equal(3, harness.SourceFiles.DeletedRunIds.Count);
+        Assert.Equal(3, harness.SourceFiles.DeletedRunIds.Distinct().Count());
+        Assert.Contains(queued.Id, harness.SourceFiles.DeletedRunIds);
+        Assert.Contains(legacyRunning.Id, harness.SourceFiles.DeletedRunIds);
+        Assert.Contains(running.Id, harness.SourceFiles.DeletedRunIds);
+    }
+
+    [Fact]
     public async Task Worker_LogsBothCallbackAndScopeDisposalFailures()
     {
         await using var harness = new WorkerHarness(expectedExecutions: 1, expectedDisposals: 1);
@@ -188,6 +314,38 @@ public sealed class BackgroundJobWorkerTests
 
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static EtlRun Terminal(EtlRunStatus status)
+    {
+        var diagnostic = $"Historical {status}.";
+        return new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            Status = status,
+            SystemError = diagnostic,
+            CompletedAt = new DateTimeOffset(2026, 8, 27, 9, 0, 0, TimeSpan.Zero)
+        };
+    }
+
+    private static (long, long, long, long, long, long, long) Counters(EtlRun run) =>
+        (run.ProcessedRows, run.ValidRows, run.InvalidRows, run.FilteredRows,
+            run.DeduplicatedRows, run.InsertedRows, run.UpdatedRows);
+
+    private static EtlRunExecutionConfiguration ValidExecutionConfiguration() =>
+        EtlRunExecutionConfiguration.Capture(new PipelineDefinition
+        {
+            SourceType = SourceType.Csv,
+            SourceOptions = new SourceOptions
+            {
+                CultureName = "en-US",
+                FirstRowIsHeader = true
+            },
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
+            FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
+            DestinationDatabase = "target_database",
+            DestinationCollection = "target_collection",
+            UpsertKeyField = "id"
+        });
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
@@ -215,6 +373,12 @@ public sealed class BackgroundJobWorkerTests
             services.AddSingleton<IBackgroundJobQueue>(provider =>
                 provider.GetRequiredService<InProcessBackgroundJobQueue>());
             services.AddSingleton<IExecutionCancellationRegistry, ExecutionCancellationRegistry>();
+            RunRepository = new InMemoryRecoveryRunRepository();
+            SourceFiles = new RecordingRunSourceFileStore();
+            services.AddSingleton<IEtlRunRepository>(RunRepository);
+            services.AddSingleton<IRunSourceFileStore>(SourceFiles);
+            services.AddSingleton<TimeProvider>(TimeProvider.System);
+            services.AddSingleton<AbandonedRunRecoveryService>();
             services.AddSingleton(Probe);
             services.AddScoped<IBackgroundJobExecutor, ProbeBackgroundJobExecutor>();
             services.AddLogging(builder => builder.AddProvider(Logs));
@@ -227,12 +391,19 @@ public sealed class BackgroundJobWorkerTests
             });
             Queue = _services.GetRequiredService<InProcessBackgroundJobQueue>();
             CancellationRegistry = _services.GetRequiredService<IExecutionCancellationRegistry>();
+            RecoveryService = _services.GetRequiredService<AbandonedRunRecoveryService>();
             _worker = Assert.Single(_services.GetServices<IHostedService>());
         }
 
         public InProcessBackgroundJobQueue Queue { get; }
 
         public IExecutionCancellationRegistry CancellationRegistry { get; }
+
+        public InMemoryRecoveryRunRepository RunRepository { get; }
+
+        public RecordingRunSourceFileStore SourceFiles { get; }
+
+        public AbandonedRunRecoveryService RecoveryService { get; }
 
         public JobExecutionProbe Probe { get; }
 
@@ -331,6 +502,98 @@ public sealed class BackgroundJobWorkerTests
     }
 
     private sealed record ExecutionRecord(Guid RunId, Guid ScopeId, bool TokenWasCancelled);
+
+    private sealed class RecordingRunSourceFileStore : IRunSourceFileStore
+    {
+        public ConcurrentQueue<Guid> DeletedRunIds { get; } = new();
+
+        public Stream Open(EtlRun run) => throw new NotSupportedException();
+
+        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken)
+        {
+            DeletedRunIds.Enqueue(run.Id);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class InMemoryRecoveryRunRepository : IEtlRunRepository
+    {
+        private readonly object _sync = new();
+        private readonly List<EtlRun> _runs = [];
+
+        public void Add(EtlRun run)
+        {
+            lock (_sync) _runs.Add(run);
+        }
+
+        public Task<EtlRun?> GetByIdAsync(Guid runId, CancellationToken cancellationToken)
+        {
+            lock (_sync) return Task.FromResult<EtlRun?>(_runs.SingleOrDefault(run => run.Id == runId));
+        }
+
+        public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                return Task.FromResult<IReadOnlyList<EtlRun>>(
+                    _runs.Where(run => run.Status is EtlRunStatus.Queued or EtlRunStatus.Running).ToArray());
+            }
+        }
+
+        public Task<bool> TryInterruptAsync(
+            Guid runId,
+            EtlRunStatus expectedStatus,
+            DateTimeOffset completedAt,
+            long observedRows,
+            string systemError,
+            CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                var run = _runs.SingleOrDefault(run => run.Id == runId);
+                if (run is null || run.Status != expectedStatus)
+                {
+                    return Task.FromResult(false);
+                }
+
+                run.Status = EtlRunStatus.Interrupted;
+                run.CompletedAt = completedAt;
+                run.TotalRows = Math.Max(run.TotalRows, observedRows);
+                run.SystemError = systemError;
+                run.ErrorReportPath = null;
+                return Task.FromResult(true);
+            }
+        }
+
+        public Task AddAsync(EtlRun run, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid pipelineId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+            Guid runId,
+            DateTimeOffset completedAt,
+            string systemError,
+            CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                var run = _runs.SingleOrDefault(run => run.Id == runId);
+                if (run is null
+                    || run.Status != EtlRunStatus.Running
+                    || run.ExecutionConfiguration is not null)
+                {
+                    return Task.FromResult(false);
+                }
+
+                run.Status = EtlRunStatus.Failed;
+                run.CompletedAt = completedAt;
+                run.SystemError = systemError;
+                run.ErrorReportPath = null;
+                return Task.FromResult(true);
+            }
+        }
+        public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, string? errorReportPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
 
     private sealed class RecordingLoggerProvider : ILoggerProvider
     {

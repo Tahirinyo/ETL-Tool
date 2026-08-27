@@ -58,6 +58,13 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(
+        CancellationToken cancellationToken) =>
+        await _collection
+            .Find(run => run.Status == EtlRunStatus.Queued
+                || run.Status == EtlRunStatus.Running)
+            .ToListAsync(cancellationToken);
+
     public async Task<bool> TryStartAsync(
         Guid runId,
         DateTimeOffset startedAt,
@@ -72,6 +79,65 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
             Builders<EtlRun>.Update
                 .Set(run => run.Status, EtlRunStatus.Running)
                 .Set(run => run.StartedAt, startedAt),
+            cancellationToken: cancellationToken);
+
+        return result.MatchedCount > 0;
+    }
+
+    public async Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+        Guid runId,
+        DateTimeOffset completedAt,
+        string systemError,
+        CancellationToken cancellationToken)
+    {
+        ValidateId(runId);
+        ValidateSystemError(systemError);
+
+        var missingExecutionConfigurationFilter = Builders<EtlRun>.Filter.Or(
+            Builders<EtlRun>.Filter.Exists(
+                run => run.ExecutionConfiguration,
+                exists: false),
+            Builders<EtlRun>.Filter.Eq(
+                run => run.ExecutionConfiguration,
+                null));
+        var result = await _collection.UpdateOneAsync(
+            Builders<EtlRun>.Filter.And(
+                Builders<EtlRun>.Filter.Eq(run => run.Id, runId),
+                Builders<EtlRun>.Filter.Eq(run => run.Status, EtlRunStatus.Running),
+                missingExecutionConfigurationFilter),
+            Builders<EtlRun>.Update
+                .Set(run => run.Status, EtlRunStatus.Failed)
+                .Set(run => run.CompletedAt, completedAt)
+                .Set(run => run.SystemError, systemError)
+                .Set(run => run.ErrorReportPath, null),
+            cancellationToken: cancellationToken);
+
+        return result.MatchedCount > 0;
+    }
+
+    public async Task<bool> TryInterruptAsync(
+        Guid runId,
+        EtlRunStatus expectedStatus,
+        DateTimeOffset completedAt,
+        long observedRows,
+        string systemError,
+        CancellationToken cancellationToken)
+    {
+        ValidateId(runId);
+        ValidateNonTerminalStatus(expectedStatus);
+        ValidateObservedRows(observedRows);
+        ValidateSystemError(systemError);
+
+        var result = await _collection.UpdateOneAsync(
+            Builders<EtlRun>.Filter.And(
+                Builders<EtlRun>.Filter.Eq(run => run.Id, runId),
+                Builders<EtlRun>.Filter.Eq(run => run.Status, expectedStatus)),
+            Builders<EtlRun>.Update
+                .Set(run => run.Status, EtlRunStatus.Interrupted)
+                .Set(run => run.CompletedAt, completedAt)
+                .Max(run => run.TotalRows, observedRows)
+                .Set(run => run.SystemError, systemError)
+                .Set(run => run.ErrorReportPath, null),
             cancellationToken: cancellationToken);
 
         return result.MatchedCount > 0;
@@ -103,7 +169,8 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
             .Set(run => run.FilteredRows, progress.FilteredRows)
             .Set(run => run.DeduplicatedRows, progress.DeduplicatedRows)
             .Set(run => run.InsertedRows, progress.InsertedRows)
-            .Set(run => run.UpdatedRows, progress.UpdatedRows);
+            .Set(run => run.UpdatedRows, progress.UpdatedRows)
+            .Max(run => run.TotalRows, progress.ProcessedRows);
 
         var result = await _collection.UpdateOneAsync(
             filter,
@@ -160,6 +227,10 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
                 .Set(run => run.DeduplicatedRows, finalProgress.DeduplicatedRows)
                 .Set(run => run.InsertedRows, finalProgress.InsertedRows)
                 .Set(run => run.UpdatedRows, finalProgress.UpdatedRows);
+
+            update = status == EtlRunStatus.Completed
+                ? update.Set(run => run.TotalRows, finalProgress.ProcessedRows)
+                : update.Max(run => run.TotalRows, finalProgress.ProcessedRows);
         }
 
         var result = await _collection.UpdateOneAsync(
@@ -202,6 +273,36 @@ public sealed class MongoEtlRunRepository : IEtlRunRepository
         if (runId == Guid.Empty)
         {
             throw new ArgumentException("ETL run identifier cannot be empty.", nameof(runId));
+        }
+    }
+
+    private static void ValidateSystemError(string systemError)
+    {
+        if (string.IsNullOrWhiteSpace(systemError))
+        {
+            throw new ArgumentException(
+                "ETL run system error cannot be empty.",
+                nameof(systemError));
+        }
+    }
+
+    private static void ValidateObservedRows(long observedRows)
+    {
+        if (observedRows < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(observedRows),
+                "Observed ETL row count cannot be negative.");
+        }
+    }
+
+    private static void ValidateNonTerminalStatus(EtlRunStatus status)
+    {
+        if (status is not EtlRunStatus.Queued and not EtlRunStatus.Running)
+        {
+            throw new ArgumentException(
+                "Expected ETL run status must be queued or running.",
+                nameof(status));
         }
     }
 

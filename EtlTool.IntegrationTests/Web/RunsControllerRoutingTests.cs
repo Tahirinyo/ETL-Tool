@@ -107,8 +107,12 @@ public sealed class RunsControllerRoutingTests
         public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid pipelineId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<EtlRun>>([]);
 
+        public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
         public Task AddAsync(EtlRun value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(Guid runId, DateTimeOffset completedAt, string systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryInterruptAsync(Guid runId, EtlRunStatus expectedStatus, DateTimeOffset completedAt, long observedRows, string systemError, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> TryMarkTerminalAsync(Guid runId, EtlRunStatus status, DateTimeOffset completedAt, BatchExecutionProgress? finalProgress, string? systemError, string? errorReportPath, CancellationToken cancellationToken) => throw new NotSupportedException();
     }

@@ -102,6 +102,7 @@ builder.Services.AddSingleton<IErrorReportStore, LocalErrorReportStore>();
 builder.Services.AddSingleton(uploadStorageOptions);
 builder.Services.AddSingleton<IUploadStorage, LocalUploadStorage>();
 builder.Services.AddSingleton<IRunSourceFileStore, LocalRunSourceFileStore>();
+builder.Services.AddSingleton<AbandonedRunRecoveryService>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton(batchExecutionOptions);
 builder.Services.AddSingleton(backgroundJobQueueOptions);

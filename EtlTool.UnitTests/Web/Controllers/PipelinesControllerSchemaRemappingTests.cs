@@ -14,16 +14,38 @@ namespace EtlTool.UnitTests.Web.Controllers;
 public sealed class PipelinesControllerSchemaRemappingTests
 {
     [Fact]
-    public async Task InspectSource_AddedFieldPersistsExcludedMappingAndPreservesExistingMapping()
+    public async Task InspectSource_AddedFieldRequiresConfirmationAndMayThenRemainExcluded()
     {
         var pipeline = Pipeline();
+        var sourceReferenceId = Guid.NewGuid();
+        SourceFieldDefinition[] detectedSchema =
+        [
+            Field("Id", SourceFieldType.Integer),
+            Field("Legacy", SourceFieldType.String),
+            Field("Name", SourceFieldType.String)
+        ];
         var service = new RecordingPipelineService(pipeline);
         var source = new RecordingSourceInspectionService
         {
-            CsvResult = Inspection(
-                [Field("Id", SourceFieldType.Integer), Field("Legacy", SourceFieldType.String), Field("Name", SourceFieldType.String)])
+            CsvResult = new SourceInspectionResult
+            {
+                SourceType = SourceType.Csv,
+                Columns = detectedSchema.Select(field => field.Name).ToArray(),
+                DetectedSchema = detectedSchema,
+                SourceReferenceId = sourceReferenceId
+            },
+            Pending = new PendingSourceInspection
+            {
+                SourceType = SourceType.Csv,
+                SourceOptions = new SourceOptions { Delimiter = CsvDelimiter.Comma },
+                DetectedSchema = detectedSchema
+            }
         };
-        var controller = new PipelinesController(service, source);
+        var sourceStore = new RecordingSourceStore();
+        var controller = new PipelinesController(
+            service,
+            source,
+            sourceCommitCoordinator: new PipelineSourceCommitCoordinator(sourceStore));
         var file = new FormFile(
             new MemoryStream(Encoding.UTF8.GetBytes("Id,Name\n1,Ada")),
             0,
@@ -39,10 +61,40 @@ public sealed class PipelinesControllerSchemaRemappingTests
         }, CancellationToken.None);
 
         var model = Assert.IsType<SourceUploadViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(sourceReferenceId, model.PendingSourceReferenceId);
+        Assert.True(model.SchemaDifference!.RequiresRemapping);
         Assert.Single(model.SchemaDifference!.NewFields);
         Assert.Equal("Name", model.SchemaDifference.NewFields[0].Name);
+        Assert.Equal(0, service.UpdateCallCount);
+        Assert.Null(sourceStore.ActivatedSourceReferenceId);
+        Assert.Equal(["Id", "Legacy"], pipeline.ExpectedSchema.Select(field => field.Name));
+
+        var remappingResult = await controller.Mapping(
+            pipeline.Id,
+            CancellationToken.None,
+            sourceReferenceId);
+        var remappingModel = Assert.IsType<FieldMappingViewModel>(
+            Assert.IsType<ViewResult>(remappingResult).Model);
+        Assert.True(remappingModel.SchemaDifference!.RequiresRemapping);
+        Assert.False(remappingModel.Fields.Single(field => field.SourceField == "Name").IsIncluded);
+
+        var confirmationResult = await controller.Mapping(pipeline.Id, new FieldMappingViewModel
+        {
+            PendingSourceReferenceId = sourceReferenceId,
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "id", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Legacy", TargetField = "legacy", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Name", TargetField = string.Empty, IsIncluded = false }
+            ]
+        }, CancellationToken.None);
+
+        Assert.True(Assert.IsType<FieldMappingViewModel>(
+            Assert.IsType<ViewResult>(confirmationResult).Model).IsSaved);
         Assert.Equal(1, service.UpdateCallCount);
-        Assert.Collection(service.UpdatedPipeline!.FieldMappings,
+        Assert.Equal(sourceReferenceId, sourceStore.ActivatedSourceReferenceId);
+        Assert.Equal(["Id", "Legacy", "Name"], service.UpdatedPipeline!.ExpectedSchema.Select(field => field.Name));
+        Assert.Collection(service.UpdatedPipeline.FieldMappings,
             mapping =>
             {
                 Assert.Equal("Id", mapping.SourceField);
@@ -105,45 +157,85 @@ public sealed class PipelinesControllerSchemaRemappingTests
     }
 
     [Fact]
-    public async Task InspectSource_ReorderedAndTypeChangedSchemaPreservesMappingIdentity()
+    public async Task SelectWorksheet_TypeOnlyChangeRequiresConfirmationAndPersistsAcceptedType()
     {
         var pipeline = Pipeline();
+        var sourceReferenceId = Guid.NewGuid();
+        SourceFieldDefinition[] detectedSchema =
+        [
+            Field("Legacy", SourceFieldType.Integer),
+            Field("Id", SourceFieldType.Integer)
+        ];
         var service = new RecordingPipelineService(pipeline);
-        var controller = new PipelinesController(service, new RecordingSourceInspectionService
+        var source = new RecordingSourceInspectionService
         {
-            CsvResult = Inspection(
-                [Field("Legacy", SourceFieldType.Integer), Field("Id", SourceFieldType.Integer)])
-        });
-        var file = new FormFile(
-            new MemoryStream(Encoding.UTF8.GetBytes("Legacy,Id\n1,2")),
-            0,
-            13,
-            "SourceFile",
-            "customers.csv");
+            XlsxResult = new SourceInspectionResult
+            {
+                SourceType = SourceType.Xlsx,
+                Columns = detectedSchema.Select(field => field.Name).ToArray(),
+                DetectedSchema = detectedSchema,
+                SourceReferenceId = sourceReferenceId
+            },
+            Pending = new PendingSourceInspection
+            {
+                SourceType = SourceType.Xlsx,
+                SourceOptions = new SourceOptions { WorksheetName = "Data" },
+                DetectedSchema = detectedSchema
+            }
+        };
+        var sourceStore = new RecordingSourceStore();
+        var controller = new PipelinesController(
+            service,
+            source,
+            sourceCommitCoordinator: new PipelineSourceCommitCoordinator(sourceStore));
 
-        var result = await controller.InspectSource(pipeline.Id, new SourceUploadViewModel
+        var result = await controller.SelectWorksheet(pipeline.Id, new SourceUploadViewModel
         {
-            SourceType = SourceType.Csv,
-            Delimiter = CsvDelimiter.Comma,
-            SourceFile = file
+            StageId = Guid.NewGuid(),
+            WorksheetName = "Data"
         }, CancellationToken.None);
 
         var model = Assert.IsType<SourceUploadViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(sourceReferenceId, model.PendingSourceReferenceId);
+        Assert.True(model.SchemaDifference!.RequiresRemapping);
         Assert.Single(model.SchemaDifference!.TypeChanges);
         Assert.Empty(model.SchemaDifference.MissingFields);
         Assert.Empty(model.SchemaDifference.NewFields);
-        Assert.Collection(service.UpdatedPipeline!.FieldMappings,
-            mapping =>
-            {
-                Assert.Equal("Id", mapping.SourceField);
-                Assert.Equal("id", mapping.TargetField);
-            },
+        Assert.Equal(0, service.UpdateCallCount);
+        Assert.Null(sourceStore.ActivatedSourceReferenceId);
+        Assert.Equal(SourceFieldType.String, pipeline.ExpectedSchema[1].DataType);
+
+        var confirmationResult = await controller.Mapping(pipeline.Id, new FieldMappingViewModel
+        {
+            PendingSourceReferenceId = sourceReferenceId,
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Legacy", TargetField = "legacy", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "id", IsIncluded = true }
+            ]
+        }, CancellationToken.None);
+
+        Assert.True(Assert.IsType<FieldMappingViewModel>(
+            Assert.IsType<ViewResult>(confirmationResult).Model).IsSaved);
+        Assert.Equal(1, service.UpdateCallCount);
+        Assert.Equal(sourceReferenceId, sourceStore.ActivatedSourceReferenceId);
+        Assert.Equal(SourceType.Xlsx, service.UpdatedPipeline!.SourceType);
+        Assert.Equal("Data", service.UpdatedPipeline.SourceOptions.WorksheetName);
+        Assert.Collection(service.UpdatedPipeline.FieldMappings,
             mapping =>
             {
                 Assert.Equal("Legacy", mapping.SourceField);
                 Assert.Equal("legacy", mapping.TargetField);
+            },
+            mapping =>
+            {
+                Assert.Equal("Id", mapping.SourceField);
+                Assert.Equal("id", mapping.TargetField);
             });
         Assert.Equal(["Legacy", "Id"], service.UpdatedPipeline.ExpectedSchema.Select(field => field.Name));
+        Assert.Equal(
+            [SourceFieldType.Integer, SourceFieldType.Integer],
+            service.UpdatedPipeline.ExpectedSchema.Select(field => field.DataType));
     }
 
     [Fact]
@@ -549,6 +641,7 @@ public sealed class PipelinesControllerSchemaRemappingTests
     private sealed class RecordingSourceInspectionService : ISourceInspectionService
     {
         public SourceInspectionResult? CsvResult { get; init; }
+        public SourceInspectionResult? XlsxResult { get; init; }
         public PendingSourceInspection? Pending { get; init; }
         public Guid? PendingOwner { get; init; }
 
@@ -571,7 +664,8 @@ public sealed class PipelinesControllerSchemaRemappingTests
             Guid stageId,
             string worksheetName,
             CancellationToken cancellationToken,
-            SourceOptions? sourceOptions = null) => throw new NotSupportedException();
+            SourceOptions? sourceOptions = null) =>
+            Task.FromResult(XlsxResult ?? throw new InvalidOperationException());
 
         public Task<PendingSourceInspection?> GetPendingSourceAsync(
             Guid pipelineId,

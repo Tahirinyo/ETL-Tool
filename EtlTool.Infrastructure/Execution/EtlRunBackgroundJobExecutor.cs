@@ -1,7 +1,6 @@
 using EtlTool.Application.Execution;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
-using EtlTool.Application.Pipelines;
 using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
@@ -12,8 +11,10 @@ namespace EtlTool.Infrastructure.Execution;
 
 public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 {
+    private const string MissingExecutionConfigurationMessage =
+        "The admitted ETL execution configuration is unavailable.";
+
     private readonly IEtlRunRepository _runRepository;
-    private readonly IPipelineDefinitionRepository _pipelineRepository;
     private readonly IBatchOrchestrator _orchestrator;
     private readonly IDataLoader _loader;
     private readonly TimeProvider _timeProvider;
@@ -24,7 +25,6 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
     public EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
-        IPipelineDefinitionRepository pipelineRepository,
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
@@ -34,7 +34,6 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         ILogger<EtlRunBackgroundJobExecutor> logger)
     {
         ArgumentNullException.ThrowIfNull(runRepository);
-        ArgumentNullException.ThrowIfNull(pipelineRepository);
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(loader);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -44,7 +43,6 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         ArgumentNullException.ThrowIfNull(logger);
 
         _runRepository = runRepository;
-        _pipelineRepository = pipelineRepository;
         _orchestrator = orchestrator;
         _loader = loader;
         _timeProvider = timeProvider;
@@ -56,7 +54,6 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
     internal EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
-        IPipelineDefinitionRepository pipelineRepository,
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
@@ -64,7 +61,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IErrorReportWriter errorReportWriter,
         IErrorReportStore errorReportStore,
         ILogger<EtlRunBackgroundJobExecutor> logger)
-        : this(runRepository, pipelineRepository, orchestrator, loader, timeProvider,
+        : this(runRepository, orchestrator, loader, timeProvider,
             errorReportWriter, sourceFileStore, errorReportStore, logger)
     {
     }
@@ -78,6 +75,8 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         EtlRun? run = null;
         BatchExecutionProgress? latestProgress = null;
         var started = false;
+        var ownsSourceCleanup = false;
+        var legacyRecoveryAttempted = false;
         Stream? source = null;
         InvalidRowReportSession? errorReportSession = null;
         var reportFinalizationAttempted = false;
@@ -89,20 +88,39 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 .GetByIdAsync(job.RunId, cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The queued ETL run no longer exists.");
+            var observedStatus = run.Status;
 
             started = await _runRepository.TryStartAsync(
                 run.Id,
                 _timeProvider.GetUtcNow(),
                 cancellationToken).ConfigureAwait(false);
+            ownsSourceCleanup = started;
             if (!started)
             {
-                return;
+                if (observedStatus != EtlRunStatus.Running
+                    || run.ExecutionConfiguration is not null)
+                {
+                    return;
+                }
+
+                legacyRecoveryAttempted = true;
+                ownsSourceCleanup = await _runRepository
+                    .TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+                        run.Id,
+                        _timeProvider.GetUtcNow(),
+                        MissingExecutionConfigurationMessage,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (!ownsSourceCleanup)
+                {
+                    return;
+                }
+
+                throw new InvalidOperationException(MissingExecutionConfigurationMessage);
             }
 
-            var pipeline = await _pipelineRepository
-                .GetByIdAsync(run.PipelineId, cancellationToken)
-                .ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The ETL run pipeline no longer exists.");
+            var pipeline = run.ExecutionConfiguration?.ToPipelineDefinition()
+                ?? throw new InvalidOperationException(MissingExecutionConfigurationMessage);
 
             cancellationToken.ThrowIfCancellationRequested();
             source = _sourceFileStore.Open(run);
@@ -114,6 +132,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 _errorReportStore,
                 run,
                 pipeline.ExpectedSchema.Select(field => field.Name).ToArray(),
+                pipeline.UpsertKeyField,
                 cancellationToken);
 
             _ = await _orchestrator.ExecuteWithLoadResultAsync(
@@ -164,7 +183,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 latestProgress = batchCancellation.ConfirmedProgress;
             }
 
-            if (run is not null)
+            if (!legacyRecoveryAttempted && run is not null)
             {
                 await MarkTerminalAfterFailureAsync(
                     run.Id,
@@ -180,6 +199,11 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         catch (Exception exception)
         {
             executionFailed = true;
+            if (legacyRecoveryAttempted)
+            {
+                throw;
+            }
+
             if (exception is BatchExecutionException batchFailure)
             {
                 latestProgress = batchFailure.ConfirmedProgress;
@@ -263,7 +287,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 await source.DisposeAsync().ConfigureAwait(false);
             }
 
-            if (started && run is not null)
+            if (ownsSourceCleanup && run is not null)
             {
                 try
                 {
@@ -361,6 +385,10 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IOException => "The ETL source file could not be read.",
         UnauthorizedAccessException => "The ETL source file could not be accessed.",
         ErrorReportGenerationException => "Error report generation failed.",
+        InvalidOperationException when string.Equals(
+            exception.Message,
+            MissingExecutionConfigurationMessage,
+            StringComparison.Ordinal) => MissingExecutionConfigurationMessage,
         _ => "ETL execution failed."
     };
 }

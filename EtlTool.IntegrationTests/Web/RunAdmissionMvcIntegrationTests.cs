@@ -186,6 +186,8 @@ public sealed class RunAdmissionMvcIntegrationTests
             builder.Services.AddSingleton<IWizardSourceStore>(sourceStore);
             builder.Services.AddSingleton<PipelineSourceCommitCoordinator>();
             builder.Services.AddSingleton<IEtlRunRepository>(runRepository);
+            builder.Services.AddSingleton<IRunSourceFileStore, NoOpRunSourceFileStore>();
+            builder.Services.AddSingleton<AbandonedRunRecoveryService>();
             builder.Services.AddSingleton(queue);
             builder.Services.AddSingleton<IBackgroundJobQueue>(queue);
             builder.Services.AddSingleton(inProcessQueue);
@@ -364,8 +366,40 @@ public sealed class RunAdmissionMvcIntegrationTests
             Task.FromResult<IReadOnlyList<EtlRun>>(
                 Runs.Where(run => run.PipelineId == pipelineId).ToArray());
 
+        public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<EtlRun>>(
+                Runs.Where(run => run.Status is EtlRunStatus.Queued or EtlRunStatus.Running).ToArray());
+
         public Task<bool> TryStartAsync(Guid runId, DateTimeOffset startedAt, CancellationToken cancellationToken) =>
             Task.FromResult(false);
+
+        public Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+            Guid runId,
+            DateTimeOffset completedAt,
+            string systemError,
+            CancellationToken cancellationToken) => Task.FromResult(false);
+
+        public Task<bool> TryInterruptAsync(
+            Guid runId,
+            EtlRunStatus expectedStatus,
+            DateTimeOffset completedAt,
+            long observedRows,
+            string systemError,
+            CancellationToken cancellationToken)
+        {
+            var run = Runs.SingleOrDefault(item => item.Id == runId);
+            if (run is null || run.Status != expectedStatus)
+            {
+                return Task.FromResult(false);
+            }
+
+            run.Status = EtlRunStatus.Interrupted;
+            run.CompletedAt = completedAt;
+            run.TotalRows = Math.Max(run.TotalRows, observedRows);
+            run.SystemError = systemError;
+            run.ErrorReportPath = null;
+            return Task.FromResult(true);
+        }
 
         public Task<bool> TryUpdateProgressAsync(Guid runId, BatchExecutionProgress progress, CancellationToken cancellationToken) =>
             Task.FromResult(false);
@@ -403,6 +437,14 @@ public sealed class RunAdmissionMvcIntegrationTests
 
         private static TaskCompletionSource Signal() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class NoOpRunSourceFileStore : IRunSourceFileStore
+    {
+        public Stream Open(EtlRun run) => throw new NotSupportedException();
+
+        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class BlockingBackgroundJobExecutor(BlockingExecutorProbe probe) : IBackgroundJobExecutor

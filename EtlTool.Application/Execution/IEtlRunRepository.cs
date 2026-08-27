@@ -17,9 +17,26 @@ public interface IEtlRunRepository
         Guid pipelineId,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(
+        CancellationToken cancellationToken);
+
     Task<bool> TryStartAsync(
         Guid runId,
         DateTimeOffset startedAt,
+        CancellationToken cancellationToken);
+
+    Task<bool> TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+        Guid runId,
+        DateTimeOffset completedAt,
+        string systemError,
+        CancellationToken cancellationToken);
+
+    Task<bool> TryInterruptAsync(
+        Guid runId,
+        EtlRunStatus expectedStatus,
+        DateTimeOffset completedAt,
+        long observedRows,
+        string systemError,
         CancellationToken cancellationToken);
 
     Task<bool> TryUpdateProgressAsync(

@@ -211,7 +211,7 @@ public sealed class PipelinesController : Controller
         var result = ApplyInspection(model, inspection, comparison);
         if (inspection.IsSuccess)
         {
-            if (comparison?.HasUnresolvedMappings == true)
+            if (RequiresExplicitSchemaConfirmation(comparison))
             {
                 model.PendingSourceReferenceId = inspection.SourceReferenceId;
                 return result;
@@ -270,7 +270,7 @@ public sealed class PipelinesController : Controller
         var result = ApplyInspection(model, inspection, comparison);
         if (inspection.IsSuccess)
         {
-            if (comparison?.HasUnresolvedMappings == true)
+            if (RequiresExplicitSchemaConfirmation(comparison))
             {
                 model.PendingSourceReferenceId = inspection.SourceReferenceId;
                 return result;
@@ -849,6 +849,11 @@ public sealed class PipelinesController : Controller
             IsIncluded = mapping.IsIncluded
         }).ToList()
     };
+
+    private static bool RequiresExplicitSchemaConfirmation(
+        SourceSchemaComparisonResult? comparison) =>
+        comparison is not null
+        && (comparison.HasDifferences || comparison.HasUnresolvedMappings);
 
     private IActionResult ApplyInspection(
         SourceUploadViewModel model,

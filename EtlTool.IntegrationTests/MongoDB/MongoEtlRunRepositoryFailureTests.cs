@@ -21,6 +21,50 @@ public sealed class MongoEtlRunRepositoryFailureTests
             () => repository.GetByIdAsync(Guid.Empty, CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentException>(
             () => repository.TryStartAsync(Guid.Empty, DateTimeOffset.UtcNow, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+                Guid.Empty,
+                DateTimeOffset.UtcNow,
+                "Missing execution configuration.",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.TryFailLegacyRunningRunWithoutExecutionConfigurationAsync(
+                Guid.NewGuid(),
+                DateTimeOffset.UtcNow,
+                " ",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.TryInterruptAsync(
+                Guid.Empty,
+                EtlRunStatus.Queued,
+                DateTimeOffset.UtcNow,
+                0,
+                "Recovered stale run.",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.TryInterruptAsync(
+                Guid.NewGuid(),
+                EtlRunStatus.Completed,
+                DateTimeOffset.UtcNow,
+                0,
+                "Recovered stale run.",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => repository.TryInterruptAsync(
+                Guid.NewGuid(),
+                EtlRunStatus.Running,
+                DateTimeOffset.UtcNow,
+                -1,
+                "Recovered stale run.",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => repository.TryInterruptAsync(
+                Guid.NewGuid(),
+                EtlRunStatus.Running,
+                DateTimeOffset.UtcNow,
+                0,
+                " ",
+                CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => repository.TryUpdateProgressAsync(
                 Guid.NewGuid(),

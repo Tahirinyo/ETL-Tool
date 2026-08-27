@@ -15,11 +15,13 @@ public sealed class CsvErrorReportWriter : IErrorReportWriter
         Stream output,
         Guid runId,
         IReadOnlyList<string> sourceFields,
+        string upsertKeyField,
         IAsyncEnumerable<RowProcessingResult> rowResults,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(sourceFields);
+        ArgumentNullException.ThrowIfNull(upsertKeyField);
         ArgumentNullException.ThrowIfNull(rowResults);
 
         if (!output.CanWrite)
@@ -64,7 +66,7 @@ public sealed class CsvErrorReportWriter : IErrorReportWriter
             foreach (var error in result.Errors)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                WriteError(csvWriter, runId, result, error, sourceFields);
+                WriteError(csvWriter, runId, result, error, sourceFields, upsertKeyField);
                 await csvWriter.NextRecordAsync().ConfigureAwait(false);
             }
         }
@@ -82,6 +84,7 @@ public sealed class CsvErrorReportWriter : IErrorReportWriter
         csvWriter.WriteField("RuleId");
         csvWriter.WriteField("TransformationType");
         csvWriter.WriteField("ErrorMessage");
+        csvWriter.WriteField("EffectiveUpsertKeyValue");
 
         foreach (var sourceField in sourceFields)
         {
@@ -94,7 +97,8 @@ public sealed class CsvErrorReportWriter : IErrorReportWriter
         Guid runId,
         RowProcessingResult result,
         RowProcessingError error,
-        IReadOnlyList<string> sourceFields)
+        IReadOnlyList<string> sourceFields,
+        string upsertKeyField)
     {
         ArgumentNullException.ThrowIfNull(error);
 
@@ -105,6 +109,8 @@ public sealed class CsvErrorReportWriter : IErrorReportWriter
         csvWriter.WriteField(error.RuleId?.ToString("D", CultureInfo.InvariantCulture));
         csvWriter.WriteField(error.TransformationType?.ToString());
         csvWriter.WriteField(SanitizeUntrustedText(error.Message));
+        result.Row.Values.TryGetValue(upsertKeyField, out var upsertKeyValue);
+        csvWriter.WriteField(SanitizeUntrustedText(FormatValue(upsertKeyValue)));
 
         foreach (var sourceField in sourceFields)
         {

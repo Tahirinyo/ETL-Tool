@@ -32,8 +32,12 @@ public sealed class CsvErrorReportWriterTests
             ("When", new DateTime(2026, 8, 26, 12, 34, 56, DateTimeKind.Utc)),
             ("Enabled", true));
         var ruleId = Guid.NewGuid();
+        var processed = Row(
+            42,
+            ("customer_id", "C, \"42\""));
         var result = Invalid(
             original,
+            processed,
             new RowProcessingError(
                 RowProcessingErrorStage.Transformation,
                 "Name",
@@ -46,6 +50,7 @@ public sealed class CsvErrorReportWriterTests
             output,
             runId,
             ["Name", "Note", "NullValue", "Count", "When", "Enabled"],
+            "customer_id",
             Rows(result),
             CancellationToken.None);
 
@@ -68,6 +73,7 @@ public sealed class CsvErrorReportWriterTests
                 "RuleId",
                 "TransformationType",
                 "ErrorMessage",
+                "EffectiveUpsertKeyValue",
                 "Source:Name",
                 "Source:Note",
                 "Source:NullValue",
@@ -83,6 +89,7 @@ public sealed class CsvErrorReportWriterTests
         Assert.Equal(ruleId.ToString("D"), record["RuleId"]);
         Assert.Equal("ConvertToInteger", record["TransformationType"]);
         Assert.Equal("The name cannot be converted.", record["ErrorMessage"]);
+        Assert.Equal("C, \"42\"", record["EffectiveUpsertKeyValue"]);
         Assert.Equal("Çağrı, \"Ada\"", record["Source:Name"]);
         Assert.Equal("first line\r\nsecond line", record["Source:Note"]);
         Assert.Equal(string.Empty, record["Source:NullValue"]);
@@ -109,6 +116,7 @@ public sealed class CsvErrorReportWriterTests
             output,
             runId,
             ["Email"],
+            "email",
             Rows(validResult, result),
             CancellationToken.None);
 
@@ -183,6 +191,7 @@ public sealed class CsvErrorReportWriterTests
             output,
             Guid.NewGuid(),
             ["RawValue"],
+            "value",
             Rows(firstResult, secondResult),
             CancellationToken.None);
 
@@ -198,6 +207,115 @@ public sealed class CsvErrorReportWriterTests
 
         var records = await ReadRecordsAsync(output.ToArray());
         Assert.Equal(["  ", "\t"], records.Select(record => record["Source:RawValue"]));
+        Assert.All(records, record => Assert.Equal(string.Empty, record["EffectiveUpsertKeyValue"]));
+    }
+
+    [Fact]
+    public async Task WriteAsync_UsesMappedAndTransformedUpsertKeyFromProcessedRow()
+    {
+        var processor = new PipelineRowProcessor(
+            new FieldMappingService(),
+            new TransformationEngine(new TransformationHandlerRegistry(
+            [
+                new TrimTransformationHandler(),
+                new ToUpperTransformationHandler()
+            ])),
+            new ValidationEngine(new ValidationHandlerRegistry([new RequiredValidationHandler()])));
+        var pipeline = new PipelineDefinition
+        {
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "RawCustomerId" },
+                new SourceFieldDefinition { Name = "RawName" }
+            ],
+            FieldMappings =
+            [
+                new FieldMapping { SourceField = "RawCustomerId", TargetField = "customer_id" },
+                new FieldMapping { SourceField = "RawName", TargetField = "name" }
+            ],
+            TransformationRules =
+            [
+                new TransformationRule { Order = 1, Type = TransformationType.Trim, SourceField = "customer_id" },
+                new TransformationRule { Order = 2, Type = TransformationType.ToUpper, SourceField = "customer_id" }
+            ],
+            ValidationRules =
+            [
+                new ValidationRule { Type = ValidationType.Required, Field = "name" }
+            ],
+            UpsertKeyField = "customer_id"
+        };
+        var source = Row(2, ("RawCustomerId", "  customer-42  "), ("RawName", ""));
+        var result = processor.CreateSession(pipeline).Process(source);
+        await using var output = new MemoryStream();
+
+        await _writer.WriteAsync(
+            output,
+            Guid.NewGuid(),
+            ["RawCustomerId", "RawName"],
+            pipeline.UpsertKeyField,
+            Rows(result),
+            CancellationToken.None);
+
+        var record = Assert.Single(await ReadRecordsAsync(output.ToArray()));
+        Assert.Equal(RowProcessingStatus.Invalid, result.Status);
+        Assert.Equal("CUSTOMER-42", record["EffectiveUpsertKeyValue"]);
+        Assert.Equal("  customer-42  ", record["Source:RawCustomerId"]);
+    }
+
+    [Fact]
+    public async Task WriteAsync_RepresentsMissingAndNullEffectiveUpsertKeysAsEmpty()
+    {
+        var missing = Invalid(
+            Row(2, ("Input", "missing")),
+            new RowProcessingError(RowProcessingErrorStage.Validation, "Input", "Invalid."));
+        var nullValue = Invalid(
+            Row(3, ("Input", "null")),
+            Row(3, ("effective_key", null)),
+            new RowProcessingError(RowProcessingErrorStage.Validation, "Input", "Invalid."));
+        await using var output = new MemoryStream();
+
+        await _writer.WriteAsync(
+            output,
+            Guid.NewGuid(),
+            ["Input"],
+            "effective_key",
+            Rows(missing, nullValue),
+            CancellationToken.None);
+
+        var records = await ReadRecordsAsync(output.ToArray());
+        Assert.All(records, record => Assert.Equal(string.Empty, record["EffectiveUpsertKeyValue"]));
+    }
+
+    [Fact]
+    public async Task WriteAsync_FormatsNormalEffectiveUpsertKeyValues()
+    {
+        var date = new DateTime(2026, 8, 27, 10, 20, 30, DateTimeKind.Utc);
+        var stringValue = Invalid(
+            Row(2, ("Input", "string")),
+            Row(2, ("effective_key", "key")),
+            new RowProcessingError(RowProcessingErrorStage.Validation, "Input", "Invalid."));
+        var numericValue = Invalid(
+            Row(3, ("Input", "numeric")),
+            Row(3, ("effective_key", 42.5m)),
+            new RowProcessingError(RowProcessingErrorStage.Validation, "Input", "Invalid."));
+        var dateValue = Invalid(
+            Row(4, ("Input", "date")),
+            Row(4, ("effective_key", date)),
+            new RowProcessingError(RowProcessingErrorStage.Validation, "Input", "Invalid."));
+        await using var output = new MemoryStream();
+
+        await _writer.WriteAsync(
+            output,
+            Guid.NewGuid(),
+            ["Input"],
+            "effective_key",
+            Rows(stringValue, numericValue, dateValue),
+            CancellationToken.None);
+
+        var records = await ReadRecordsAsync(output.ToArray());
+        Assert.Equal(
+            ["key", "42.5", "2026-08-27T10:20:30.0000000Z"],
+            records.Select(record => record["EffectiveUpsertKeyValue"]));
     }
 
     [Theory]
@@ -214,6 +332,7 @@ public sealed class CsvErrorReportWriterTests
     {
         var result = Invalid(
             Row(2, ("Input", dangerousValue)),
+            Row(2, ("effective_key", dangerousValue)),
             new RowProcessingError(RowProcessingErrorStage.Validation, "=Field", "@unsafe message"));
         await using var output = new MemoryStream();
 
@@ -221,10 +340,12 @@ public sealed class CsvErrorReportWriterTests
             output,
             Guid.NewGuid(),
             ["Input"],
+            "effective_key",
             Rows(result),
             CancellationToken.None);
 
         var record = Assert.Single(await ReadRecordsAsync(output.ToArray()));
+        Assert.Equal("'" + dangerousValue, record["EffectiveUpsertKeyValue"]);
         Assert.Equal("'" + dangerousValue, record["Source:Input"]);
         Assert.Equal("'=Field", record["ErrorField"]);
         Assert.Equal("'@unsafe message", record["ErrorMessage"]);
@@ -242,6 +363,7 @@ public sealed class CsvErrorReportWriterTests
             output,
             Guid.NewGuid(),
             ["Input", "Empty"],
+            "effective_key",
             Rows(result),
             CancellationToken.None);
 
@@ -271,6 +393,7 @@ public sealed class CsvErrorReportWriterTests
             output,
             Guid.NewGuid(),
             ["Input"],
+            "effective_key",
             ControlledRows(
                 firstResult,
                 secondResult,
@@ -303,6 +426,7 @@ public sealed class CsvErrorReportWriterTests
             cancellationOutput,
             Guid.NewGuid(),
             ["Input"],
+            "effective_key",
             ControlledRows(firstResult, firstResult, secondEnumerationRequested, neverRelease),
             cancellation.Token);
 
@@ -316,6 +440,7 @@ public sealed class CsvErrorReportWriterTests
             failingOutput,
             Guid.NewGuid(),
             ["Input"],
+            "effective_key",
             Rows(firstResult),
             CancellationToken.None));
         Assert.True(failingOutput.CanWrite);
@@ -323,9 +448,17 @@ public sealed class CsvErrorReportWriterTests
 
     private static RowProcessingResult Invalid(
         DataRow originalRow,
+        params RowProcessingError[] errors) =>
+        Invalid(
+            originalRow,
+            new DataRow { SourceRowNumber = originalRow.SourceRowNumber },
+            errors);
+
+    private static RowProcessingResult Invalid(
+        DataRow originalRow,
+        DataRow processedRow,
         params RowProcessingError[] errors)
     {
-        var processedRow = new DataRow { SourceRowNumber = originalRow.SourceRowNumber };
         return RowProcessingResult.Invalid(originalRow, processedRow, errors);
     }
 

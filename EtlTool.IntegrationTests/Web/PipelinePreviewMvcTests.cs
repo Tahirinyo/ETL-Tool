@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
+using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
@@ -48,6 +50,38 @@ public sealed class PipelinePreviewMvcTests
         Assert.Contains(">email<", html);
         Assert.Contains(">Validation<", html);
         Assert.Contains("must be a valid email address", html);
+        Assert.Contains($"action=\"/Pipelines/{pipeline.Id}/Execute\"", html);
+        Assert.Contains(">Execute pipeline</button>", html);
+    }
+
+    [Fact]
+    public async Task Execute_PostWithAntiforgeryRedirectsToProgressWithoutRunningEtlInRequest()
+    {
+        var pipeline = Pipeline();
+        var csv = "Name;Email\nAda;ada@example.test";
+        await using var host = await PreviewHost.StartAsync(
+            pipeline,
+            Encoding.UTF8.GetBytes(csv));
+        using var preview = await host.Client.GetAsync($"/Pipelines/Preview/{pipeline.Id}");
+        var html = await preview.Content.ReadAsStringAsync();
+        var tokenMatch = Regex.Match(
+            html,
+            "name=\"__RequestVerificationToken\" type=\"hidden\" value=\"([^\"]+)\"");
+        Assert.True(tokenMatch.Success);
+        using var content = new FormUrlEncodedContent(
+        [
+            new KeyValuePair<string, string>(
+                "__RequestVerificationToken",
+                WebUtility.HtmlDecode(tokenMatch.Groups[1].Value))
+        ]);
+
+        using var response = await host.Client.PostAsync(
+            $"/Pipelines/{pipeline.Id}/Execute",
+            content);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal($"/Runs/{host.RunId}", response.Headers.Location?.OriginalString);
+        Assert.Equal(1, host.AdmissionCallCount);
     }
 
     [Fact]
@@ -146,13 +180,23 @@ public sealed class PipelinePreviewMvcTests
     {
         private readonly WebApplication _application;
 
-        private PreviewHost(WebApplication application, HttpClient client)
+        private readonly RecordingAdmissionService _admissionService;
+
+        private PreviewHost(
+            WebApplication application,
+            HttpClient client,
+            RecordingAdmissionService admissionService)
         {
             _application = application;
             Client = client;
+            _admissionService = admissionService;
         }
 
         public HttpClient Client { get; }
+
+        public Guid RunId => _admissionService.RunId;
+
+        public int AdmissionCallCount => _admissionService.CallCount;
 
         public static async Task<PreviewHost> StartAsync(
             PipelineDefinition pipeline,
@@ -191,6 +235,8 @@ public sealed class PipelinePreviewMvcTests
             builder.Services.AddSingleton<ValidationEngine>();
             builder.Services.AddSingleton<PipelineRowProcessor>();
             builder.Services.AddSingleton<IPreviewService, PreviewService>();
+            var admissionService = new RecordingAdmissionService(pipeline);
+            builder.Services.AddSingleton<IRunAdmissionService>(admissionService);
 
             var application = builder.Build();
             application.MapControllers();
@@ -205,14 +251,31 @@ public sealed class PipelinePreviewMvcTests
                 .Get<IServerAddressesFeature>()!
                 .Addresses
                 .Single();
-            var client = new HttpClient { BaseAddress = new Uri(address) };
-            return new PreviewHost(application, client);
+            var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                BaseAddress = new Uri(address)
+            };
+            return new PreviewHost(application, client, admissionService);
         }
 
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
             await _application.DisposeAsync();
+        }
+    }
+
+    private sealed class RecordingAdmissionService(PipelineDefinition pipeline) : IRunAdmissionService
+    {
+        public Guid RunId { get; } = Guid.NewGuid();
+
+        public int CallCount { get; private set; }
+
+        public Task<RunAdmissionResult> AdmitAsync(Guid pipelineId, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Task.FromResult(
+                RunAdmissionResult.Admitted(pipeline.Id, pipeline.Name, RunId));
         }
     }
 

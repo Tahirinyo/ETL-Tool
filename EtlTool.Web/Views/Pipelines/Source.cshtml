@@ -81,7 +81,7 @@
                 }
                 @if (Model.SchemaDifference.RequiresRemapping && Model.PendingSourceReferenceId is Guid pendingSourceReferenceId)
                 {
-                    <a class="btn btn-warning" asp-action="Mapping" asp-route-id="@pipelineId" asp-route-pendingSourceReferenceId="@pendingSourceReferenceId">Repair mappings</a>
+                    <a class="btn btn-warning" asp-action="Mapping" asp-route-id="@pipelineId" asp-route-pendingSourceReferenceId="@pendingSourceReferenceId">Review and confirm schema</a>
                 }
             </div>
         }

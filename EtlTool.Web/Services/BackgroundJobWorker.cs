@@ -8,8 +8,15 @@ public sealed class BackgroundJobWorker(
     InProcessBackgroundJobQueue queue,
     IServiceScopeFactory scopeFactory,
     IExecutionCancellationRegistry cancellationRegistry,
+    AbandonedRunRecoveryService recoveryService,
     ILogger<BackgroundJobWorker> logger) : BackgroundService
 {
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await recoveryService.RecoverStaleRunsAsync(cancellationToken).ConfigureAwait(false);
+        await base.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
@@ -18,7 +25,7 @@ public sealed class BackgroundJobWorker(
             {
                 if (queue.IsAdmissionClosed || stoppingToken.IsCancellationRequested)
                 {
-                    LogAbandoned(job);
+                    await RecoverAbandonedAsync(job).ConfigureAwait(false);
                     break;
                 }
 
@@ -33,7 +40,7 @@ public sealed class BackgroundJobWorker(
         {
             while (queue.TryRead(out var queuedJob))
             {
-                LogAbandoned(queuedJob!);
+                await RecoverAbandonedAsync(queuedJob!).ConfigureAwait(false);
             }
         }
     }
@@ -143,8 +150,23 @@ public sealed class BackgroundJobWorker(
         return new AggregateException(first, second);
     }
 
-    private void LogAbandoned(BackgroundJob job) =>
-        logger.LogWarning(
-            "Background job {RunId} was abandoned during application shutdown.",
-            job.RunId);
+    private async Task RecoverAbandonedAsync(BackgroundJob job)
+    {
+        try
+        {
+            await recoveryService
+                .RecoverAbandonedQueuedRunAsync(job, CancellationToken.None)
+                .ConfigureAwait(false);
+            logger.LogWarning(
+                "Background job {RunId} was abandoned during application shutdown.",
+                job.RunId);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Background job {RunId} could not be reconciled during application shutdown.",
+                job.RunId);
+        }
+    }
 }

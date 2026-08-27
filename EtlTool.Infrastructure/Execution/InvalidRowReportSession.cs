@@ -14,6 +14,7 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
     private readonly IErrorReportStore _reportStore;
     private readonly EtlRun _run;
     private readonly IReadOnlyList<string> _sourceFields;
+    private readonly string _upsertKeyField;
     private readonly CancellationToken _executionToken;
     private readonly object _sync = new();
     private Channel<ReportEnvelope>? _channel;
@@ -31,17 +32,20 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
         IErrorReportStore reportStore,
         EtlRun run,
         IReadOnlyList<string> sourceFields,
+        string upsertKeyField,
         CancellationToken executionToken)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(reportStore);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(sourceFields);
+        ArgumentNullException.ThrowIfNull(upsertKeyField);
 
         _writer = writer;
         _reportStore = reportStore;
         _run = run;
         _sourceFields = sourceFields.ToArray();
+        _upsertKeyField = upsertKeyField;
         _executionToken = executionToken;
     }
 
@@ -200,6 +204,7 @@ internal sealed class InvalidRowReportSession : IAsyncDisposable
                 output,
                 _run.Id,
                 _sourceFields,
+                _upsertKeyField,
                 ReadRowsAsync(channel.Reader, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
         }
