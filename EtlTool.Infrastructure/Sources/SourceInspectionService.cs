@@ -279,6 +279,12 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 return false;
             }
 
+            if (_active.TryGetValue(pipelineId, out var reserved)
+                && reserved.IsRunReserved)
+            {
+                return false;
+            }
+
             _pending.Remove(sourceReferenceId);
             if (_active.Remove(pipelineId, out var previous))
             {
@@ -381,6 +387,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         {
             if (!_active.TryGetValue(pipelineId, out active)
                 || active.IsRetired
+                || active.IsRunReserved
                 || active.SourceType != sourceType
                 || !OptionsMatch(active.Options, sourceOptions))
             {
@@ -419,6 +426,40 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             await ReleaseAsync(active);
             throw;
         }
+    }
+
+    public async Task<IWizardRunSourceReservation?> ReserveForRunAsync(
+        Guid pipelineId,
+        SourceType sourceType,
+        SourceOptions sourceOptions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(sourceOptions);
+        if (pipelineId == Guid.Empty)
+        {
+            return null;
+        }
+
+        await PurgeExpiredAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        ActiveSource? active;
+
+        lock (_stateLock)
+        {
+            if (!_active.TryGetValue(pipelineId, out active)
+                || active.IsRetired
+                || active.IsRunReserved
+                || active.SourceType != sourceType
+                || !OptionsMatch(active.Options, sourceOptions))
+            {
+                return null;
+            }
+
+            active.IsRunReserved = true;
+            active.LeaseCount++;
+        }
+
+        return new WizardRunSourceReservation(this, pipelineId, active);
     }
 
     public async Task RemoveAsync(
@@ -550,7 +591,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             }
 
             foreach (var pipelineId in _active
-                .Where(pair => pair.Value.ExpiresAt <= now)
+                .Where(pair => !pair.Value.IsRunReserved && pair.Value.ExpiresAt <= now)
                 .Select(pair => pair.Key)
                 .ToArray())
             {
@@ -601,6 +642,67 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             }
 
             if (deletePhysicalFile && active.IsRetired && active.LeaseCount == 0)
+            {
+                upload = active.Upload;
+            }
+        }
+
+        if (upload is not null)
+        {
+            await DeleteUploadsAsync([upload]);
+        }
+    }
+
+    private void TransferRunReservation(Guid pipelineId, ActiveSource active)
+    {
+        lock (_stateLock)
+        {
+            if (!active.IsRunReserved)
+            {
+                return;
+            }
+
+            active.IsRunReserved = false;
+            if (active.LeaseCount > 0)
+            {
+                active.LeaseCount--;
+            }
+
+            if (_active.TryGetValue(pipelineId, out var registered)
+                && ReferenceEquals(registered, active))
+            {
+                _active.Remove(pipelineId);
+                active.IsRetired = true;
+            }
+        }
+    }
+
+    private async ValueTask RollBackRunReservationAsync(
+        Guid pipelineId,
+        ActiveSource active)
+    {
+        StoredUpload? upload = null;
+
+        lock (_stateLock)
+        {
+            if (!active.IsRunReserved)
+            {
+                return;
+            }
+
+            active.IsRunReserved = false;
+            if (active.LeaseCount > 0)
+            {
+                active.LeaseCount--;
+            }
+
+            if (_active.TryGetValue(pipelineId, out var registered)
+                && ReferenceEquals(registered, active)
+                && !active.IsRetired)
+            {
+                active.ExpiresAt = _timeProvider.GetUtcNow().Add(StageLifetime);
+            }
+            else if (active.IsRetired && active.LeaseCount == 0)
             {
                 upload = active.Upload;
             }
@@ -711,9 +813,10 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         public StoredUpload Upload { get; } = upload;
         public SourceType SourceType { get; } = sourceType;
         public SourceOptions Options { get; } = options;
-        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+        public DateTimeOffset ExpiresAt { get; set; } = expiresAt;
         public int LeaseCount { get; set; }
         public bool IsRetired { get; set; }
+        public bool IsRunReserved { get; set; }
     }
 
     private sealed class WizardSourceLease(
@@ -741,5 +844,30 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 await owner.ReleaseAsync(active);
             }
         }
+    }
+
+    private sealed class WizardRunSourceReservation(
+        SourceInspectionService owner,
+        Guid pipelineId,
+        ActiveSource active) : IWizardRunSourceReservation
+    {
+        private int _completed;
+
+        public string OriginalFileName { get; } = active.Upload.OriginalFileName;
+
+        public string StoredFilePath { get; } = active.Upload.StoredFilePath;
+
+        public void TransferToRun()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 0)
+            {
+                owner.TransferRunReservation(pipelineId, active);
+            }
+        }
+
+        public ValueTask DisposeAsync() =>
+            Interlocked.Exchange(ref _completed, 1) == 0
+                ? owner.RollBackRunReservationAsync(pipelineId, active)
+                : ValueTask.CompletedTask;
     }
 }

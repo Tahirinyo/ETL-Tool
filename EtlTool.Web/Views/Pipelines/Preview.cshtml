@@ -40,6 +40,10 @@ else if (Model.FailureMessage is not null)
 }
 else if (Model.HasPreview)
 {
+    <form asp-action="Execute" asp-route-id="@Model.PipelineId" method="post" class="mb-4">
+        <button type="submit" class="btn btn-success">Execute pipeline</button>
+    </form>
+
     <div class="row g-3 mb-4" aria-label="Preview counters">
         <div class="col-md-4">
             <div class="card h-100"><div class="card-body"><div class="text-muted">Valid</div><div class="fs-3">@Model.ValidRowCount</div></div></div>

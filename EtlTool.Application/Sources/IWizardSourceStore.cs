@@ -20,6 +20,13 @@ public interface IWizardSourceStore
         SourceOptions sourceOptions,
         CancellationToken cancellationToken);
 
+    Task<IWizardRunSourceReservation?> ReserveForRunAsync(
+        Guid pipelineId,
+        SourceType sourceType,
+        SourceOptions sourceOptions,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IWizardRunSourceReservation?>(null);
+
     Task RemoveAsync(
         Guid pipelineId,
         CancellationToken cancellationToken);
@@ -32,4 +39,13 @@ public interface IWizardSourceStore
 public interface IWizardSourceLease : IAsyncDisposable
 {
     Stream Content { get; }
+}
+
+public interface IWizardRunSourceReservation : IAsyncDisposable
+{
+    string OriginalFileName { get; }
+
+    string StoredFilePath { get; }
+
+    void TransferToRun();
 }

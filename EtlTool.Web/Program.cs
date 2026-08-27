@@ -82,6 +82,14 @@ var backgroundJobQueueOptions = builder.Configuration
 
 backgroundJobQueueOptions.Validate();
 
+var runAdmissionOptions = builder.Configuration
+    .GetRequiredSection(RunAdmissionOptions.SectionName)
+    .Get<RunAdmissionOptions>()
+    ?? throw new InvalidOperationException(
+        $"Configuration section '{RunAdmissionOptions.SectionName}' is invalid.");
+
+runAdmissionOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
@@ -97,6 +105,7 @@ builder.Services.AddSingleton<IRunSourceFileStore, LocalRunSourceFileStore>();
 builder.Services.AddSingleton(uploadValidationOptions);
 builder.Services.AddSingleton(batchExecutionOptions);
 builder.Services.AddSingleton(backgroundJobQueueOptions);
+builder.Services.AddSingleton(runAdmissionOptions);
 builder.Services.AddSingleton<IExecutionCancellationRegistry, ExecutionCancellationRegistry>();
 builder.Services.AddSingleton<InProcessBackgroundJobQueue>();
 builder.Services.AddSingleton<IBackgroundJobQueue>(provider =>
@@ -145,6 +154,7 @@ builder.Services.AddScoped<IPipelineService, PipelineService>();
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
 builder.Services.AddScoped<IPreviewService, PreviewService>();
 builder.Services.AddScoped<IBatchOrchestrator, BatchOrchestrator>();
+builder.Services.AddScoped<IRunAdmissionService, RunAdmissionService>();
 builder.Services.AddScoped<IBackgroundJobExecutor, EtlRunBackgroundJobExecutor>();
 
 var app = builder.Build();

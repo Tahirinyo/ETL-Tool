@@ -234,6 +234,81 @@ public sealed class PipelineSourceCommitCoordinator
         }
     }
 
+    public async Task<PipelineRunSourceSnapshot> CaptureRunSourceAsync(
+        Guid pipelineId,
+        Func<CancellationToken, Task<PipelineDefinition?>> loadPipelineAsync,
+        Func<PipelineDefinition, PipelineReadinessResult> evaluateReadiness,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineId == Guid.Empty)
+        {
+            throw new ArgumentException("Pipeline identifier cannot be empty.", nameof(pipelineId));
+        }
+
+        ArgumentNullException.ThrowIfNull(loadPipelineAsync);
+        ArgumentNullException.ThrowIfNull(evaluateReadiness);
+
+        var gate = GetGate(pipelineId);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        IWizardRunSourceReservation? source = null;
+        var transferGateOwnership = false;
+
+        try
+        {
+            var pipeline = await loadPipelineAsync(cancellationToken).ConfigureAwait(false);
+            if (pipeline is null)
+            {
+                return PipelineRunSourceSnapshot.NotFound();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var readiness = evaluateReadiness(pipeline)
+                ?? throw new InvalidOperationException("Pipeline readiness evaluation returned no result.");
+            if (!readiness.IsReady)
+            {
+                return PipelineRunSourceSnapshot.NotReady(pipeline, readiness);
+            }
+
+            source = await _sourceStore.ReserveForRunAsync(
+                    pipeline.Id,
+                    pipeline.SourceType,
+                    pipeline.SourceOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (source is null)
+            {
+                return PipelineRunSourceSnapshot.SourceUnavailable(pipeline, readiness);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var snapshot = PipelineRunSourceSnapshot.Ready(
+                pipeline,
+                readiness,
+                source,
+                gate);
+            source = null;
+            transferGateOwnership = true;
+            return snapshot;
+        }
+        finally
+        {
+            try
+            {
+                if (source is not null)
+                {
+                    await source.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (!transferGateOwnership)
+                {
+                    gate.Release();
+                }
+            }
+        }
+    }
+
     private SemaphoreSlim GetGate(Guid pipelineId) =>
         _pipelineGates.GetOrAdd(pipelineId, static _ => new SemaphoreSlim(1, 1));
 
@@ -431,6 +506,87 @@ public sealed class PipelinePreviewSnapshot : IAsyncDisposable
 }
 
 public enum PipelinePreviewSnapshotStatus
+{
+    NotFound,
+    NotReady,
+    SourceUnavailable,
+    Ready
+}
+
+public sealed class PipelineRunSourceSnapshot : IAsyncDisposable
+{
+    private IWizardRunSourceReservation? _source;
+    private SemaphoreSlim? _gate;
+
+    private PipelineRunSourceSnapshot(
+        PipelineRunSourceSnapshotStatus status,
+        PipelineDefinition? pipeline,
+        PipelineReadinessResult? readiness,
+        IWizardRunSourceReservation? source,
+        SemaphoreSlim? gate)
+    {
+        Status = status;
+        Pipeline = pipeline;
+        Readiness = readiness;
+        _source = source;
+        _gate = gate;
+    }
+
+    public PipelineRunSourceSnapshotStatus Status { get; }
+
+    public PipelineDefinition? Pipeline { get; }
+
+    public PipelineReadinessResult? Readiness { get; }
+
+    public IWizardRunSourceReservation? Source => _source;
+
+    internal static PipelineRunSourceSnapshot NotFound() =>
+        new(PipelineRunSourceSnapshotStatus.NotFound, null, null, null, null);
+
+    internal static PipelineRunSourceSnapshot NotReady(
+        PipelineDefinition pipeline,
+        PipelineReadinessResult readiness) =>
+        new(PipelineRunSourceSnapshotStatus.NotReady, pipeline, readiness, null, null);
+
+    internal static PipelineRunSourceSnapshot SourceUnavailable(
+        PipelineDefinition pipeline,
+        PipelineReadinessResult readiness) =>
+        new(PipelineRunSourceSnapshotStatus.SourceUnavailable, pipeline, readiness, null, null);
+
+    internal static PipelineRunSourceSnapshot Ready(
+        PipelineDefinition pipeline,
+        PipelineReadinessResult readiness,
+        IWizardRunSourceReservation source,
+        SemaphoreSlim gate) =>
+        new(PipelineRunSourceSnapshotStatus.Ready, pipeline, readiness, source, gate);
+
+    public void TransferSourceToRun()
+    {
+        var source = _source
+            ?? throw new InvalidOperationException("The run source reservation is no longer available.");
+        source.TransferToRun();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var source = Interlocked.Exchange(ref _source, null);
+        var gate = Interlocked.Exchange(ref _gate, null);
+
+        try
+        {
+            if (source is not null)
+            {
+                await source.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            gate?.Release();
+        }
+    }
+}
+
+public enum PipelineRunSourceSnapshotStatus
 {
     NotFound,
     NotReady,

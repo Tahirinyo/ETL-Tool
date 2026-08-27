@@ -1,5 +1,6 @@
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
+using EtlTool.Application.Execution;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
@@ -23,6 +24,7 @@ public sealed class PipelinesController : Controller
     private readonly PipelineSourceCommitCoordinator? _sourceCommitCoordinator;
     private readonly IMongoTargetAccessService? _targetAccessService;
     private readonly SourceSchemaComparisonService _schemaComparisonService;
+    private readonly IRunAdmissionService? _runAdmissionService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -34,7 +36,8 @@ public sealed class PipelinesController : Controller
         ILogger<PipelinesController>? logger = null,
         PipelineSourceCommitCoordinator? sourceCommitCoordinator = null,
         IMongoTargetAccessService? targetAccessService = null,
-        SourceSchemaComparisonService? schemaComparisonService = null)
+        SourceSchemaComparisonService? schemaComparisonService = null,
+        IRunAdmissionService? runAdmissionService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -47,6 +50,7 @@ public sealed class PipelinesController : Controller
         _sourceCommitCoordinator = sourceCommitCoordinator;
         _targetAccessService = targetAccessService;
         _schemaComparisonService = schemaComparisonService ?? new SourceSchemaComparisonService();
+        _runAdmissionService = runAdmissionService;
     }
 
     public async Task<IActionResult> Mapping(
@@ -1129,6 +1133,65 @@ public sealed class PipelinesController : Controller
                 PipelineName = pipeline?.Name ?? string.Empty,
                 FailureMessage = "The preview could not be generated from the selected source. Review the configuration or upload the source again."
             });
+        }
+    }
+
+    [HttpPost("/Pipelines/{id:guid}/Execute")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Execute(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty)
+        {
+            return NotFound();
+        }
+
+        if (_runAdmissionService is null)
+        {
+            throw new InvalidOperationException("Pipeline execution is not configured.");
+        }
+
+        var result = await _runAdmissionService.AdmitAsync(id, cancellationToken);
+        switch (result.Status)
+        {
+            case RunAdmissionStatus.Admitted:
+                return RedirectToAction(
+                    nameof(RunsController.Progress),
+                    "Runs",
+                    new { runId = result.RunId!.Value });
+            case RunAdmissionStatus.PipelineNotFound:
+                return NotFound();
+            case RunAdmissionStatus.PipelineNotReady:
+                return View("Preview", new PipelinePreviewViewModel
+                {
+                    PipelineId = result.PipelineId ?? id,
+                    PipelineName = result.PipelineName,
+                    ReadinessProblems = result.ReadinessProblems
+                });
+            case RunAdmissionStatus.SourceUnavailable:
+                Response.StatusCode = StatusCodes.Status410Gone;
+                return View("Preview", new PipelinePreviewViewModel
+                {
+                    PipelineId = result.PipelineId ?? id,
+                    PipelineName = result.PipelineName,
+                    FailureMessage = "The inspected source is no longer available or no longer matches this pipeline. Upload and inspect the source again.",
+                    RequiresSourceUpload = true
+                });
+            case RunAdmissionStatus.Failed:
+                _logger?.LogError(
+                    result.Failure,
+                    "ETL run admission failed for pipeline {PipelineId}.",
+                    result.PipelineId ?? id);
+                Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return View("Preview", new PipelinePreviewViewModel
+                {
+                    PipelineId = result.PipelineId ?? id,
+                    PipelineName = result.PipelineName,
+                    FailureMessage = "The run could not be admitted to background execution. Try again."
+                });
+            default:
+                throw new InvalidOperationException("The run admission status is invalid.");
         }
     }
 
