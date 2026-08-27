@@ -280,6 +280,44 @@ public sealed class BatchOrchestratorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RejectsStalePostRemapReferencesBeforeTargetAccessOrProcessing()
+    {
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        var resolver = new TrackingResolver(extractor);
+        var targetAccess = new TrackingAllowedTargetAccessService();
+        var orchestrator = Orchestrator(resolver, targetAccessService: targetAccess);
+        var pipeline = ReadyPipeline();
+        pipeline.FieldMappings = [Mapping("Value", "replacement")];
+        pipeline.TransformationRules = [Rule(1, TransformationType.Trim, "value")];
+        pipeline.ValidationRules = [new ValidationRule { Type = ValidationType.Required, Field = "value" }];
+        pipeline.UpsertKeyField = "value";
+        var callbackInvocations = 0;
+        await using var source = new MemoryStream([1]);
+
+        var exception = await Assert.ThrowsAsync<PipelineNotReadyException>(() =>
+            orchestrator.ExecuteAsync(
+                source,
+                pipeline,
+                (_, _) =>
+                {
+                    callbackInvocations++;
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None));
+
+        Assert.Equal(
+            ["Transformation", "Validation", "Upsert key"],
+            exception.Problems.Select(problem => problem.Component));
+        Assert.All(exception.Problems, problem =>
+            Assert.Contains("'value' is not", problem.Message, StringComparison.Ordinal));
+        Assert.Equal(0, targetAccess.AccessProbeInvocationCount);
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, extractor.EnumerationCount);
+        Assert.Equal(0, callbackInvocations);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ClassifiesInvalidTargetAsReadinessFailureBeforeAccessProbeOrExtraction()
     {
         var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
@@ -1289,6 +1327,20 @@ public sealed class BatchOrchestratorTests
 
         public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+    }
+
+    private sealed class TrackingAllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public int AccessProbeInvocationCount { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken)
+        {
+            AccessProbeInvocationCount++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FailingTargetAccessService : IMongoTargetAccessService

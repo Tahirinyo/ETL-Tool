@@ -434,6 +434,147 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_RevalidatesPersistedReferencesAfterSuccessfulMappingReplacement()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.ExpectedSchema.Add(new SourceFieldDefinition
+        {
+            Name = "Legacy", DataType = SourceFieldType.String
+        });
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "Legacy", TargetField = "legacy", IsIncluded = true
+        });
+        pipeline.TransformationRules =
+        [
+            new TransformationRule
+            {
+                Type = TransformationType.Trim, Order = 1, SourceField = "email"
+            },
+            new TransformationRule
+            {
+                Type = TransformationType.Trim, Order = 2, SourceField = "legacy"
+            },
+            new TransformationRule
+            {
+                Type = TransformationType.Deduplicate,
+                Order = 3,
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Fields"] = JsonSerializer.Serialize(new[] { "email", "legacy" })
+                }
+            }
+        ];
+        pipeline.ValidationRules =
+        [
+            new ValidationRule { Type = ValidationType.Required, Field = "email" },
+            new ValidationRule { Type = ValidationType.Required, Field = "legacy" },
+            new ValidationRule { Type = ValidationType.UpsertKeyRequired, Field = "legacy" }
+        ];
+        pipeline.UpsertKeyField = "legacy";
+
+        Assert.True((await EvaluateAsync(pipeline))!.IsReady);
+
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String },
+            new SourceFieldDefinition { Name = "Replacement", DataType = SourceFieldType.String }
+        ];
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true },
+            new FieldMapping { SourceField = "Replacement", TargetField = "replacement", IsIncluded = true }
+        ];
+
+        var stale = await EvaluateAsync(pipeline);
+
+        Assert.False(stale!.IsReady);
+        Assert.Equal(
+            ["Transformation", "Transformation", "Validation", "Validation", "Upsert key"],
+            stale.Problems.Select(problem => problem.Component));
+        Assert.Equal(2, stale.Problems.Count(problem =>
+            problem.Component == "Transformation"
+            && problem.Message.Contains("'legacy' is not", StringComparison.Ordinal)));
+        Assert.Equal(2, stale.Problems.Count(problem =>
+            problem.Component == "Validation"
+            && problem.Message.Contains("'legacy' is not", StringComparison.Ordinal)));
+        Assert.Contains(stale.Problems, problem =>
+            problem.Component == "Upsert key"
+            && problem.Message.Contains("'legacy' is not", StringComparison.Ordinal));
+        Assert.DoesNotContain(stale.Problems, problem =>
+            problem.Message.Contains("'email' is not", StringComparison.Ordinal));
+        Assert.Equal("legacy", pipeline.TransformationRules[1].SourceField);
+        Assert.Equal("legacy", pipeline.ValidationRules[1].Field);
+        Assert.Equal("legacy", pipeline.UpsertKeyField);
+
+        pipeline.FieldMappings[1].TargetField = "legacy";
+
+        var repaired = await EvaluateAsync(pipeline);
+
+        Assert.True(repaired!.IsReady);
+
+        pipeline.FieldMappings[1].TargetField = "replacement";
+        pipeline.TransformationRules[1].SourceField = "replacement";
+        pipeline.TransformationRules[2].Configuration["Fields"] =
+            JsonSerializer.Serialize(new[] { "email", "replacement" });
+        pipeline.ValidationRules[1].Field = "replacement";
+        pipeline.ValidationRules[2].Field = "replacement";
+        pipeline.UpsertKeyField = "replacement";
+
+        var referencesRepaired = await EvaluateAsync(pipeline);
+
+        Assert.True(referencesRepaired!.IsReady);
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_RevalidatesExcludedAndCaseDistinctDeduplicationFieldsAfterRemap()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.ExpectedSchema.Add(new SourceFieldDefinition
+        {
+            Name = "Legacy", DataType = SourceFieldType.String
+        });
+        pipeline.FieldMappings.Add(new FieldMapping
+        {
+            SourceField = "Legacy", TargetField = "legacy", IsIncluded = true
+        });
+        pipeline.TransformationRules =
+        [
+            new TransformationRule
+            {
+                Type = TransformationType.Deduplicate,
+                Order = 1,
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Fields"] = JsonSerializer.Serialize(new[] { "email", "legacy" })
+                }
+            }
+        ];
+
+        Assert.True((await EvaluateAsync(pipeline))!.IsReady);
+
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Email", DataType = SourceFieldType.String },
+            new SourceFieldDefinition { Name = "Replacement", DataType = SourceFieldType.String }
+        ];
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true },
+            new FieldMapping { SourceField = "Replacement", TargetField = "legacy", IsIncluded = false }
+        ];
+        pipeline.TransformationRules[0].Configuration["Fields"] =
+            JsonSerializer.Serialize(new[] { "email", "legacy", "Legacy" });
+
+        var result = await EvaluateAsync(pipeline);
+
+        Assert.False(result!.IsReady);
+        Assert.Equal(["Transformation", "Transformation"], result.Problems.Select(problem => problem.Component));
+        Assert.Contains(result.Problems, problem => problem.Message.Contains("'legacy' is not", StringComparison.Ordinal));
+        Assert.Contains(result.Problems, problem => problem.Message.Contains("'Legacy' is not", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task EvaluateAsync_ReportsMissingPipelineUpsertKey()
     {
         var pipeline = ReadyPipeline();

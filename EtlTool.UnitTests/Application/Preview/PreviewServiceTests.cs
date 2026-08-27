@@ -107,6 +107,43 @@ public sealed class PreviewServiceTests
     }
 
     [Fact]
+    public async Task PreviewAsync_RejectsStalePostRemapReferencesBeforeProcessing()
+    {
+        var extractor = new GuardedExtractor(1);
+        var resolver = new TrackingResolver(extractor);
+        var pipeline = ReadyPipeline();
+        pipeline.FieldMappings =
+        [
+            new FieldMapping
+            {
+                SourceField = "Value", TargetField = "replacement", IsIncluded = true
+            }
+        ];
+        pipeline.TransformationRules =
+        [
+            Rule(1, TransformationType.Trim, "value")
+        ];
+        pipeline.ValidationRules =
+        [
+            new ValidationRule { Type = ValidationType.Required, Field = "value" }
+        ];
+        pipeline.UpsertKeyField = "value";
+        await using var source = new MemoryStream([1]);
+
+        var exception = await Assert.ThrowsAsync<PipelineNotReadyException>(() =>
+            Service(resolver, Processor([], [])).PreviewAsync(source, pipeline, CancellationToken.None));
+
+        Assert.Equal("The pipeline is not ready for preview.", exception.Message);
+        Assert.Equal(
+            ["Transformation", "Validation", "Upsert key"],
+            exception.Problems.Select(problem => problem.Component));
+        Assert.All(exception.Problems, problem =>
+            Assert.Contains("'value' is not", problem.Message, StringComparison.Ordinal));
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, extractor.EnumerationCount);
+    }
+
+    [Fact]
     public async Task PreviewAsync_PropagatesExtractionAndMappingFailures()
     {
         var extractionFailure = new InvalidDataException("Malformed source.");

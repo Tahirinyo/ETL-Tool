@@ -211,6 +211,109 @@ public sealed class PipelinesControllerSchemaRemappingTests
     }
 
     [Fact]
+    public async Task Remapping_PersistsStaleRulesAndUpsertFieldForSubsequentRepair()
+    {
+        var pipeline = Pipeline();
+        var transformation = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = TransformationType.Trim,
+            Order = 1,
+            SourceField = "legacy",
+            Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Mode"] = "Preserve"
+            }
+        };
+        var deduplication = new TransformationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = TransformationType.Deduplicate,
+            Order = 2,
+            Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Fields"] = "[\"id\",\"legacy\"]"
+            }
+        };
+        var validation = new ValidationRule
+        {
+            Id = Guid.NewGuid(),
+            Type = ValidationType.Required,
+            Field = "legacy",
+            ErrorMessage = "Legacy is required.",
+            Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Mode"] = "Preserve"
+            }
+        };
+        pipeline.TransformationRules = [transformation, deduplication];
+        pipeline.ValidationRules = [validation];
+        pipeline.UpsertKeyField = "legacy";
+        var sourceReferenceId = Guid.NewGuid();
+        var pipelineService = new RecordingPipelineService(pipeline);
+        var sourceStore = new RecordingSourceStore();
+        var controller = new PipelinesController(
+            pipelineService,
+            new RecordingSourceInspectionService
+            {
+                Pending = new PendingSourceInspection
+                {
+                    SourceType = SourceType.Csv,
+                    SourceOptions = new SourceOptions { Delimiter = CsvDelimiter.Comma },
+                    DetectedSchema =
+                    [
+                        Field("Id", SourceFieldType.Integer),
+                        Field("Replacement", SourceFieldType.String)
+                    ]
+                }
+            },
+            sourceCommitCoordinator: new PipelineSourceCommitCoordinator(sourceStore));
+
+        var result = await controller.Mapping(pipeline.Id, new FieldMappingViewModel
+        {
+            PendingSourceReferenceId = sourceReferenceId,
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "id", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Replacement", TargetField = "replacement", IsIncluded = true }
+            ]
+        }, CancellationToken.None);
+
+        Assert.True(Assert.IsType<FieldMappingViewModel>(Assert.IsType<ViewResult>(result).Model).IsSaved);
+        var persisted = pipelineService.UpdatedPipeline!;
+        Assert.Equal(sourceReferenceId, sourceStore.ActivatedSourceReferenceId);
+        Assert.Equal("legacy", persisted.UpsertKeyField);
+        Assert.Collection(persisted.TransformationRules,
+            rule =>
+            {
+                Assert.Equal(transformation.Id, rule.Id);
+                Assert.Equal(TransformationType.Trim, rule.Type);
+                Assert.Equal(1, rule.Order);
+                Assert.Equal("legacy", rule.SourceField);
+                Assert.Equal("Preserve", rule.Configuration["Mode"]);
+            },
+            rule =>
+            {
+                Assert.Equal(deduplication.Id, rule.Id);
+                Assert.Equal(TransformationType.Deduplicate, rule.Type);
+                Assert.Equal(2, rule.Order);
+                Assert.Null(rule.SourceField);
+                Assert.Equal("[\"id\",\"legacy\"]", rule.Configuration["Fields"]);
+            });
+        Assert.Collection(persisted.ValidationRules,
+            rule =>
+            {
+                Assert.Equal(validation.Id, rule.Id);
+                Assert.Equal(ValidationType.Required, rule.Type);
+                Assert.Equal("legacy", rule.Field);
+                Assert.Equal("Legacy is required.", rule.ErrorMessage);
+                Assert.Equal("Preserve", rule.Configuration["Mode"]);
+            });
+        Assert.Equal([("Id", "id"), ("Replacement", "replacement")],
+            persisted.FieldMappings.Select(mapping => (mapping.SourceField, mapping.TargetField)));
+    }
+
+    [Fact]
     public async Task Remapping_ActivationFailureRestoresCompletePipelineAndPreservesPriorSource()
     {
         var pipeline = Pipeline();
