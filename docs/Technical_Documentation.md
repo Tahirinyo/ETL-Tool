@@ -121,8 +121,16 @@ The current `IDataLoader` seam is narrow and MongoDB-shaped: `UpsertBatchAsync` 
 
 Adding a different target type is **not** a supported plug-in path. It would require a broader redesign of `IDataLoader`, target configuration/access validation, pipeline/readiness contracts, DI composition, and UI behavior. This documentation does not treat that unimplemented redesign as an available feature; the MVP target is MongoDB only.
 
-## Evidence and limits
+## Evidence, scope, and known limitations
 
-The behaviors summarized above were checked against the concrete services and registrations named in this document, plus focused tests such as `PreviewServiceTests`, `PipelineRowProcessorTests`, `BatchOrchestratorTests`, `MongoBulkUpsertLoaderTests`, `MongoBulkUpsertLoaderRetryTests`, `EtlRunBackgroundJobExecutorTests`, `BackgroundJobWorkerTests`, `CsvErrorReportWriterTests`, `LocalErrorReportStoreTests`, and the run/preview MVC tests.
+The behaviors summarized above were checked against the concrete services and registrations named in this document, plus focused tests such as `PreviewServiceTests`, `PipelineRowProcessorTests`, `BatchOrchestratorTests`, `MongoBulkUpsertLoaderTests`, `MongoBulkUpsertLoaderRetryTests`, `EtlRunBackgroundJobExecutorTests`, `BackgroundJobWorkerTests`, `CsvErrorReportWriterTests`, `LocalErrorReportStoreTests`, the run/preview MVC tests, and the fixture-backed `DemoGuideAcceptanceTests`. Final acceptance also completed solution restore/build, the full unit suite, broad application/integration/MVC coverage, the 100K acceptance run, and Docker Compose build/start, MongoDB health, and `/Pipelines` connectivity checks.
 
-Current deliberate limits include CSV and modern XLSX sources only, MongoDB-only loading, an in-process single-reader background queue, no distributed queue/scheduler, and no user-facing run-cancellation endpoint.
+### Intentional MVP limits
+
+The product supports CSV and modern XLSX sources and a MongoDB destination only. It deliberately excludes legacy XLS, other source/target types, multiple MongoDB profiles, authentication/multi-tenancy, scheduled or distributed jobs, AI/fuzzy matching, custom code or regex validation, full-file dry runs, and cloud/production-SLA infrastructure. Background work is an in-process, single-reader queue; there is no user-facing run-cancellation endpoint.
+
+### Non-blocking verification limitations
+
+- Three tracked `MongoEtlRunRepositoryTests` expectations around monotonic `TotalRows` and one untracked Days 1–5 checkpoint source-lifecycle expectation remain stale or incorrect. They are test-maintenance items, not known production defects.
+- Compatible pipeline reuse and schema-change/remapping were not rehearsed in a live browser during final acceptance; automated MVC/application coverage provides the available evidence.
+- Docker Compose named volumes are attached and startup/connectivity were verified, but persistence across an explicit stack restart was not manually confirmed.

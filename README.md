@@ -70,6 +70,20 @@ docker compose down --volumes
 
 The application continues to use its existing ASP.NET Core configuration model. Docker Compose maps the external `MONGODB_CONNECTION_STRING` value to `MongoDb__ConnectionString`; no Docker-only configuration path has been added. The container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside this MVP packaging setup.
 
-## Verification limitation
+## MVP scope and known limitations
 
-At the time this packaging was added, the local Docker CLI was installed but its daemon was unavailable. The Compose image build, startup, MongoDB health check, `/Pipelines` connectivity check, and volume-persistence check must be run once Docker Desktop is running; the commands above are the intended verification path.
+### Supported MVP behavior
+
+The released MVP supports reusable pipelines for CSV and modern Excel (`.xlsx`) sources. It infers and maps source schema, requires repair when a schema change leaves mappings or rule references unresolved, applies persisted ordered transformations and validations, and previews the first 100 source rows through the same row-processing path used for execution.
+
+Execution is admitted to an in-process background queue and incrementally loads valid rows to MongoDB in configured batches. MongoDB loading uses bulk upserts with a selected output key, so supported reruns are idempotent. Run status/history and counters are retained; invalid rows are excluded from loading and available in a safely generated error CSV. The Compose build/start, MongoDB health, and `/Pipelines` HTTP 200 checks were completed during final acceptance.
+
+### Intentional MVP exclusions
+
+The MVP does not include authentication or multi-tenancy; `.xls` or non-CSV/XLSX sources; non-MongoDB destinations or multiple connection profiles; scheduled or distributed workers; AI/fuzzy schema matching; user-defined code or regex validation; full-file dry runs; or cloud/production-SLA deployment infrastructure.
+
+### Known verification limitations
+
+- Four integration-test failures remain due to stale or incorrect test expectations, not demonstrated application defects: three tracked `MongoEtlRunRepositoryTests` expectations about monotonic `TotalRows`, and one untracked Days 1–5 checkpoint test with an incorrect source-lifecycle expectation.
+- Final acceptance did not include a live-browser rehearsal of compatible pipeline reuse or schema-change/remapping. Automated MVC and application coverage covers those behaviors.
+- Compose uses attached named volumes, but restart-based volume-retention was not explicitly confirmed during final acceptance.
