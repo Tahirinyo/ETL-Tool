@@ -1,0 +1,6 @@
+CustomerId,FullName,EmailAddress,Age,Balance,BirthDate,Country
+1,Ahmet Yilmaz,ahmet.yilmaz@example.com,28,1500.5,1998-04-12,Turkey
+2,Mehmet Kaya,mehmet.kaya@example.com,35,4200.75,1991-08-23,Turkey
+3,Ayse Demir,ayse.demir@example.com,31,2800.0,1995-03-10,Turkey
+4,Ali Can,ali.can@example.com,33,3100.25,1993-11-18,Turkey
+5,Fatma Yildiz,fatma.yildiz@example.com,29,1800.25,1997-01-21,Turkey
