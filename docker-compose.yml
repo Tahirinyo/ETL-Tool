@@ -1,0 +1,37 @@
+services:
+  mongo:
+    image: mongo:8.0.28-noble
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?MONGO_INITDB_ROOT_USERNAME must be set in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?MONGO_INITDB_ROOT_PASSWORD must be set in .env}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --username "$$MONGO_INITDB_ROOT_USERNAME" --password
+          "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval
+          "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - mongo-data:/data/db
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MongoDb__ConnectionString: ${MONGODB_CONNECTION_STRING:?MONGODB_CONNECTION_STRING must be set in .env}
+    ports:
+      - "8080:8080"
+    volumes:
+      - app-data:/app/App_Data
+
+volumes:
+  mongo-data:
+  app-data:
