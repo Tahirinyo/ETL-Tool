@@ -4,15 +4,19 @@
     ViewData["Title"] = "Create pipeline";
 }
 
-<h1>Create pipeline</h1>
-<p class="text-muted">Start a draft with basic metadata. Source and destination settings are configured in later steps.</p>
+<div class="mb-4">
+    <h1 class="mb-1">Create pipeline</h1>
+    <p class="text-muted mb-0">Start a draft with basic metadata. Source and destination settings are configured in later steps.</p>
+</div>
 
 <div class="row">
     <div class="col-lg-7">
         <form asp-action="Create" method="post">
             <partial name="_PipelineForm" model="Model" />
-            <button type="submit" class="btn btn-primary">Create</button>
-            <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
+            <div class="d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-primary">Create</button>
+                <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
+            </div>
         </form>
     </div>
 </div>

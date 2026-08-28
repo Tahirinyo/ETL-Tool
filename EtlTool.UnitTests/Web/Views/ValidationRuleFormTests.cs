@@ -10,6 +10,9 @@ public sealed class ValidationRuleFormTests
         Assert.Contains("data-validation-section=\"range\"", view);
         Assert.Contains("data-validation-section=\"upsert\"", view);
         Assert.Contains("UpsertKeyRequired", view);
+        Assert.Contains(">Upsert key<", view);
+        Assert.Contains("Configured upsert key field", view);
+        Assert.DoesNotContain("Upsert-Key", view, StringComparison.Ordinal);
         Assert.Contains("NumericRange", view);
         Assert.Contains("TextLengthRange", view);
         Assert.Contains("DateRange", view);

@@ -16,7 +16,7 @@
 }
 
 <form asp-action="Mapping" asp-route-id="@pipelineId" method="post">
-    <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+    <div asp-validation-summary="ModelOnly" class="alert alert-danger" role="alert"></div>
     <input asp-for="PendingSourceReferenceId" type="hidden" />
 
     @if (Model.SchemaDifference?.RequiresRemapping == true)
@@ -65,10 +65,12 @@
         </table>
     </div>
 
-    <button type="submit" class="btn btn-primary">@(Model.PendingSourceReferenceId is null ? "Save mapping" : "Accept schema and save mapping")</button>
-    <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
-    <a class="btn btn-outline-secondary" asp-action="Source" asp-route-id="@pipelineId">Back to source</a>
-    <a class="btn btn-outline-secondary" asp-action="Edit" asp-route-id="@pipelineId">Back to pipeline</a>
+    <div class="d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-primary">@(Model.PendingSourceReferenceId is null ? "Save mapping" : "Accept schema and save mapping")</button>
+        <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
+        <a class="btn btn-outline-secondary" asp-action="Source" asp-route-id="@pipelineId">Back to source</a>
+        <a class="btn btn-outline-secondary" asp-action="Edit" asp-route-id="@pipelineId">Back to pipeline</a>
+    </div>
 </form>
 
 @section Scripts {

@@ -5,13 +5,19 @@
     var pipelineId = Context.Request.RouteValues["pipelineId"];
 }
 
-<h1>Add transformation</h1>
+<h1 class="mb-4">Add transformation</h1>
 
-<form asp-action="Create" asp-route-pipelineId="@pipelineId" method="post">
-    <partial name="_TransformationRuleForm" model="Model" />
-    <button type="submit" class="btn btn-primary">Add transformation</button>
-    <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
-</form>
+<div class="row">
+    <div class="col-lg-7">
+        <form asp-action="Create" asp-route-pipelineId="@pipelineId" method="post">
+            <partial name="_TransformationRuleForm" model="Model" />
+            <div class="d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-primary">Add transformation</button>
+                <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />

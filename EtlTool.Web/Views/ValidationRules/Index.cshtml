@@ -10,12 +10,18 @@
         <h1 class="mb-1">Configure validations</h1>
         <p class="text-muted mb-0">Add validation rules for this pipeline.</p>
     </div>
-    <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add validation</a>
+    @if (Model.Rules.Count > 0)
+    {
+        <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add validation</a>
+    }
 </div>
 
 @if (Model.Rules.Count == 0)
 {
-    <div class="alert alert-info" role="status">No validations have been configured.</div>
+    <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-3" role="status">
+        <span>No validations have been configured.</span>
+        <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add validation</a>
+    </div>
 }
 else
 {
@@ -50,8 +56,10 @@ else
     </div>
 }
 
-<a class="btn btn-outline-success mt-3" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@Model.PipelineId">Preview</a>
-<a class="btn btn-outline-secondary mt-3" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+<div class="d-flex flex-wrap gap-2 mt-3">
+    <a class="btn btn-outline-primary" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@Model.PipelineId">Preview</a>
+    <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+</div>
 
 @functions {
     private static string Label(ValidationType type) => type switch
@@ -61,7 +69,7 @@ else
         ValidationType.NumericRange => "Numeric range",
         ValidationType.TextLengthRange => "Text length",
         ValidationType.DateRange => "Date range",
-        ValidationType.UpsertKeyRequired => "Upsert-Key",
+        ValidationType.UpsertKeyRequired => "Upsert key",
         _ => "Unsupported validation"
     };
 }

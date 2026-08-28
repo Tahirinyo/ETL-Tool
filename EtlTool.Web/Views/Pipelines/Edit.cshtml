@@ -39,14 +39,30 @@
                 </div>
             </fieldset>
 
-            <button type="submit" class="btn btn-primary">Save changes</button>
-            <a class="btn btn-outline-primary" asp-action="Source" asp-route-id="@pipelineId">Configure source</a>
-            <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
-            <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
-            <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure validations</a>
-            <a class="btn btn-outline-success" asp-action="Preview" asp-route-id="@pipelineId">Preview</a>
-            <a class="btn btn-outline-primary" asp-controller="Runs" asp-action="History" asp-route-pipelineId="@pipelineId">Run history</a>
-            <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
+            <div class="mt-4">
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="submit" class="btn btn-primary">Save changes</button>
+                    <a class="btn btn-outline-secondary" asp-action="Index">Cancel</a>
+                </div>
+
+                <div class="mt-3">
+                    <div class="small text-muted mb-1">Configuration</div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <a class="btn btn-outline-primary" asp-action="Source" asp-route-id="@pipelineId">Configure source</a>
+                        <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
+                        <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
+                        <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure validations</a>
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <div class="small text-muted mb-1">Next steps</div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <a class="btn btn-outline-primary" asp-action="Preview" asp-route-id="@pipelineId">Preview</a>
+                        <a class="btn btn-outline-primary" asp-controller="Runs" asp-action="History" asp-route-pipelineId="@pipelineId">Run history</a>
+                    </div>
+                </div>
+            </div>
         </form>
     </div>
 </div>

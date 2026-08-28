@@ -6,13 +6,19 @@
     var ruleId = Context.Request.RouteValues["ruleId"];
 }
 
-<h1>Edit transformation</h1>
+<h1 class="mb-4">Edit transformation</h1>
 
-<form asp-action="Edit" asp-route-pipelineId="@pipelineId" asp-route-ruleId="@ruleId" method="post">
-    <partial name="_TransformationRuleForm" model="Model" />
-    <button type="submit" class="btn btn-primary">Save changes</button>
-    <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
-</form>
+<div class="row">
+    <div class="col-lg-7">
+        <form asp-action="Edit" asp-route-pipelineId="@pipelineId" asp-route-ruleId="@ruleId" method="post">
+            <partial name="_TransformationRuleForm" model="Model" />
+            <div class="d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-primary">Save changes</button>
+                <a class="btn btn-outline-secondary" asp-action="Index" asp-route-pipelineId="@pipelineId">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />

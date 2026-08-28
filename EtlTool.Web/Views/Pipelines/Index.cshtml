@@ -9,13 +9,17 @@
         <h1 class="mb-1">Pipelines</h1>
         <p class="text-muted mb-0">Create and manage reusable ETL pipeline drafts.</p>
     </div>
-    <a class="btn btn-primary" asp-action="Create">Create pipeline</a>
+    @if (Model.Count > 0)
+    {
+        <a class="btn btn-primary" asp-action="Create">Create pipeline</a>
+    }
 </div>
 
 @if (Model.Count == 0)
 {
-    <div class="alert alert-info" role="status">
-        No pipelines have been saved yet. Create a pipeline to get started.
+    <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-3" role="status">
+        <span>No pipelines have been saved yet. Create a pipeline to get started.</span>
+        <a class="btn btn-primary" asp-action="Create">Create pipeline</a>
     </div>
 }
 else

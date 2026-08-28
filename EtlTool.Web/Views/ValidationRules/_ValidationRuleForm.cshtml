@@ -12,7 +12,7 @@
         <option value="NumericRange">Numeric range</option>
         <option value="TextLengthRange">Text length</option>
         <option value="DateRange">Date range</option>
-        <option value="UpsertKeyRequired">Upsert-Key</option>
+        <option value="UpsertKeyRequired">Upsert key</option>
     </select>
     <span asp-validation-for="Type" class="text-danger"></span>
 </div>
@@ -30,9 +30,9 @@
 </div>
 
 <div class="mb-3" data-validation-section="upsert">
-    <label class="form-label">Configured upsert-key field</label>
+    <label class="form-label">Configured upsert key field</label>
     <input class="form-control" value="@(string.IsNullOrWhiteSpace(Model.UpsertKeyField) ? "Not configured" : Model.UpsertKeyField)" readonly />
-    <div class="form-text">The upsert-key validation uses the pipeline's configured upsert-key field.</div>
+    <div class="form-text">The upsert key validation uses the pipeline's configured upsert key field.</div>
 </div>
 
 <div class="mb-3" data-validation-section="range">

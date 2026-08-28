@@ -9,13 +9,17 @@
         <h1 class="mb-1">Configure transformations</h1>
         <p class="text-muted mb-0">Add, edit, or remove transformations for this pipeline.</p>
     </div>
-    <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add transformation</a>
+    @if (Model.Rules.Count > 0)
+    {
+        <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add transformation</a>
+    }
 </div>
 
 @if (Model.Rules.Count == 0)
 {
-    <div class="alert alert-info" role="status">
-        No transformations have been configured. Use <strong>Add transformation</strong> to create the first rule.
+    <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-3" role="status">
+        <span>No transformations have been configured. Use <strong>Add transformation</strong> to create the first rule.</span>
+        <a class="btn btn-primary" asp-action="Create" asp-route-pipelineId="@Model.PipelineId">Add transformation</a>
     </div>
 }
 else
@@ -74,8 +78,10 @@ else
     </div>
 }
 
-<a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@Model.PipelineId">Configure validations</a>
-<a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+<div class="d-flex flex-wrap gap-2 mt-3">
+    <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@Model.PipelineId">Configure validations</a>
+    <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+</div>
 
 @if (Model.Rules.Count > 1)
 {
