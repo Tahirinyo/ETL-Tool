@@ -27,15 +27,15 @@ All values are fictional. The CSV files use comma delimiters and ISO dates (`yyy
    `CustomerId`, `FullName`, `Email`, `Age`, `Balance`, `BirthDate`, `Country`.
 3. Open **Configure transformations** and add these rules. The order matters:
 
-   1. **Trim** — `FullName`
-   2. **To lower** — `Email`
-   3. **Convert to integer** — `Age`
-   4. **Convert to decimal** — `Balance`
-   5. **Convert to date** — `BirthDate`
-   6. **Conditional filter** — `Country`, operator **Equals**, comparison value `Turkey`
+   1. **Conditional filter** — `Country`, operator **NotEquals**, comparison value `Turkey`
+   2. **Trim** — `FullName`
+   3. **To lower** — `Email`
+   4. **Convert to integer** — `Age`
+   5. **Convert to decimal** — `Balance`
+   6. **Convert to date** — `BirthDate`
    7. **Deduplicate** — selected field `CustomerId`
 
-   The cards are draggable; dropping a card saves the persisted order.
+   The conditional filter excludes matching rows, so keep it first to remove non-`Turkey` rows before typed conversion. The cards are draggable; dropping a card saves the persisted order.
 
 4. Open **Configure validations** and add:
 

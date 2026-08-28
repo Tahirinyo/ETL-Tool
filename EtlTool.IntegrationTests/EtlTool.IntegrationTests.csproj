@@ -26,6 +26,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="..\test-data\clean.csv"
+             Link="TestData\clean.csv"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\test-data\dirty.csv"
+             Link="TestData\dirty.csv"
+             CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\test-data\clean.xlsx"
              Link="TestData\clean.xlsx"
              CopyToOutputDirectory="PreserveNewest" />
