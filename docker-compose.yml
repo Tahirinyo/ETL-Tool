@@ -17,6 +17,8 @@ services:
       start_period: 10s
     volumes:
       - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:27018:27017"
 
   web:
     build:

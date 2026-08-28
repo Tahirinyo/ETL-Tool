@@ -40,7 +40,15 @@ Inspect service output when diagnosing startup problems:
 docker compose logs --follow
 ```
 
-MongoDB is not published to the host. The application reaches it through Docker Compose’s default network by using the `mongo` service hostname.
+MongoDB is published only to the local host at `127.0.0.1:27018`. The application continues to reach it through Docker Compose’s default network by using the `mongo` service hostname.
+
+To inspect ETL output with MongoDB Compass, connect locally using:
+
+```
+mongodb://<MONGO_INITDB_ROOT_USERNAME>:<MONGO_INITDB_ROOT_PASSWORD>@localhost:27018/?authSource=admin
+```
+
+Substitute the local `.env` values and URI-encode reserved characters in either value. This host-only connection is for local verification; the web container must continue using its existing `mongo` hostname connection string.
 
 ### Stop, restart, or reset
 
