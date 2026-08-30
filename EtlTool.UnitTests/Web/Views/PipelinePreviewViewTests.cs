@@ -9,11 +9,19 @@ public sealed class PipelinePreviewViewTests
     {
         var view = ReadView();
 
+        Assert.Contains("@Model.PreviewedRowCount", view);
+        Assert.Contains("Previewed", view);
         Assert.Contains("@Model.ValidRowCount", view);
         Assert.Contains("@Model.InvalidRowCount", view);
         Assert.Contains("@Model.FilteredRowCount", view);
+        Assert.Contains("@Model.DuplicateRowCount", view);
+        Assert.Contains("model=\"Model.ValidRows!\"", view);
         Assert.Contains("_PreviewTable", view);
         Assert.Contains("_PreviewErrors", view);
+        Assert.Contains("Preview results are based on the first 100 source rows.", view);
+        Assert.Contains("Valid rows", view);
+        Assert.Contains("Rows after transformation", view);
+        Assert.Contains("may still fail validation", view);
         Assert.Contains("@problem.Component", view);
         Assert.Contains("@problem.Message", view);
         Assert.Contains("@Model.FailureMessage", view);

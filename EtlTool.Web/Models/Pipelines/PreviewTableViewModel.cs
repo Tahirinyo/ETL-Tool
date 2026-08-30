@@ -10,15 +10,19 @@ public sealed class PreviewTableViewModel
 {
     private PreviewTableViewModel(
         IReadOnlyList<string> columns,
-        IReadOnlyList<PreviewTableRowViewModel> rows)
+        IReadOnlyList<PreviewTableRowViewModel> rows,
+        string emptyMessage)
     {
         Columns = columns;
         Rows = rows;
+        EmptyMessage = emptyMessage;
     }
 
     public IReadOnlyList<string> Columns { get; }
 
     public IReadOnlyList<PreviewTableRowViewModel> Rows { get; }
+
+    public string EmptyMessage { get; }
 
     public static PreviewTableViewModel FromPreview(
         PreviewResult preview,
@@ -27,13 +31,36 @@ public sealed class PreviewTableViewModel
         ArgumentNullException.ThrowIfNull(preview);
         ArgumentNullException.ThrowIfNull(pipeline);
 
+        return Create(
+            pipeline,
+            preview.Rows.Where(HasCompleteTransformedRow),
+            "No complete transformed rows are available in this preview.");
+    }
+
+    public static PreviewTableViewModel FromFinalValidRows(
+        PreviewResult preview,
+        PipelineDefinition pipeline)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        ArgumentNullException.ThrowIfNull(pipeline);
+
+        return Create(
+            pipeline,
+            preview.FinalValidRows,
+            "No final valid rows are available in this preview.");
+    }
+
+    private static PreviewTableViewModel Create(
+        PipelineDefinition pipeline,
+        IEnumerable<RowProcessingResult> sourceRows,
+        string emptyMessage)
+    {
         var columns = pipeline.FieldMappings
             .Where(mapping => mapping.IsIncluded)
             .Select(mapping => mapping.TargetField)
             .ToArray();
 
-        var rows = preview.Rows
-            .Where(HasCompleteTransformedRow)
+        var rows = sourceRows
             .Select(row => new PreviewTableRowViewModel(
                 row.Row.SourceRowNumber,
                 new ReadOnlyCollection<PreviewTableCellViewModel>(columns
@@ -43,7 +70,8 @@ public sealed class PreviewTableViewModel
 
         return new PreviewTableViewModel(
             new ReadOnlyCollection<string>(columns),
-            new ReadOnlyCollection<PreviewTableRowViewModel>(rows));
+            new ReadOnlyCollection<PreviewTableRowViewModel>(rows),
+            emptyMessage);
     }
 
     private static bool HasCompleteTransformedRow(RowProcessingResult row) =>

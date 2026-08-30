@@ -30,14 +30,14 @@
     <div class="card-body">
         <h2 class="h5">Row progress</h2>
         <p class="mb-2" data-run-field="rowProgress">Loading…</p>
-        <div class="progress" role="progressbar" aria-label="Row progress" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress" data-run-field="progressIndicator" role="progressbar" aria-label="Row progress" aria-valuemin="0" aria-valuemax="100">
             <div class="progress-bar" data-run-field="progressBar" style="width: 0%"></div>
         </div>
     </div>
 </div>
 
 <div class="row row-cols-1 row-cols-md-2 g-3">
-    <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Total rows</div><div class="fs-4" data-run-field="totalRows">Loading…</div></div></div></div>
+    <div class="col"><div class="card"><div class="card-body"><div class="text-muted" data-run-field="totalRowsLabel">Total rows</div><div class="fs-4" data-run-field="totalRows">Loading…</div></div></div></div>
     <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Processed rows</div><div class="fs-4" data-run-field="processedRows">Loading…</div></div></div></div>
     <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Valid rows</div><div class="fs-4" data-run-field="validRows">Loading…</div></div></div></div>
     <div class="col"><div class="card"><div class="card-body"><div class="text-muted">Invalid rows</div><div class="fs-4" data-run-field="invalidRows">Loading…</div></div></div></div>
@@ -84,19 +84,50 @@
                 fields.startedAt.textContent = formatTimestamp(run.startedAt, 'Not started');
                 fields.completedAt.textContent = formatTimestamp(run.completedAt, 'Not completed');
 
-                for (const field of ['totalRows', 'processedRows', 'validRows', 'invalidRows', 'filteredRows', 'deduplicatedRows', 'insertedRows', 'updatedRows']) {
+                for (const field of ['processedRows', 'validRows', 'invalidRows', 'filteredRows', 'deduplicatedRows', 'insertedRows', 'updatedRows']) {
                     fields[field].textContent = run[field];
                 }
 
-                if (run.totalRows > 0) {
+                const isSuccessfullyCompleted = run.status === 'Completed';
+                const isActive = !terminalStatuses.has(run.status);
+
+                if (isSuccessfullyCompleted) {
+                    fields.totalRowsLabel.textContent = 'Total rows';
+                    fields.totalRows.textContent = run.totalRows;
+                } else if (isActive) {
+                    fields.totalRowsLabel.textContent = 'Source total';
+                    fields.totalRows.textContent = 'Unknown while processing';
+                } else {
+                    fields.totalRowsLabel.textContent = 'Rows observed';
+                    fields.totalRows.textContent = run.totalRows;
+                }
+
+                fields.progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+                fields.progressIndicator.removeAttribute('aria-valuenow');
+
+                if (isSuccessfullyCompleted && run.totalRows > 0) {
                     const percentage = Math.max(0, Math.min(100, (run.processedRows / run.totalRows) * 100));
                     fields.rowProgress.textContent = `${run.processedRows} / ${run.totalRows} rows (${percentage.toFixed(0)}%)`;
                     fields.progressBar.style.width = `${percentage}%`;
                     fields.progressBar.textContent = `${percentage.toFixed(0)}%`;
-                } else {
-                    fields.rowProgress.textContent = `${run.processedRows} rows processed`;
+                    fields.progressIndicator.setAttribute('aria-valuenow', percentage.toFixed(0));
+                    fields.progressIndicator.setAttribute('aria-valuetext', `${percentage.toFixed(0)}% complete`);
+                } else if (isSuccessfullyCompleted) {
+                    fields.rowProgress.textContent = '0 rows processed. Completed.';
                     fields.progressBar.style.width = '0%';
                     fields.progressBar.textContent = '';
+                    fields.progressIndicator.setAttribute('aria-valuetext', 'Completed with no source rows.');
+                } else if (isActive) {
+                    fields.rowProgress.textContent = `${run.processedRows} rows processed. Processing source…`;
+                    fields.progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+                    fields.progressBar.style.width = '100%';
+                    fields.progressBar.textContent = '';
+                    fields.progressIndicator.setAttribute('aria-valuetext', 'Processing source. Total row count is not yet known.');
+                } else {
+                    fields.rowProgress.textContent = `${run.processedRows} rows processed. Run ended before the source total was known.`;
+                    fields.progressBar.style.width = '0%';
+                    fields.progressBar.textContent = '';
+                    fields.progressIndicator.setAttribute('aria-valuetext', 'Run ended before the source total was known.');
                 }
             };
 

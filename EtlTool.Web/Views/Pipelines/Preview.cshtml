@@ -7,7 +7,8 @@
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
     <div>
         <h1 class="mb-1">Preview pipeline</h1>
-        <p class="text-muted mb-0">@Model.PipelineName — first 100 source rows</p>
+        <p class="text-muted mb-0">@Model.PipelineName</p>
+        <p class="text-muted mb-0">Preview results are based on the first 100 source rows.</p>
     </div>
     <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-secondary" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
@@ -44,25 +45,38 @@ else if (Model.HasPreview)
         <button type="submit" class="btn btn-success">Execute pipeline</button>
     </form>
 
-    <div class="row g-3 mb-4" aria-label="Preview counters">
-        <div class="col-md-4">
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-5 g-3 mb-4" aria-label="Preview counters">
+        <div class="col">
+            <div class="card h-100"><div class="card-body"><div class="text-muted">Previewed</div><div class="fs-3">@Model.PreviewedRowCount</div></div></div>
+        </div>
+        <div class="col">
             <div class="card h-100"><div class="card-body"><div class="text-muted">Valid</div><div class="fs-3">@Model.ValidRowCount</div></div></div>
         </div>
-        <div class="col-md-4">
+        <div class="col">
             <div class="card h-100"><div class="card-body"><div class="text-muted">Invalid</div><div class="fs-3">@Model.InvalidRowCount</div></div></div>
         </div>
-        <div class="col-md-4">
+        <div class="col">
             <div class="card h-100"><div class="card-body"><div class="text-muted">Filtered</div><div class="fs-3">@Model.FilteredRowCount</div></div></div>
+        </div>
+        <div class="col">
+            <div class="card h-100"><div class="card-body"><div class="text-muted">Duplicate</div><div class="fs-3">@Model.DuplicateRowCount</div></div></div>
         </div>
     </div>
 
     <section class="mb-4">
-        <h2 class="h4">Transformed rows</h2>
-        <partial name="_PreviewTable" model="Model.Table!" />
+        <h2 class="h4">Valid rows</h2>
+        <p>Rows in this preview sample that passed row-level processing and are eligible for loading during execution. Execution may later upsert them as inserts or updates.</p>
+        <partial name="_PreviewTable" model="Model.ValidRows!" />
     </section>
 
-    <section>
+    <section class="mb-4">
         <h2 class="h4">Row errors</h2>
         <partial name="_PreviewErrors" model="Model.Errors!" />
     </section>
+
+    <details>
+        <summary class="h4">Rows after transformation</summary>
+        <p class="mt-2">These rows successfully completed transformation and were not filtered or classified as duplicates. They may still fail validation or later preview checks.</p>
+        <partial name="_PreviewTable" model="Model.Table!" />
+    </details>
 }

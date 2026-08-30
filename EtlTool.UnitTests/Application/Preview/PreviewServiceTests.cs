@@ -40,6 +40,8 @@ public sealed class PreviewServiceTests
         Assert.Equal(expectedRows, result.ValidRowCount);
         Assert.Equal(0, result.InvalidRowCount);
         Assert.Equal(0, result.FilteredRowCount);
+        Assert.Equal(0, result.DuplicateRowCount);
+        Assert.Equal(expectedRows, result.FinalValidRows.Count);
         Assert.Equal(expectedRows, extractor.YieldedRows);
         Assert.True(source.CanRead);
     }
@@ -271,6 +273,56 @@ public sealed class PreviewServiceTests
         Assert.Equal(1, preview.InvalidRowCount);
         Assert.Equal(1, preview.ValidRowCount);
         Assert.Equal(0, preview.FilteredRowCount);
+        Assert.Equal(1, preview.DuplicateRowCount);
+        Assert.Equal([3L], preview.FinalValidRows.Select(row => row.Row.SourceRowNumber));
+    }
+
+    [Fact]
+    public async Task PreviewAsync_ExposesOnlyRowsThatPassIntegerConversionAndNumericValidation()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Age" }];
+        pipeline.FieldMappings = [new FieldMapping { SourceField = "Age", TargetField = "age", IsIncluded = true }];
+        pipeline.UpsertKeyField = "age";
+        pipeline.TransformationRules = [Rule(1, TransformationType.ConvertToInteger, "age")];
+        pipeline.ValidationRules =
+        [
+            new ValidationRule
+            {
+                Type = ValidationType.NumericRange,
+                Field = "age",
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Minimum"] = "0",
+                    ["Maximum"] = "120"
+                }
+            }
+        ];
+        var extractor = new SequenceExtractor(
+            Row(2, ("Age", "28")),
+            Row(3, ("Age", "-5")),
+            Row(4, ("Age", "abc")));
+        await using var source = new MemoryStream([1]);
+
+        var preview = await Service(
+                extractor,
+                Processor(
+                    [new ConvertToIntegerTransformationHandler()],
+                    [new NumericRangeValidationHandler()]))
+            .PreviewAsync(source, pipeline, CancellationToken.None);
+
+        Assert.Equal(
+            [RowProcessingStatus.Valid, RowProcessingStatus.Invalid, RowProcessingStatus.Invalid],
+            preview.Rows.Select(row => row.Status));
+        Assert.Equal([2L], preview.FinalValidRows.Select(row => row.Row.SourceRowNumber));
+        Assert.Equal(1, preview.ValidRowCount);
+        Assert.Equal(2, preview.InvalidRowCount);
+        Assert.Equal(0, preview.FilteredRowCount);
+        Assert.Equal(0, preview.DuplicateRowCount);
+        Assert.Equal(28L, preview.FinalValidRows[0].Row.Values["age"]);
+        Assert.Equal(-5L, preview.Rows[1].Row.Values["age"]);
+        Assert.Equal(RowProcessingErrorStage.Validation, Assert.Single(preview.Rows[1].Errors).Stage);
+        Assert.Equal(RowProcessingErrorStage.Transformation, Assert.Single(preview.Rows[2].Errors).Stage);
     }
 
     [Fact]
@@ -326,6 +378,8 @@ public sealed class PreviewServiceTests
         Assert.Equal(20, result.ValidRowCount);
         Assert.Equal(40, result.InvalidRowCount);
         Assert.Equal(20, result.FilteredRowCount);
+        Assert.Equal(20, result.DuplicateRowCount);
+        Assert.Equal(20, result.FinalValidRows.Count);
         Assert.Equal(20, result.ValidRowCount);
         Assert.Equal(40, result.InvalidRowCount);
         Assert.Equal(20, result.FilteredRowCount);

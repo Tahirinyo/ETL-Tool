@@ -3,7 +3,7 @@
 @if (Model.Rows.Count == 0)
 {
     <div class="alert alert-info" role="status">
-        No complete transformed rows are available in this preview.
+        @Model.EmptyMessage
     </div>
 }
 else

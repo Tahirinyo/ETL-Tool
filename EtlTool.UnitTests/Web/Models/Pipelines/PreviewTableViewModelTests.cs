@@ -76,6 +76,86 @@ public sealed class PreviewTableViewModelTests
     }
 
     [Fact]
+    public void FromFinalValidRows_UsesPreviewFinalClassificationWithoutReprocessingRows()
+    {
+        var pipeline = Pipeline();
+        var valid = Processor([], []).CreateSession(pipeline).Process(
+            Row(2, ("Name", "Valid"), ("Amount", 1L), ("When", null)));
+
+        var validationPipeline = Pipeline();
+        validationPipeline.ValidationRules = [new ValidationRule { Type = ValidationType.Required, Field = "displayName" }];
+        var validationInvalid = Processor([], [new RequiredValidationHandler()])
+            .CreateSession(validationPipeline)
+            .Process(Row(3, ("Name", " "), ("Amount", 2L), ("When", null)));
+
+        var filteredPipeline = Pipeline();
+        filteredPipeline.TransformationRules =
+        [
+            Rule(1, TransformationType.FilterRow, "displayName",
+                ("Operator", FilterOperator.Equals.ToString()), ("Value", "Filtered"))
+        ];
+        var filtered = Processor([new ConditionalFilterTransformationHandler()], [])
+            .CreateSession(filteredPipeline)
+            .Process(Row(4, ("Name", "Filtered"), ("Amount", 3L), ("When", null)));
+
+        var duplicatePipeline = Pipeline();
+        duplicatePipeline.TransformationRules = [DeduplicateRule(1, "displayName")];
+        var duplicateSession = Processor([new DeduplicateTransformationHandler()], [])
+            .CreateSession(duplicatePipeline);
+        _ = duplicateSession.Process(Row(5, ("Name", "Duplicate"), ("Amount", 4L), ("When", null)));
+        var duplicate = duplicateSession.Process(Row(6, ("Name", "Duplicate"), ("Amount", 5L), ("When", null)));
+
+        var failedPipeline = Pipeline();
+        failedPipeline.TransformationRules = [Rule(1, TransformationType.ConvertToInteger, "total")];
+        var transformationInvalid = Processor([new ConvertToIntegerTransformationHandler()], [])
+            .CreateSession(failedPipeline)
+            .Process(Row(7, ("Name", "Failure"), ("Amount", "not-a-number"), ("When", null)));
+
+        var model = PreviewTableViewModel.FromFinalValidRows(
+            new PreviewResult([valid, validationInvalid, filtered, duplicate, transformationInvalid]),
+            pipeline);
+
+        Assert.Equal([2L], model.Rows.Select(row => row.SourceRowNumber));
+        Assert.Equal("No final valid rows are available in this preview.", model.EmptyMessage);
+    }
+
+    [Fact]
+    public void PipelinePreviewFromPreview_PropagatesFinalValidRowsAndDuplicateCount()
+    {
+        var pipeline = Pipeline();
+        var session = Processor([], []).CreateSession(pipeline);
+        var valid = session.Process(Row(2, ("Name", "Ada"), ("Amount", 1L), ("When", null)));
+        var duplicate = session.Process(Row(3, ("Name", "Ada"), ("Amount", 2L), ("When", null)));
+
+        var model = PipelinePreviewViewModel.FromPreview(
+            pipeline,
+            new PreviewResult([valid, duplicate]));
+
+        Assert.Equal(1, model.ValidRowCount);
+        Assert.Equal(1, model.DuplicateRowCount);
+        Assert.Equal(2, model.PreviewedRowCount);
+        Assert.Equal([2L], model.ValidRows!.Rows.Select(row => row.SourceRowNumber));
+        Assert.True(model.HasPreview);
+    }
+
+    [Fact]
+    public void PipelinePreviewFromPreview_UsesTheActualOneHundredRowPreviewSampleSize()
+    {
+        var pipeline = Pipeline();
+        var session = Processor([], []).CreateSession(pipeline);
+        var preview = new PreviewResult(
+            Enumerable.Range(2, 100)
+                .Select(rowNumber => session.Process(
+                    Row(rowNumber, ("Name", $"Name-{rowNumber}"), ("Amount", rowNumber), ("When", null)))));
+
+        var model = PipelinePreviewViewModel.FromPreview(pipeline, preview);
+
+        Assert.Equal(100, preview.Rows.Count);
+        Assert.Equal(100, model.PreviewedRowCount);
+        Assert.Equal(100, model.ValidRowCount);
+    }
+
+    [Fact]
     public void FromPreview_DisplaysTransformedValuesForValidationInvalidRowsWithoutChangingPreviewCounters()
     {
         var pipeline = Pipeline();
@@ -102,6 +182,42 @@ public sealed class PreviewTableViewModelTests
         Assert.Equal(1, preview.InvalidRowCount);
         Assert.Equal(0, preview.FilteredRowCount);
         Assert.Equal("Ada", result.Row.Values["displayName"]);
+    }
+
+    [Fact]
+    public void FromPreview_KeepsConvertedNumericValidationFailuresInIntermediateOutputOnly()
+    {
+        var pipeline = Pipeline();
+        pipeline.TransformationRules = [Rule(1, TransformationType.ConvertToInteger, "total")];
+        pipeline.ValidationRules =
+        [
+            new ValidationRule
+            {
+                Type = ValidationType.NumericRange,
+                Field = "total",
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Minimum"] = "0",
+                    ["Maximum"] = "120"
+                }
+            }
+        ];
+        var result = Processor(
+                [new ConvertToIntegerTransformationHandler()],
+                [new NumericRangeValidationHandler()])
+            .CreateSession(pipeline)
+            .Process(Row(10, ("Name", "Ada"), ("Amount", "-5"), ("When", null)));
+        var preview = new PreviewResult([result]);
+
+        var transformed = PreviewTableViewModel.FromPreview(preview, pipeline);
+        var finalValid = PreviewTableViewModel.FromFinalValidRows(preview, pipeline);
+
+        Assert.Equal(RowProcessingStatus.Invalid, result.Status);
+        Assert.Equal(RowProcessingErrorStage.Validation, Assert.Single(result.Errors).Stage);
+        Assert.Equal(["Ada", "-5", "Null value"], Assert.Single(transformed.Rows).Cells.Select(cell => cell.DisplayValue));
+        Assert.Empty(finalValid.Rows);
+        Assert.Equal(0, preview.ValidRowCount);
+        Assert.Equal(1, preview.InvalidRowCount);
     }
 
     [Fact]

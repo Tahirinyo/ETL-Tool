@@ -11,7 +11,7 @@ public sealed class RunProgressViewTests
 
         foreach (var target in new[]
                  {
-                     "status", "startedAt", "completedAt", "rowProgress", "totalRows", "processedRows",
+                     "status", "startedAt", "completedAt", "rowProgress", "progressIndicator", "totalRowsLabel", "totalRows", "processedRows",
                      "validRows", "invalidRows", "filteredRows", "deduplicatedRows", "insertedRows", "updatedRows"
                  })
         {
@@ -27,8 +27,16 @@ public sealed class RunProgressViewTests
         Assert.Contains("showError('This run was not found or is no longer available.');\n                        stopPolling();", view);
         Assert.Contains("Progress could not be refreshed. Retrying shortly.", view);
         Assert.Contains("} catch {\n                    showError('Progress could not be refreshed. Retrying shortly.');", view);
-        Assert.Contains("const percentage = Math.max(0, Math.min(100", view);
-        Assert.Contains("fields.rowProgress.textContent = `${run.processedRows} rows processed`", view);
+        Assert.Contains("const isSuccessfullyCompleted = run.status === 'Completed';", view);
+        Assert.Contains("if (isSuccessfullyCompleted && run.totalRows > 0)", view);
+        Assert.Contains("fields.rowProgress.textContent = `${run.processedRows} rows processed. Processing source…`", view);
+        Assert.Contains("progress-bar-striped', 'progress-bar-animated", view);
+        Assert.Contains("Source total", view);
+        Assert.Contains("Unknown while processing", view);
+        Assert.Contains("Rows observed", view);
+        Assert.Contains("Run ended before the source total was known.", view);
+        Assert.Contains("0 rows processed. Completed.", view);
+        Assert.DoesNotContain("if (run.totalRows > 0)", view, StringComparison.Ordinal);
         Assert.Contains("scheduleNextPoll();", view);
 
         Assert.DoesNotContain("SystemError", view, StringComparison.Ordinal);

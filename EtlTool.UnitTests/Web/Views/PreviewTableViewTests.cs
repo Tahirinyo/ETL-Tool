@@ -12,7 +12,7 @@ public sealed class PreviewTableViewTests
         Assert.Contains("@model PreviewTableViewModel", view);
         Assert.Contains("@column", view);
         Assert.Contains("@cell.DisplayValue", view);
-        Assert.Contains("No complete transformed rows are available", view);
+        Assert.Contains("@Model.EmptyMessage", view);
         Assert.DoesNotContain("Html.Raw", view, StringComparison.Ordinal);
     }
 

@@ -32,10 +32,17 @@ public sealed class PreviewResult
                 case RowProcessingStatus.Filtered:
                     FilteredRowCount++;
                     break;
+                case RowProcessingStatus.Duplicate:
+                    DuplicateRowCount++;
+                    break;
             }
         }
 
         Rows = new ReadOnlyCollection<RowProcessingResult>(copiedRows);
+        FinalValidRows = new ReadOnlyCollection<RowProcessingResult>(
+            copiedRows
+                .Where(row => row.Status == RowProcessingStatus.Valid)
+                .ToArray());
     }
 
     public IReadOnlyList<RowProcessingResult> Rows { get; }
@@ -45,4 +52,11 @@ public sealed class PreviewResult
     public int InvalidRowCount { get; }
 
     public int FilteredRowCount { get; }
+
+    public int DuplicateRowCount { get; }
+
+    /// <summary>
+    /// Gets the rows that completed the preview's row-level processing and are eligible for loading.
+    /// </summary>
+    public IReadOnlyList<RowProcessingResult> FinalValidRows { get; }
 }
