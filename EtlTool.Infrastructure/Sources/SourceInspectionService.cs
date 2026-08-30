@@ -4,6 +4,7 @@ using EtlTool.Application.Uploads;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Extraction;
+using Microsoft.Extensions.Logging;
 
 namespace EtlTool.Infrastructure.Sources;
 
@@ -17,6 +18,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
     private readonly XlsxFileExtractor _xlsx;
     private readonly SourceSchemaInferenceService _schemaInference;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<SourceInspectionService>? _logger;
     private readonly object _stateLock = new();
     private readonly Dictionary<Guid, StagedUpload> _staged = [];
     private readonly Dictionary<Guid, StagedUpload> _inspecting = [];
@@ -29,7 +31,8 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         CsvFileExtractor csv,
         XlsxFileExtractor xlsx,
         TimeProvider? timeProvider = null,
-        SourceSchemaInferenceService? schemaInference = null)
+        SourceSchemaInferenceService? schemaInference = null,
+        ILogger<SourceInspectionService>? logger = null)
     {
         _validation = validation;
         _storage = storage;
@@ -37,6 +40,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         _xlsx = xlsx;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _schemaInference = schemaInference ?? new SourceSchemaInferenceService();
+        _logger = logger;
     }
 
     public async Task<SourceInspectionResult> InspectCsvAsync(
@@ -86,8 +90,10 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 cancellationToken,
                 sourceReferenceId);
 
+            var replacedPending = false;
             lock (_stateLock)
             {
+                replacedPending = _pending.ContainsKey(sourceReferenceId);
                 _pending[sourceReferenceId] = new PendingSource(
                     upload,
                     pipelineId,
@@ -96,6 +102,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                     CopySchema(inspection.DetectedSchema),
                     _timeProvider.GetUtcNow().Add(StageLifetime));
             }
+
+            LogLifecycle(
+                "PendingCreated",
+                pipelineId,
+                sourceReferenceId,
+                SourceType.Csv,
+                replacedPending ? "Replaced" : "Created");
 
             retained = true;
             return inspection;
@@ -219,8 +232,10 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
             if (inspectionResult.IsSuccess)
             {
+                var replacedPending = false;
                 lock (_stateLock)
                 {
+                    replacedPending = _pending.ContainsKey(stageId);
                     _pending[stageId] = new PendingSource(
                         staged.Upload,
                         pipelineId,
@@ -229,6 +244,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                         CopySchema(inspectionResult.DetectedSchema),
                         _timeProvider.GetUtcNow().Add(StageLifetime));
                 }
+
+                LogLifecycle(
+                    "PendingCreated",
+                    pipelineId,
+                    stageId,
+                    SourceType.Xlsx,
+                    replacedPending ? "Replaced" : "Created");
 
                 retained = true;
             }
@@ -270,6 +292,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         await PurgeExpiredAsync();
         cancellationToken.ThrowIfCancellationRequested();
         ActiveSource? retired = null;
+        ActiveSource? activated = null;
 
         lock (_stateLock)
         {
@@ -297,13 +320,28 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
             _active[pipelineId] = new ActiveSource(
                 pending.Upload,
+                sourceReferenceId,
                 pending.SourceType,
                 pending.Options,
                 pending.ExpiresAt);
+            activated = _active[pipelineId];
         }
+
+        LogLifecycle(
+            "Activated",
+            pipelineId,
+            sourceReferenceId,
+            activated!.SourceType,
+            "PendingPromoted");
 
         if (retired is not null)
         {
+            LogLifecycle(
+                "Retired",
+                pipelineId,
+                retired.SourceReferenceId,
+                retired.SourceType,
+                "Replaced");
             try
             {
                 await DeleteUploadsAsync([retired.Upload]);
@@ -363,6 +401,12 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
         if (pending is not null)
         {
+            LogLifecycle(
+                "PendingDiscarded",
+                pending.PipelineId,
+                sourceReferenceId,
+                pending.SourceType,
+                "Discarded");
             await DeleteUploadsAsync([pending.Upload]);
         }
     }
@@ -379,28 +423,59 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             return null;
         }
 
+        var activeWasExpired = IsActiveSourceExpired(pipelineId);
         await PurgeExpiredAsync();
         cancellationToken.ThrowIfCancellationRequested();
-        ActiveSource? active;
+        ActiveSource? active = null;
+        Guid? sourceReferenceId = null;
+        var failureReason = SourceAcquisitionFailureReason.None;
 
         lock (_stateLock)
         {
-            if (!_active.TryGetValue(pipelineId, out active)
-                || active.IsRetired
-                || active.IsRunReserved
-                || active.SourceType != sourceType
-                || !OptionsMatch(active.Options, sourceOptions))
+            if (!_active.TryGetValue(pipelineId, out active))
             {
-                return null;
+                failureReason = activeWasExpired
+                    ? SourceAcquisitionFailureReason.Expired
+                    : SourceAcquisitionFailureReason.NoActiveSource;
             }
-
-            active.LeaseCount++;
+            else if (active.IsRetired)
+            {
+                sourceReferenceId = active.SourceReferenceId;
+                failureReason = SourceAcquisitionFailureReason.Retired;
+            }
+            else if (active.IsRunReserved)
+            {
+                sourceReferenceId = active.SourceReferenceId;
+                failureReason = SourceAcquisitionFailureReason.RunReserved;
+            }
+            else if (active.SourceType != sourceType)
+            {
+                sourceReferenceId = active.SourceReferenceId;
+                failureReason = SourceAcquisitionFailureReason.SourceTypeMismatch;
+            }
+            else if (!OptionsMatch(active.Options, sourceOptions))
+            {
+                sourceReferenceId = active.SourceReferenceId;
+                failureReason = SourceAcquisitionFailureReason.SourceOptionsMismatch;
+            }
+            else
+            {
+                active.LeaseCount++;
+                sourceReferenceId = active.SourceReferenceId;
+            }
         }
 
+        if (failureReason != SourceAcquisitionFailureReason.None)
+        {
+            LogAcquisition(pipelineId, sourceType, false, failureReason, sourceReferenceId, fileExists: null);
+            return null;
+        }
+
+        var acquiredActive = active!;
         try
         {
             var stream = new FileStream(
-                active.Upload.StoredFilePath,
+                acquiredActive.Upload.StoredFilePath,
                 new FileStreamOptions
                 {
                     Mode = FileMode.Open,
@@ -409,21 +484,27 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                     BufferSize = 81_920,
                     Options = FileOptions.Asynchronous | FileOptions.SequentialScan
                 });
-            return new WizardSourceLease(this, active, stream);
+            LogAcquisition(pipelineId, sourceType, true, SourceAcquisitionFailureReason.None,
+                sourceReferenceId, fileExists: true);
+            return new WizardSourceLease(this, acquiredActive, stream);
         }
         catch (FileNotFoundException)
         {
-            await RetireMissingSourceAsync(pipelineId, active);
+            LogAcquisition(pipelineId, sourceType, false, SourceAcquisitionFailureReason.PhysicalSourceUnavailable,
+                sourceReferenceId, fileExists: false);
+            await RetireMissingSourceAsync(pipelineId, acquiredActive);
             return null;
         }
         catch (DirectoryNotFoundException)
         {
-            await RetireMissingSourceAsync(pipelineId, active);
+            LogAcquisition(pipelineId, sourceType, false, SourceAcquisitionFailureReason.PhysicalSourceUnavailable,
+                sourceReferenceId, fileExists: false);
+            await RetireMissingSourceAsync(pipelineId, acquiredActive);
             return null;
         }
         catch
         {
-            await ReleaseAsync(active);
+            await ReleaseAsync(acquiredActive);
             throw;
         }
     }
@@ -459,6 +540,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             active.LeaseCount++;
         }
 
+        LogLifecycle(
+            "ReservedForRun",
+            pipelineId,
+            active.SourceReferenceId,
+            active.SourceType,
+            "Reserved");
+
         return new WizardRunSourceReservation(this, pipelineId, active);
     }
 
@@ -468,6 +556,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
     {
         cancellationToken.ThrowIfCancellationRequested();
         ActiveSource? removed = null;
+        ActiveSource? retired = null;
         var uploads = new List<StoredUpload>();
 
         lock (_stateLock)
@@ -493,11 +582,22 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             if (_active.Remove(pipelineId, out var active))
             {
                 active.IsRetired = true;
+                retired = active;
                 if (active.LeaseCount == 0)
                 {
                     removed = active;
                 }
             }
+        }
+
+        if (retired is not null)
+        {
+            LogLifecycle(
+                "Retired",
+                pipelineId,
+                retired.SourceReferenceId,
+                retired.SourceType,
+                "PipelineRemoved");
         }
 
         if (removed is not null)
@@ -514,22 +614,34 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
     {
         cancellationToken.ThrowIfCancellationRequested();
         ActiveSource? retired = null;
+        ActiveSource? retiredForCleanup = null;
 
         lock (_stateLock)
         {
             if (_active.Remove(pipelineId, out var active))
             {
                 active.IsRetired = true;
+                retired = active;
                 if (active.LeaseCount == 0)
                 {
-                    retired = active;
+                    retiredForCleanup = active;
                 }
             }
         }
 
         if (retired is not null)
         {
-            await DeleteUploadsAsync([retired.Upload]);
+            LogLifecycle(
+                "Retired",
+                pipelineId,
+                retired.SourceReferenceId,
+                retired.SourceType,
+                "ExplicitRetirement");
+        }
+
+        if (retiredForCleanup is not null)
+        {
+            await DeleteUploadsAsync([retiredForCleanup.Upload]);
         }
     }
 
@@ -569,6 +681,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
     {
         var now = _timeProvider.GetUtcNow();
         var uploads = new List<StoredUpload>();
+        var expired = new List<(Guid PipelineId, Guid SourceReferenceId, SourceType SourceType, string State)>();
 
         lock (_stateLock)
         {
@@ -579,6 +692,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
             {
                 uploads.Add(_staged[stageId].Upload);
                 _staged.Remove(stageId);
+                expired.Add((Guid.Empty, stageId, SourceType.Xlsx, "Staged"));
             }
 
             foreach (var sourceReferenceId in _pending
@@ -586,8 +700,10 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 .Select(pair => pair.Key)
                 .ToArray())
             {
-                uploads.Add(_pending[sourceReferenceId].Upload);
+                var pending = _pending[sourceReferenceId];
+                uploads.Add(pending.Upload);
                 _pending.Remove(sourceReferenceId);
+                expired.Add((pending.PipelineId, sourceReferenceId, pending.SourceType, "Pending"));
             }
 
             foreach (var pipelineId in _active
@@ -598,11 +714,22 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 var active = _active[pipelineId];
                 _active.Remove(pipelineId);
                 active.IsRetired = true;
+                expired.Add((pipelineId, active.SourceReferenceId, active.SourceType, "Active"));
                 if (active.LeaseCount == 0)
                 {
                     uploads.Add(active.Upload);
                 }
             }
+        }
+
+        foreach (var entry in expired)
+        {
+            LogLifecycle(
+                "Expired",
+                entry.PipelineId,
+                entry.SourceReferenceId,
+                entry.SourceType,
+                entry.State);
         }
 
         await DeleteUploadsAsync(uploads);
@@ -624,6 +751,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 active.IsRetired = true;
             }
         }
+
+        LogLifecycle(
+            "Retired",
+            pipelineId,
+            active.SourceReferenceId,
+            active.SourceType,
+            "PhysicalSourceUnavailable");
 
         await ReleaseAsync(active);
     }
@@ -655,6 +789,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
     private void TransferRunReservation(Guid pipelineId, ActiveSource active)
     {
+        var transferred = false;
         lock (_stateLock)
         {
             if (!active.IsRunReserved)
@@ -674,6 +809,18 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 _active.Remove(pipelineId);
                 active.IsRetired = true;
             }
+
+            transferred = true;
+        }
+
+        if (transferred)
+        {
+            LogLifecycle(
+                "RunReservationReleased",
+                pipelineId,
+                active.SourceReferenceId,
+                active.SourceType,
+                "TransferredToRun");
         }
     }
 
@@ -712,6 +859,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         {
             await DeleteUploadsAsync([upload]);
         }
+
+        LogLifecycle(
+            "RunReservationReleased",
+            pipelineId,
+            active.SourceReferenceId,
+            active.SourceType,
+            "RolledBack");
     }
 
     private async Task DeleteUploadsAsync(IEnumerable<StoredUpload> uploads)
@@ -760,6 +914,56 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         }
     }
 
+    private bool IsActiveSourceExpired(Guid pipelineId)
+    {
+        lock (_stateLock)
+        {
+            return _active.TryGetValue(pipelineId, out var active)
+                && !active.IsRunReserved
+                && active.ExpiresAt <= _timeProvider.GetUtcNow();
+        }
+    }
+
+    private void LogAcquisition(
+        Guid pipelineId,
+        SourceType requestedSourceType,
+        bool succeeded,
+        SourceAcquisitionFailureReason failureReason,
+        Guid? sourceReferenceId,
+        bool? fileExists)
+    {
+        _logger?.LogInformation(
+            "Wizard source acquisition for pipeline {PipelineId} requested {RequestedSourceType} " +
+            "completed with {AcquisitionResult}; reason {AcquisitionFailureReason}; " +
+            "source reference {SourceReferenceId}; file exists {FileExists}; process {ProcessId}.",
+            pipelineId,
+            requestedSourceType,
+            succeeded ? "Acquired" : "Unavailable",
+            failureReason,
+            sourceReferenceId,
+            fileExists,
+            Environment.ProcessId);
+    }
+
+    private void LogLifecycle(
+        string transition,
+        Guid pipelineId,
+        Guid sourceReferenceId,
+        SourceType sourceType,
+        string state)
+    {
+        _logger?.LogInformation(
+            "Wizard source lifecycle {SourceLifecycleTransition} for pipeline {PipelineId}; " +
+            "source reference {SourceReferenceId}; source type {SourceType}; state {SourceLifecycleState}; " +
+            "process {ProcessId}.",
+            transition,
+            pipelineId,
+            sourceReferenceId,
+            sourceType,
+            state,
+            Environment.ProcessId);
+    }
+
     private static SourceOptions CopyOptions(SourceOptions options) => new()
     {
         CultureName = options.CultureName,
@@ -806,17 +1010,31 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
     private sealed class ActiveSource(
         StoredUpload upload,
+        Guid sourceReferenceId,
         SourceType sourceType,
         SourceOptions options,
         DateTimeOffset expiresAt)
     {
         public StoredUpload Upload { get; } = upload;
+        public Guid SourceReferenceId { get; } = sourceReferenceId;
         public SourceType SourceType { get; } = sourceType;
         public SourceOptions Options { get; } = options;
         public DateTimeOffset ExpiresAt { get; set; } = expiresAt;
         public int LeaseCount { get; set; }
         public bool IsRetired { get; set; }
         public bool IsRunReserved { get; set; }
+    }
+
+    private enum SourceAcquisitionFailureReason
+    {
+        None,
+        NoActiveSource,
+        Retired,
+        RunReserved,
+        SourceTypeMismatch,
+        SourceOptionsMismatch,
+        Expired,
+        PhysicalSourceUnavailable
     }
 
     private sealed class WizardSourceLease(

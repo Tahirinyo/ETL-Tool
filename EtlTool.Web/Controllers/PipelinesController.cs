@@ -1067,6 +1067,11 @@ public sealed class PipelinesController : Controller
             throw new InvalidOperationException("Pipeline preview is not configured.");
         }
 
+        _logger?.LogInformation(
+            "Preview request started for pipeline {PipelineId}; request {RequestId}; process {ProcessId}.",
+            id,
+            HttpContext.TraceIdentifier,
+            Environment.ProcessId);
         PipelineDefinition? pipeline = null;
         try
         {
@@ -1094,6 +1099,11 @@ public sealed class PipelinesController : Controller
 
             if (snapshot.Status == PipelinePreviewSnapshotStatus.SourceUnavailable)
             {
+                _logger?.LogInformation(
+                    "Preview request returned source unavailable for pipeline {PipelineId}; request {RequestId}; process {ProcessId}.",
+                    pipeline.Id,
+                    HttpContext.TraceIdentifier,
+                    Environment.ProcessId);
                 Response.StatusCode = StatusCodes.Status410Gone;
                 return View(new PipelinePreviewViewModel
                 {

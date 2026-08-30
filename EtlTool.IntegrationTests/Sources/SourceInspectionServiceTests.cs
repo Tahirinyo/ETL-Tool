@@ -8,6 +8,7 @@ using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.Uploads;
+using Microsoft.Extensions.Logging;
 using static EtlTool.IntegrationTests.Extraction.OpenXmlWorkbookFixture;
 
 namespace EtlTool.IntegrationTests.Sources;
@@ -16,6 +17,79 @@ public sealed class SourceInspectionServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"EtlTool-SourceInspection-{Guid.NewGuid():N}");
     private readonly TestTimeProvider _clock = new(new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.Zero));
+
+    [Fact]
+    public async Task AcquireAsync_LogsStructuredSafeReasonsAndLifecycleTransitions()
+    {
+        var logger = new RecordingLogger<SourceInspectionService>();
+        var service = CreateService(logger: logger);
+        var options = new SourceOptions { Delimiter = CsvDelimiter.Comma, FirstRowIsHeader = true };
+
+        Assert.Null(await service.AcquireAsync(
+            Guid.NewGuid(), SourceType.Csv, options, CancellationToken.None));
+
+        var pipelineId = Guid.NewGuid();
+        await using var content = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1"));
+        var inspection = await service.InspectCsvAsync(
+            pipelineId, content, "customers.csv", options, CancellationToken.None);
+        var sourceReferenceId = Assert.IsType<Guid>(inspection.SourceReferenceId);
+        Assert.True(await service.ActivateAsync(pipelineId, sourceReferenceId, CancellationToken.None));
+
+        await using (var acquired = Assert.IsAssignableFrom<IWizardSourceLease>(
+            await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None)))
+        {
+            Assert.True(acquired.Content.CanRead);
+        }
+
+        Assert.Null(await service.AcquireAsync(
+            pipelineId,
+            SourceType.Csv,
+            new SourceOptions { Delimiter = CsvDelimiter.Semicolon, FirstRowIsHeader = true },
+            CancellationToken.None));
+        Assert.Null(await service.AcquireAsync(
+            pipelineId, SourceType.Xlsx, options, CancellationToken.None));
+
+        await using (var reservation = Assert.IsAssignableFrom<IWizardRunSourceReservation>(
+            await service.ReserveForRunAsync(pipelineId, SourceType.Csv, options, CancellationToken.None)))
+        {
+            Assert.Null(await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+        }
+
+        _clock.Advance(TimeSpan.FromMinutes(16));
+        Assert.Null(await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
+
+        var missingPipelineId = Guid.NewGuid();
+        var existingPaths = Directory.EnumerateFiles(_root, "*.upload").ToHashSet(StringComparer.Ordinal);
+        await using var missingContent = new MemoryStream(Encoding.UTF8.GetBytes("Id\n2"));
+        var missingInspection = await service.InspectCsvAsync(
+            missingPipelineId, missingContent, "missing.csv", options, CancellationToken.None);
+        Assert.True(await service.ActivateAsync(
+            missingPipelineId,
+            Assert.IsType<Guid>(missingInspection.SourceReferenceId),
+            CancellationToken.None));
+        var missingPath = Assert.Single(
+            Directory.EnumerateFiles(_root, "*.upload"),
+            path => !existingPaths.Contains(path));
+        File.Delete(missingPath);
+        Assert.Null(await service.AcquireAsync(
+            missingPipelineId, SourceType.Csv, options, CancellationToken.None));
+
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "NoActiveSource"));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "SourceOptionsMismatch"));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "SourceTypeMismatch"));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "RunReserved"));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "Expired"));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionFailureReason", "PhysicalSourceUnavailable")
+            && entry.Has("FileExists", false));
+        Assert.Contains(logger.Entries, entry => entry.Has("AcquisitionResult", "Acquired"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "PendingCreated"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "Activated"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "ReservedForRun"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "RunReservationReleased"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "Expired"));
+        Assert.Contains(logger.Entries, entry => entry.Has("SourceLifecycleTransition", "Retired")
+            && entry.Has("SourceLifecycleState", "PhysicalSourceUnavailable"));
+    }
 
     [Fact]
     public async Task InspectCsvAsync_UsesDelimiterBoundsSampleAndCleansStoredFile()
@@ -570,7 +644,8 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
     private SourceInspectionService CreateService(
         IUploadStorage? storage = null,
-        IUploadValidationService? validation = null)
+        IUploadValidationService? validation = null,
+        ILogger<SourceInspectionService>? logger = null)
     {
         storage ??= new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
         var csv = new CsvFileExtractor();
@@ -579,7 +654,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         {
             MaxFileSizeBytes = 1024 * 1024, MaxDataRowCount = 100_000
         }, csv, xlsx);
-        return new SourceInspectionService(validation, storage, csv, xlsx, _clock);
+        return new SourceInspectionService(validation, storage, csv, xlsx, _clock, logger: logger);
     }
 
     [Fact]
@@ -1120,6 +1195,45 @@ public sealed class SourceInspectionServiceTests : IDisposable
         public override DateTimeOffset GetUtcNow() => _now;
 
         public void Advance(TimeSpan duration) => _now = _now.Add(duration);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<StructuredLogEntry> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => EmptyScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (state is IReadOnlyList<KeyValuePair<string, object?>> values)
+            {
+                Entries.Add(new StructuredLogEntry(values));
+            }
+        }
+    }
+
+    private sealed record StructuredLogEntry(IReadOnlyList<KeyValuePair<string, object?>> Values)
+    {
+        public bool Has(string name, object? expected) => Values.Any(pair =>
+            string.Equals(pair.Key, name, StringComparison.Ordinal)
+            && string.Equals(pair.Value?.ToString(), expected?.ToString(), StringComparison.Ordinal));
+    }
+
+    private sealed class EmptyScope : IDisposable
+    {
+        public static EmptyScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
     }
 
     private static PipelineDefinition Pipeline(Guid pipelineId, SourceOptions options) => new()
