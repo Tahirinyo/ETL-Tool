@@ -1691,6 +1691,12 @@ public sealed class PipelinesControllerTests
 
             return Task.CompletedTask;
         }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class RecordingSourceInspectionService : ISourceInspectionService

@@ -823,6 +823,12 @@ public sealed class PipelineReadinessServiceTests
 
         public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class RejectedTargetAccessService(string rejectionMessage) : IMongoTargetAccessService
@@ -831,6 +837,12 @@ public sealed class PipelineReadinessServiceTests
             MongoTargetValidationResult.Rejected(rejectionMessage);
 
         public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
             throw new NotSupportedException();
     }
 }

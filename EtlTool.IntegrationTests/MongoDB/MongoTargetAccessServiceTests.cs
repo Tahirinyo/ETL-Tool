@@ -378,6 +378,49 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
         Assert.Equal(0, callbackInvocations);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RejectsIndexPermissionFailureBeforeExtractionOrBatchCallback()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        const string collectionName = "read_only_customers";
+
+        await testDatabase.Database.CreateCollectionAsync(collectionName);
+        var targetAccessService = await CreateCollectionScopedServiceAsync(
+            testDatabase,
+            collectionName);
+        var resolver = new TrackingResolver(new CsvFileExtractor());
+        var mappingService = new FieldMappingService();
+        var orchestrator = new BatchOrchestrator(
+            resolver,
+            new PipelineReadinessService(
+                new ThrowingPipelineRepository(),
+                mappingService,
+                targetAccessService),
+            new PipelineRowProcessor(
+                mappingService,
+                new TransformationEngine(new TransformationHandlerRegistry([])),
+                new ValidationEngine(new ValidationHandlerRegistry([]))),
+            targetAccessService,
+            new BatchExecutionOptions { BatchSize = 1 });
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1\n"));
+        var callbackInvocations = 0;
+
+        await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
+            orchestrator.ExecuteAsync(
+                source,
+                ReadyPipeline(testDatabase.DatabaseName, collectionName),
+                (_, _) =>
+                {
+                    callbackInvocations++;
+                    return Task.CompletedTask;
+                },
+                (_, _) => Task.CompletedTask,
+                CancellationToken.None));
+
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, callbackInvocations);
+    }
+
     private static async Task<MongoTargetAccessService> CreateCollectionScopedServiceAsync(
         MongoDbTestDatabase testDatabase,
         string collectionName)

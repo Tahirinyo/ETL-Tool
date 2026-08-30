@@ -372,6 +372,68 @@ public sealed class BatchOrchestratorTests
         Assert.Equal(0, extractor.EnumerationCount);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_EnsuresUpsertIndexOnceAfterAccessAndBeforeExtractionOrBatch()
+    {
+        var events = new List<string>();
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        var resolver = new TrackingResolver(extractor, () => events.Add("extractor"));
+        var targetAccess = new RecordingTargetAccessService(events);
+        var pipeline = ReadyPipeline();
+        using var cancellation = new CancellationTokenSource();
+        await using var source = new MemoryStream([1]);
+
+        await Orchestrator(resolver, targetAccessService: targetAccess).ExecuteAsync(
+            source,
+            pipeline,
+            (_, _) =>
+            {
+                events.Add("batch");
+                return Task.CompletedTask;
+            },
+            IgnoreProgress,
+            cancellation.Token);
+
+        Assert.Equal(["access", "index", "extractor", "batch"], events);
+        Assert.Equal(1, targetAccess.AccessInvocationCount);
+        Assert.Equal(1, targetAccess.IndexInvocationCount);
+        Assert.Equal(
+            new MongoTarget(pipeline.DestinationDatabase, pipeline.DestinationCollection),
+            targetAccess.IndexTarget);
+        Assert.Equal(pipeline.UpsertKeyField, targetAccess.UpsertKeyField);
+        Assert.Equal(cancellation.Token, targetAccess.IndexCancellationToken);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PropagatesIndexReadinessFailureBeforeExtractionOrBatch()
+    {
+        var events = new List<string>();
+        var failure = new MongoTargetAccessException();
+        var extractor = new SequenceExtractor([Row(2, ("Value", "value"))]);
+        var resolver = new TrackingResolver(extractor, () => events.Add("extractor"));
+        var targetAccess = new RecordingTargetAccessService(events, failure);
+        var callbackInvocations = 0;
+        await using var source = new MemoryStream([1]);
+
+        var exception = await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
+            Orchestrator(resolver, targetAccessService: targetAccess).ExecuteAsync(
+                source,
+                ReadyPipeline(),
+                (_, _) =>
+                {
+                    callbackInvocations++;
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None));
+
+        Assert.Same(failure, exception);
+        Assert.Equal(["access", "index"], events);
+        Assert.Equal(0, resolver.InvocationCount);
+        Assert.Equal(0, extractor.EnumerationCount);
+        Assert.Equal(0, callbackInvocations);
+    }
+
     [Theory]
     [InlineData(0, "")]
     [InlineData(2, "2")]
@@ -1247,13 +1309,16 @@ public sealed class BatchOrchestratorTests
         return row;
     }
 
-    private sealed class TrackingResolver(IFileExtractor extractor) : IFileExtractorResolver
+    private sealed class TrackingResolver(
+        IFileExtractor extractor,
+        Action? onResolve = null) : IFileExtractorResolver
     {
         public int InvocationCount { get; private set; }
 
         public IFileExtractor Resolve(SourceType sourceType)
         {
             InvocationCount++;
+            onResolve?.Invoke();
             Assert.Equal(extractor.SourceType, sourceType);
             return extractor;
         }
@@ -1327,6 +1392,12 @@ public sealed class BatchOrchestratorTests
 
         public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class TrackingAllowedTargetAccessService : IMongoTargetAccessService
@@ -1341,6 +1412,12 @@ public sealed class BatchOrchestratorTests
             AccessProbeInvocationCount++;
             return Task.CompletedTask;
         }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class FailingTargetAccessService : IMongoTargetAccessService
@@ -1358,6 +1435,12 @@ public sealed class BatchOrchestratorTests
             InvocationCount++;
             return Task.FromException(Failure);
         }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Index readiness must not run after an access failure.");
     }
 
     private sealed class RejectedTargetAccessService : IMongoTargetAccessService
@@ -1372,6 +1455,54 @@ public sealed class BatchOrchestratorTests
         {
             AccessProbeInvocationCount++;
             throw new InvalidOperationException("The access probe must not run for an invalid target.");
+        }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Index readiness must not run for an invalid target.");
+    }
+
+    private sealed class RecordingTargetAccessService(
+        List<string> events,
+        Exception? indexFailure = null) : IMongoTargetAccessService
+    {
+        public int AccessInvocationCount { get; private set; }
+
+        public int IndexInvocationCount { get; private set; }
+
+        public MongoTarget? IndexTarget { get; private set; }
+
+        public string? UpsertKeyField { get; private set; }
+
+        public CancellationToken IndexCancellationToken { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(
+            MongoTarget target,
+            CancellationToken cancellationToken)
+        {
+            AccessInvocationCount++;
+            events.Add("access");
+            return Task.CompletedTask;
+        }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken)
+        {
+            IndexInvocationCount++;
+            IndexTarget = target;
+            UpsertKeyField = upsertKeyField;
+            IndexCancellationToken = cancellationToken;
+            events.Add("index");
+            return indexFailure is null
+                ? Task.CompletedTask
+                : Task.FromException(indexFailure);
         }
     }
 }

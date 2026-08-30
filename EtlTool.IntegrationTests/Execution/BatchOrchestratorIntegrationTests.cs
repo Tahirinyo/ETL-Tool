@@ -146,5 +146,11 @@ public sealed class BatchOrchestratorIntegrationTests
 
         public Task EnsureAccessibleAsync(MongoTarget target, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }

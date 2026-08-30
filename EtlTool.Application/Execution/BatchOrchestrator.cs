@@ -99,8 +99,15 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             throw new PipelineNotReadyException(readiness.Problems);
         }
 
+        var target = new MongoTarget(
+            pipeline.DestinationDatabase,
+            pipeline.DestinationCollection);
         await _targetAccessService.EnsureAccessibleAsync(
-            new MongoTarget(pipeline.DestinationDatabase, pipeline.DestinationCollection),
+            target,
+            cancellationToken).ConfigureAwait(false);
+        await _targetAccessService.EnsureUpsertIndexAsync(
+            target,
+            pipeline.UpsertKeyField,
             cancellationToken).ConfigureAwait(false);
 
         var extractor = _extractorResolver.Resolve(pipeline.SourceType);

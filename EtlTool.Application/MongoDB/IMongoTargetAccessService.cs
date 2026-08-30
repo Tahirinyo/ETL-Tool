@@ -7,4 +7,9 @@ public interface IMongoTargetAccessService
     Task EnsureAccessibleAsync(
         MongoTarget target,
         CancellationToken cancellationToken);
+
+    Task EnsureUpsertIndexAsync(
+        MongoTarget target,
+        string upsertKeyField,
+        CancellationToken cancellationToken);
 }
