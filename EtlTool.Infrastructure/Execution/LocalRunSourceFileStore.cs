@@ -1,32 +1,46 @@
-using EtlTool.Domain.Entities;
+using EtlTool.Application.Execution;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Uploads;
+using EtlTool.Domain.Entities;
+using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Uploads;
 
 namespace EtlTool.Infrastructure.Execution;
 
-public sealed class LocalRunSourceFileStore : IRunSourceFileStore
+public sealed class LocalRunSourceFileStore : IRunSourceStore
 {
     private readonly string _rootPath;
     private readonly IUploadStorage _uploadStorage;
+    private readonly IFileExtractorResolver _extractorResolver;
     private readonly StringComparison _pathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
     public LocalRunSourceFileStore(
         UploadStorageOptions options,
-        IUploadStorage uploadStorage)
+        IUploadStorage uploadStorage,
+        IFileExtractorResolver extractorResolver)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(uploadStorage);
+        ArgumentNullException.ThrowIfNull(extractorResolver);
         options.Validate();
         _rootPath = Path.GetFullPath(options.RootPath);
         _uploadStorage = uploadStorage;
+        _extractorResolver = extractorResolver;
     }
 
-    public Stream Open(EtlRun run)
+    public Task<IEtlSource> OpenAsync(
+        EtlRun run,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var path = Resolve(run);
-        return new FileStream(path, new FileStreamOptions
+        var configuration = run.ExecutionConfiguration
+            ?? throw new InvalidOperationException(
+                "The admitted ETL execution configuration is unavailable.");
+        var extractor = _extractorResolver.Resolve(configuration.SourceType);
+        var stream = new FileStream(path, new FileStreamOptions
         {
             Mode = FileMode.Open,
             Access = FileAccess.Read,
@@ -34,9 +48,14 @@ public sealed class LocalRunSourceFileStore : IRunSourceFileStore
             BufferSize = 81_920,
             Options = FileOptions.Asynchronous | FileOptions.SequentialScan
         });
+        IEtlSource source = new FileEtlSource(
+            stream,
+            extractor,
+            configuration.SourceOptions);
+        return Task.FromResult(source);
     }
 
-    public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken)
+    public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var path = Resolve(run);

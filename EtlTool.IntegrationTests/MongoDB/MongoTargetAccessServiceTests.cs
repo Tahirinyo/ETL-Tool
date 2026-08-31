@@ -345,10 +345,8 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
         var targetAccessService = await CreateCollectionScopedServiceAsync(
             testDatabase,
             authorizedCollection);
-        var resolver = new TrackingResolver(new CsvFileExtractor());
         var mappingService = new FieldMappingService();
         var orchestrator = new BatchOrchestrator(
-            resolver,
             new PipelineReadinessService(
                 new ThrowingPipelineRepository(),
                 mappingService,
@@ -359,7 +357,7 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 new ValidationEngine(new ValidationHandlerRegistry([]))),
             targetAccessService,
             new BatchExecutionOptions { BatchSize = 1 });
-        await using var source = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1\n"));
+        await using var source = new ThrowIfReadEtlSource();
         var callbackInvocations = 0;
 
         await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
@@ -374,7 +372,6 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None));
 
-        Assert.Equal(0, resolver.InvocationCount);
         Assert.Equal(0, callbackInvocations);
     }
 
@@ -388,10 +385,8 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
         var targetAccessService = await CreateCollectionScopedServiceAsync(
             testDatabase,
             collectionName);
-        var resolver = new TrackingResolver(new CsvFileExtractor());
         var mappingService = new FieldMappingService();
         var orchestrator = new BatchOrchestrator(
-            resolver,
             new PipelineReadinessService(
                 new ThrowingPipelineRepository(),
                 mappingService,
@@ -402,7 +397,7 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 new ValidationEngine(new ValidationHandlerRegistry([]))),
             targetAccessService,
             new BatchExecutionOptions { BatchSize = 1 });
-        await using var source = new MemoryStream(Encoding.UTF8.GetBytes("Id\n1\n"));
+        await using var source = new ThrowIfReadEtlSource();
         var callbackInvocations = 0;
 
         await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
@@ -417,7 +412,6 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None));
 
-        Assert.Equal(0, resolver.InvocationCount);
         Assert.Equal(0, callbackInvocations);
     }
 
@@ -509,6 +503,14 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
             Assert.Equal(extractor.SourceType, sourceType);
             return extractor;
         }
+    }
+
+    private sealed class ThrowIfReadEtlSource : IEtlSource
+    {
+        public IAsyncEnumerable<DataRow> ReadAsync(CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The source must not be read.");
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class ThrowingPipelineRepository : IPipelineDefinitionRepository

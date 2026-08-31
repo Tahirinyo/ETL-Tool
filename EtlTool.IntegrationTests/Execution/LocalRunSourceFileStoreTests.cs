@@ -1,4 +1,8 @@
+using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Uploads;
 
@@ -13,15 +17,20 @@ public sealed class LocalRunSourceFileStoreTests : IDisposable
     {
         Directory.CreateDirectory(_rootPath);
         var path = Path.Combine(_rootPath, $"{Guid.NewGuid():N}.upload");
-        await File.WriteAllTextAsync(path, "source");
-        var run = new EtlRun { Id = Guid.NewGuid(), StoredFilePath = path };
+        await File.WriteAllTextAsync(path, "Id\nsource");
+        var run = Run(path);
         var store = CreateStore();
 
-        await using (var stream = store.Open(run))
+        await using (var source = await store.OpenAsync(run, CancellationToken.None))
         {
-            Assert.True(stream.CanRead);
+            var rows = new List<DataRow>();
+            await foreach (var row in source.ReadAsync(CancellationToken.None))
+            {
+                rows.Add(row);
+            }
+            Assert.Equal("source", Assert.Single(rows).Values["Id"]);
         }
-        await store.DeleteAsync(run, CancellationToken.None);
+        await store.ReleaseAsync(run, CancellationToken.None);
 
         Assert.False(File.Exists(path));
     }
@@ -30,12 +39,13 @@ public sealed class LocalRunSourceFileStoreTests : IDisposable
     [InlineData("../outside.upload")]
     [InlineData("not-generated.upload")]
     [InlineData("source.csv")]
-    public void Open_RejectsUntrustedPersistedPath(string fileName)
+    public async Task Open_RejectsUntrustedPersistedPath(string fileName)
     {
         var store = CreateStore();
-        var run = new EtlRun { Id = Guid.NewGuid(), StoredFilePath = Path.Combine(_rootPath, fileName) };
+        var run = Run(Path.Combine(_rootPath, fileName));
 
-        Assert.Throws<InvalidOperationException>(() => store.Open(run));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.OpenAsync(run, CancellationToken.None));
     }
 
     [Fact]
@@ -45,12 +55,13 @@ public sealed class LocalRunSourceFileStoreTests : IDisposable
         var fileName = $"{Guid.NewGuid():N}".ToUpperInvariant() + ".upload";
         var path = Path.Combine(_rootPath, fileName);
         await File.WriteAllTextAsync(path, "unrelated");
-        var run = new EtlRun { Id = Guid.NewGuid(), StoredFilePath = path };
+        var run = Run(path);
         var store = CreateStore();
 
-        Assert.Throws<InvalidOperationException>(() => store.Open(run));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.DeleteAsync(run, CancellationToken.None));
+            store.OpenAsync(run, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.ReleaseAsync(run, CancellationToken.None));
         Assert.Equal("unrelated", await File.ReadAllTextAsync(path));
     }
 
@@ -65,6 +76,24 @@ public sealed class LocalRunSourceFileStoreTests : IDisposable
     private LocalRunSourceFileStore CreateStore()
     {
         var options = new UploadStorageOptions { RootPath = _rootPath };
-        return new LocalRunSourceFileStore(options, new LocalUploadStorage(options));
+        return new LocalRunSourceFileStore(
+            options,
+            new LocalUploadStorage(options),
+            new FileExtractorResolver([new CsvFileExtractor(), new XlsxFileExtractor()]));
     }
+
+    private static EtlRun Run(string path) => new()
+    {
+        Id = Guid.NewGuid(),
+        StoredFilePath = path,
+        ExecutionConfiguration = new EtlRunExecutionConfiguration
+        {
+            SourceType = SourceType.Csv,
+            SourceOptions = new SourceOptions
+            {
+                Delimiter = CsvDelimiter.Comma,
+                FirstRowIsHeader = true
+            }
+        }
+    };
 }

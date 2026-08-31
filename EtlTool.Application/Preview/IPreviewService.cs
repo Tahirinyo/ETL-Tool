@@ -1,3 +1,4 @@
+using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
 
 namespace EtlTool.Application.Preview;
@@ -5,7 +6,7 @@ namespace EtlTool.Application.Preview;
 public interface IPreviewService
 {
     Task<PreviewResult> PreviewAsync(
-        Stream source,
+        IEtlSource source,
         PipelineDefinition pipeline,
         CancellationToken cancellationToken);
 }

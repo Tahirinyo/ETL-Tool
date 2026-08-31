@@ -1,3 +1,4 @@
+using EtlTool.Application.Extraction;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 
@@ -36,10 +37,7 @@ public interface IWizardSourceStore
         CancellationToken cancellationToken);
 }
 
-public interface IWizardSourceLease : IAsyncDisposable
-{
-    Stream Content { get; }
-}
+public interface IWizardSourceLease : IEtlSource;
 
 public interface IWizardRunSourceReservation : IAsyncDisposable
 {

@@ -9,20 +9,17 @@ namespace EtlTool.Application.Execution;
 
 public sealed class BatchOrchestrator : IBatchOrchestrator
 {
-    private readonly IFileExtractorResolver _extractorResolver;
     private readonly IPipelineReadinessService _readinessService;
     private readonly PipelineRowProcessor _rowProcessor;
     private readonly IMongoTargetAccessService _targetAccessService;
     private readonly int _batchSize;
 
     public BatchOrchestrator(
-        IFileExtractorResolver extractorResolver,
         IPipelineReadinessService readinessService,
         PipelineRowProcessor rowProcessor,
         IMongoTargetAccessService targetAccessService,
         BatchExecutionOptions options)
     {
-        ArgumentNullException.ThrowIfNull(extractorResolver);
         ArgumentNullException.ThrowIfNull(readinessService);
         ArgumentNullException.ThrowIfNull(rowProcessor);
         ArgumentNullException.ThrowIfNull(targetAccessService);
@@ -30,7 +27,6 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
 
         options.Validate();
 
-        _extractorResolver = extractorResolver;
         _readinessService = readinessService;
         _rowProcessor = rowProcessor;
         _targetAccessService = targetAccessService;
@@ -38,7 +34,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
     }
 
     public Task<BatchExecutionResult> ExecuteAsync(
-        Stream source,
+        IEtlSource source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
         Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
@@ -59,7 +55,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
     }
 
     public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-        Stream source,
+        IEtlSource source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
         Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
@@ -73,7 +69,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             cancellationToken);
 
     public async Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-        Stream source,
+        IEtlSource source,
         PipelineDefinition pipeline,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
         Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
@@ -85,11 +81,6 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
         ArgumentNullException.ThrowIfNull(processBatchAsync);
         ArgumentNullException.ThrowIfNull(reportInvalidRowAsync);
         ArgumentNullException.ThrowIfNull(reportProgressAsync);
-
-        if (!source.CanRead)
-        {
-            throw new ArgumentException("The execution source stream must be readable.", nameof(source));
-        }
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -110,7 +101,6 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             pipeline.UpsertKeyField,
             cancellationToken).ConfigureAwait(false);
 
-        var extractor = _extractorResolver.Resolve(pipeline.SourceType);
         var session = _rowProcessor.CreateSession(pipeline);
         var currentBatch = new List<DataRow>(_batchSize);
         long processedRows = 0;
@@ -124,8 +114,8 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
 
         try
         {
-            await foreach (var sourceRow in extractor
-                .ReadAsync(source, pipeline.SourceOptions, cancellationToken)
+            await foreach (var sourceRow in source
+                .ReadAsync(cancellationToken)
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false))
             {

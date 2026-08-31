@@ -49,7 +49,10 @@ public sealed class MongoIndexedBatchOrchestratorPerformanceAcceptanceTests(
         var batches = 0;
         var stopwatch = Stopwatch.StartNew();
         BatchExecutionResult result;
-        await using (var source = File.OpenRead(path))
+        await using (var source = new FileEtlSource(
+            File.OpenRead(path),
+            new CsvFileExtractor(),
+            pipeline.SourceOptions))
         {
             result = await orchestrator.ExecuteWithLoadResultAsync(
                 source,
@@ -105,7 +108,6 @@ public sealed class MongoIndexedBatchOrchestratorPerformanceAcceptanceTests(
     {
         var mapping = new FieldMappingService();
         return new BatchOrchestrator(
-            new FileExtractorResolver([new CsvFileExtractor()]),
             new PipelineReadinessService(
                 new NullRepository(),
                 mapping,

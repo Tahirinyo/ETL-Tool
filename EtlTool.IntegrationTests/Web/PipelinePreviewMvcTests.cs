@@ -327,8 +327,21 @@ public sealed class PipelinePreviewMvcTests
             Guid pipelineId,
             SourceType sourceType,
             SourceOptions sourceOptions,
-            CancellationToken cancellationToken) =>
-            Task.FromResult<IWizardSourceLease?>(new MemoryLease(new MemoryStream(content)));
+            CancellationToken cancellationToken)
+        {
+            IFileExtractor extractor = sourceType switch
+            {
+                SourceType.Csv => new CsvFileExtractor(),
+                SourceType.Xlsx => new XlsxFileExtractor(),
+                _ => throw new InvalidOperationException("The test source type is not supported.")
+            };
+            return Task.FromResult<IWizardSourceLease?>(
+                new MemoryLease(
+                    new FileEtlSource(
+                        new MemoryStream(content, writable: false),
+                        extractor,
+                        sourceOptions)));
+        }
 
         public Task RemoveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -336,11 +349,12 @@ public sealed class PipelinePreviewMvcTests
         public Task RetireActiveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        private sealed class MemoryLease(Stream content) : IWizardSourceLease
+        private sealed class MemoryLease(IEtlSource source) : IWizardSourceLease
         {
-            public Stream Content { get; } = content;
+            public IAsyncEnumerable<DataRow> ReadAsync(CancellationToken cancellationToken) =>
+                source.ReadAsync(cancellationToken);
 
-            public ValueTask DisposeAsync() => Content.DisposeAsync();
+            public ValueTask DisposeAsync() => source.DisposeAsync();
         }
     }
 

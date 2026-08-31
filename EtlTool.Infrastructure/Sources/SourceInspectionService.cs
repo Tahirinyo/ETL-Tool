@@ -474,6 +474,13 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
         var acquiredActive = active!;
         try
         {
+            IFileExtractor extractor = acquiredActive.SourceType switch
+            {
+                SourceType.Csv => _csv,
+                SourceType.Xlsx => _xlsx,
+                _ => throw new InvalidOperationException(
+                    $"The active source type '{acquiredActive.SourceType}' is not supported.")
+            };
             var stream = new FileStream(
                 acquiredActive.Upload.StoredFilePath,
                 new FileStreamOptions
@@ -486,7 +493,10 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
                 });
             LogAcquisition(pipelineId, sourceType, true, SourceAcquisitionFailureReason.None,
                 sourceReferenceId, fileExists: true);
-            return new WizardSourceLease(this, acquiredActive, stream);
+            return new WizardSourceLease(
+                this,
+                acquiredActive,
+                new FileEtlSource(stream, extractor, acquiredActive.Options));
         }
         catch (FileNotFoundException)
         {
@@ -1040,11 +1050,12 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
     private sealed class WizardSourceLease(
         SourceInspectionService owner,
         ActiveSource active,
-        Stream content) : IWizardSourceLease
+        IEtlSource source) : IWizardSourceLease
     {
         private int _disposed;
 
-        public Stream Content { get; } = content;
+        public IAsyncEnumerable<DataRow> ReadAsync(CancellationToken cancellationToken) =>
+            source.ReadAsync(cancellationToken);
 
         public async ValueTask DisposeAsync()
         {
@@ -1055,7 +1066,7 @@ public sealed class SourceInspectionService : ISourceInspectionService, IWizardS
 
             try
             {
-                await Content.DisposeAsync();
+                await source.DisposeAsync();
             }
             finally
             {

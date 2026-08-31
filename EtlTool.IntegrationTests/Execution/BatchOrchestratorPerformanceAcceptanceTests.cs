@@ -43,7 +43,11 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
         snapshots.Add(CaptureSnapshot("Baseline", 0, TimeSpan.Zero));
         var stopwatch = Stopwatch.StartNew();
 
-        await using (var source = new TrackingReadStream(File.OpenRead(path)))
+        await using (var sourceStream = new TrackingReadStream(File.OpenRead(path)))
+        await using (var source = new FileEtlSource(
+            sourceStream,
+            new CsvFileExtractor(),
+            pipeline.SourceOptions))
         {
             var result = await orchestrator.ExecuteAsync(
                 source,
@@ -57,7 +61,7 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
 
                     if (batchesProcessed == 1)
                     {
-                        bytesReadAtFirstBatch = source.BytesRead;
+                        bytesReadAtFirstBatch = sourceStream.BytesRead;
                     }
 
                     snapshots.Add(CaptureSnapshot(
@@ -82,7 +86,7 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
             Assert.True(
                 bytesReadAtFirstBatch < inputBytes,
                 "The first configured batch was not delivered until the entire source was physically read.");
-            Assert.True(source.BytesRead >= bytesReadAtFirstBatch);
+            Assert.True(sourceStream.BytesRead >= bytesReadAtFirstBatch);
         }
 
         ForceFullCollection();
@@ -110,7 +114,6 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
         var targetAccess = new AllowedTargetAccessService();
 
         return new BatchOrchestrator(
-            new FileExtractorResolver([new CsvFileExtractor()]),
             new PipelineReadinessService(new NullRepository(), mapping, targetAccess),
             new PipelineRowProcessor(mapping, transformations, validations),
             targetAccess,

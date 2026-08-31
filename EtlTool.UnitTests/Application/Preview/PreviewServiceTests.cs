@@ -394,20 +394,21 @@ public sealed class PreviewServiceTests
             result.Rows.Select(row => row.Row.SourceRowNumber).ToArray());
     }
 
-    private static PreviewService Service(
+    private static TestPreviewService Service(
         IFileExtractor extractor,
         PipelineRowProcessor processor) =>
         Service(new TrackingResolver(extractor), processor);
 
-    private static PreviewService Service(
+    private static TestPreviewService Service(
         IFileExtractorResolver resolver,
         PipelineRowProcessor processor) => new(
-            resolver,
-            new PipelineReadinessService(
-                new NullRepository(),
-                new FieldMappingService(),
-                AllowedTargetAccessService.Instance),
-            processor);
+            new PreviewService(
+                new PipelineReadinessService(
+                    new NullRepository(),
+                    new FieldMappingService(),
+                    AllowedTargetAccessService.Instance),
+                processor),
+            resolver);
 
     private static PipelineRowProcessor Processor(
         IEnumerable<ITransformationHandler> transformations,
@@ -486,6 +487,34 @@ public sealed class PreviewServiceTests
             Assert.Equal(extractor.SourceType, sourceType);
             return extractor;
         }
+    }
+
+    private sealed class TestPreviewService(
+        PreviewService inner,
+        IFileExtractorResolver resolver)
+    {
+        public Task<PreviewResult> PreviewAsync(
+            Stream source,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) =>
+            inner.PreviewAsync(
+                source is null
+                    ? null!
+                    : new TestEtlSource(source, resolver, pipeline),
+                pipeline,
+                cancellationToken);
+    }
+
+    private sealed class TestEtlSource(
+        Stream stream,
+        IFileExtractorResolver resolver,
+        PipelineDefinition pipeline) : IEtlSource
+    {
+        public IAsyncEnumerable<DataRow> ReadAsync(CancellationToken cancellationToken) =>
+            resolver.Resolve(pipeline.SourceType)
+                .ReadAsync(stream, pipeline.SourceOptions, cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class GuardedExtractor(

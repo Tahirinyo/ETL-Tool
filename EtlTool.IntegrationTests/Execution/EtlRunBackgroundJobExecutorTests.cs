@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
@@ -1182,19 +1183,19 @@ public sealed class EtlRunBackgroundJobExecutorTests
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>>,
             Func<RowProcessingResult, CancellationToken, Task>,
             Func<BatchExecutionProgress, CancellationToken, Task>,
-            Stream,
+            IEtlSource,
             CancellationToken,
             Task<BatchExecutionResult>> Execute { get; set; } = DefaultExecute;
 
         public Task<BatchExecutionResult> ExecuteAsync(
-            Stream source,
+            IEtlSource source,
             PipelineDefinition pipeline,
             Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
             Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-            Stream source,
+            IEtlSource source,
             PipelineDefinition pipeline,
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
             Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
@@ -1211,7 +1212,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         }
 
         public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-            Stream source,
+            IEtlSource source,
             PipelineDefinition pipeline,
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
             Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
@@ -1232,7 +1233,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
             Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> load,
             Func<RowProcessingResult, CancellationToken, Task> reportInvalid,
             Func<BatchExecutionProgress, CancellationToken, Task> report,
-            Stream source,
+            IEtlSource source,
             CancellationToken cancellationToken)
         {
             var loaded = await load([Row()], cancellationToken);
@@ -1265,7 +1266,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         }
     }
 
-    private sealed class MemorySourceFactory : IRunSourceFileStore
+    private sealed class MemorySourceFactory : IRunSourceStore
     {
         private int _deleteCount;
         private int _openCount;
@@ -1280,13 +1281,14 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         private MemoryStream? LastStream { get; set; }
 
-        public Stream Open(EtlRun run)
+        public Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _openCount);
-            return LastStream = new MemoryStream([1]);
+            LastStream = new MemoryStream([1]);
+            return Task.FromResult<IEtlSource>(new MemoryEtlSource(LastStream));
         }
 
-        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken)
+        public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _deleteCount);
             WasDisposedBeforeDelete = LastStream is not null && !LastStream.CanRead;
@@ -1295,6 +1297,19 @@ public sealed class EtlRunBackgroundJobExecutorTests
                 throw new IOException("Simulated source cleanup failure.");
             }
             return Task.CompletedTask;
+        }
+
+        private sealed class MemoryEtlSource(MemoryStream stream) : IEtlSource
+        {
+            public async IAsyncEnumerable<DataRow> ReadAsync(
+                [EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                await Task.CompletedTask;
+                cancellationToken.ThrowIfCancellationRequested();
+                yield break;
+            }
+
+            public ValueTask DisposeAsync() => stream.DisposeAsync();
         }
     }
 

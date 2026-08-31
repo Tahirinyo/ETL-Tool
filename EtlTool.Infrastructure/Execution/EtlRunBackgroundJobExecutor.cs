@@ -1,4 +1,5 @@
 using EtlTool.Application.Execution;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Reporting;
@@ -18,7 +19,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     private readonly IBatchOrchestrator _orchestrator;
     private readonly IDataLoader _loader;
     private readonly TimeProvider _timeProvider;
-    private readonly IRunSourceFileStore _sourceFileStore;
+    private readonly IRunSourceStore _sourceStore;
     private readonly IErrorReportWriter _errorReportWriter;
     private readonly IErrorReportStore _errorReportStore;
     private readonly ILogger<EtlRunBackgroundJobExecutor> _logger;
@@ -29,7 +30,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IDataLoader loader,
         TimeProvider timeProvider,
         IErrorReportWriter errorReportWriter,
-        IRunSourceFileStore sourceFileStore,
+        IRunSourceStore sourceStore,
         IErrorReportStore errorReportStore,
         ILogger<EtlRunBackgroundJobExecutor> logger)
     {
@@ -37,7 +38,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(loader);
         ArgumentNullException.ThrowIfNull(timeProvider);
-        ArgumentNullException.ThrowIfNull(sourceFileStore);
+        ArgumentNullException.ThrowIfNull(sourceStore);
         ArgumentNullException.ThrowIfNull(errorReportWriter);
         ArgumentNullException.ThrowIfNull(errorReportStore);
         ArgumentNullException.ThrowIfNull(logger);
@@ -46,7 +47,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         _orchestrator = orchestrator;
         _loader = loader;
         _timeProvider = timeProvider;
-        _sourceFileStore = sourceFileStore;
+        _sourceStore = sourceStore;
         _errorReportWriter = errorReportWriter;
         _errorReportStore = errorReportStore;
         _logger = logger;
@@ -57,12 +58,12 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         IBatchOrchestrator orchestrator,
         IDataLoader loader,
         TimeProvider timeProvider,
-        IRunSourceFileStore sourceFileStore,
+        IRunSourceStore sourceStore,
         IErrorReportWriter errorReportWriter,
         IErrorReportStore errorReportStore,
         ILogger<EtlRunBackgroundJobExecutor> logger)
         : this(runRepository, orchestrator, loader, timeProvider,
-            errorReportWriter, sourceFileStore, errorReportStore, logger)
+            errorReportWriter, sourceStore, errorReportStore, logger)
     {
     }
 
@@ -77,7 +78,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         var started = false;
         var ownsSourceCleanup = false;
         var legacyRecoveryAttempted = false;
-        Stream? source = null;
+        IEtlSource? source = null;
         InvalidRowReportSession? errorReportSession = null;
         var reportFinalizationAttempted = false;
         var executionFailed = false;
@@ -123,7 +124,9 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 ?? throw new InvalidOperationException(MissingExecutionConfigurationMessage);
 
             cancellationToken.ThrowIfCancellationRequested();
-            source = _sourceFileStore.Open(run);
+            source = await _sourceStore
+                .OpenAsync(run, cancellationToken)
+                .ConfigureAwait(false);
             var target = new MongoTarget(
                 pipeline.DestinationDatabase,
                 pipeline.DestinationCollection);
@@ -291,7 +294,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
             {
                 try
                 {
-                    await _sourceFileStore.DeleteAsync(run, CancellationToken.None).ConfigureAwait(false);
+                    await _sourceStore.ReleaseAsync(run, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception cleanupException) when (cleanupException is IOException
                     or UnauthorizedAccessException or InvalidOperationException or ArgumentException)

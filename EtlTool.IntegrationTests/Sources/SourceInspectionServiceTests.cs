@@ -1,4 +1,5 @@
 using System.Text;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Uploads;
 using EtlTool.Domain.Entities;
@@ -38,7 +39,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         await using (var acquired = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None)))
         {
-            Assert.True(acquired.Content.CanRead);
+            Assert.Single(await ReadRowsAsync(acquired));
         }
 
         Assert.Null(await service.AcquireAsync(
@@ -691,8 +692,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
         await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var reader = new StreamReader(lease.Content, leaveOpen: true);
-        Assert.Equal("Id;Name", await reader.ReadLineAsync());
+        Assert.Equal("1", Assert.Single(await ReadRowsAsync(lease)).Values["Id"]);
     }
 
     [Fact]
@@ -718,13 +718,8 @@ public sealed class SourceInspectionServiceTests : IDisposable
             await service.AcquireAsync(firstPipelineId, SourceType.Csv, options, CancellationToken.None));
         await using var secondLease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(secondPipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var firstReader = new StreamReader(firstLease.Content, leaveOpen: true);
-        using var secondReader = new StreamReader(secondLease.Content, leaveOpen: true);
-
-        _ = await firstReader.ReadLineAsync();
-        _ = await secondReader.ReadLineAsync();
-        Assert.Equal("first", await firstReader.ReadLineAsync());
-        Assert.Equal("second", await secondReader.ReadLineAsync());
+        Assert.Equal("first", Assert.Single(await ReadRowsAsync(firstLease)).Values["Id"]);
+        Assert.Equal("second", Assert.Single(await ReadRowsAsync(secondLease)).Values["Id"]);
     }
 
     [Fact]
@@ -788,9 +783,8 @@ public sealed class SourceInspectionServiceTests : IDisposable
                 finalState.Pipeline.SourceType,
                 finalState.Pipeline.SourceOptions,
                 CancellationToken.None));
-        using var reader = new StreamReader(lease.Content, leaveOpen: true);
-        _ = await reader.ReadLineAsync();
-        var retainedValue = (await reader.ReadLineAsync())!.Split(',')[1];
+        var retainedValue = Assert.IsType<string>(
+            Assert.Single(await ReadRowsAsync(lease)).Values["Value"]);
 
         Assert.Equal(finalState.ExpectedSourceValue, retainedValue);
         Assert.Equal("second", retainedValue);
@@ -819,9 +813,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
         await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var reader = new StreamReader(lease.Content, leaveOpen: true);
-        Assert.Equal("Id", await reader.ReadLineAsync());
-        Assert.Equal("first", await reader.ReadLineAsync());
+        Assert.Equal("first", Assert.Single(await ReadRowsAsync(lease)).Values["Id"]);
     }
 
     [Fact]
@@ -856,9 +848,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         await using (var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None)))
         {
-            using var reader = new StreamReader(lease.Content, leaveOpen: true);
-            _ = await reader.ReadLineAsync();
-            Assert.Equal("replacement", await reader.ReadLineAsync());
+            Assert.Equal("replacement", Assert.Single(await ReadRowsAsync(lease)).Values["Id"]);
         }
 
         await service.PurgeOrphanedUploadsAsync(CancellationToken.None);
@@ -866,9 +856,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         Assert.False(File.Exists(orphanPath));
         await using var replacementLease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var replacementReader = new StreamReader(replacementLease.Content, leaveOpen: true);
-        _ = await replacementReader.ReadLineAsync();
-        Assert.Equal("replacement", await replacementReader.ReadLineAsync());
+        Assert.Equal("replacement", Assert.Single(await ReadRowsAsync(replacementLease)).Values["Id"]);
     }
 
     [Fact]
@@ -898,9 +886,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
             CancellationToken.None));
         await using var pendingLease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var reader = new StreamReader(pendingLease.Content, leaveOpen: true);
-        _ = await reader.ReadLineAsync();
-        Assert.Equal("pending", await reader.ReadLineAsync());
+        Assert.Equal("pending", Assert.Single(await ReadRowsAsync(pendingLease)).Values["Id"]);
     }
 
     [Fact]
@@ -928,19 +914,13 @@ public sealed class SourceInspectionServiceTests : IDisposable
             CancellationToken.None));
         Assert.Equal(2, Directory.EnumerateFiles(_root, "*.upload").Count());
 
-        using (var reader = new StreamReader(firstLease.Content, leaveOpen: true))
-        {
-            Assert.Equal("Id", await reader.ReadLineAsync());
-            Assert.Equal("first", await reader.ReadLineAsync());
-        }
+        Assert.Equal("first", Assert.Single(await ReadRowsAsync(firstLease)).Values["Id"]);
 
         await firstLease.DisposeAsync();
         Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
         await using var replacementLease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var replacementReader = new StreamReader(replacementLease.Content, leaveOpen: true);
-        Assert.Equal("Id", await replacementReader.ReadLineAsync());
-        Assert.Equal("replacement", await replacementReader.ReadLineAsync());
+        Assert.Equal("replacement", Assert.Single(await ReadRowsAsync(replacementLease)).Values["Id"]);
     }
 
     [Fact]
@@ -984,11 +964,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         await service.PurgeExpiredAsync();
 
         Assert.Single(Directory.EnumerateFiles(_root, "*.upload"));
-        using (var reader = new StreamReader(lease.Content, leaveOpen: true))
-        {
-            Assert.Equal("Id", await reader.ReadLineAsync());
-            Assert.Equal("retained", await reader.ReadLineAsync());
-        }
+        Assert.Equal("retained", Assert.Single(await ReadRowsAsync(lease)).Values["Id"]);
 
         await lease.DisposeAsync();
         Assert.Empty(Directory.EnumerateFiles(_root, "*.upload"));
@@ -1088,8 +1064,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
 
         await using var lease = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(pipelineId, SourceType.Xlsx, options, CancellationToken.None));
-        Assert.True(lease.Content.CanRead);
-        Assert.True(lease.Content.CanSeek);
+        Assert.Equal(7d, Assert.Single(await ReadRowsAsync(lease)).Values["Id"]);
     }
 
     [Fact]
@@ -1131,9 +1106,7 @@ public sealed class SourceInspectionServiceTests : IDisposable
         await using var restored = Assert.IsAssignableFrom<IWizardSourceLease>(
             await service.AcquireAsync(
                 pipelineId, SourceType.Csv, options, CancellationToken.None));
-        using var reader = new StreamReader(restored.Content, leaveOpen: true);
-        Assert.Equal("Id", await reader.ReadLineAsync());
-        Assert.Equal("active", await reader.ReadLineAsync());
+        Assert.Equal("active", Assert.Single(await ReadRowsAsync(restored)).Values["Id"]);
     }
 
     [Fact]
@@ -1160,7 +1133,12 @@ public sealed class SourceInspectionServiceTests : IDisposable
             Id = Guid.NewGuid(),
             PipelineId = pipelineId,
             OriginalFileName = reservation.OriginalFileName,
-            StoredFilePath = reservation.StoredFilePath
+            StoredFilePath = reservation.StoredFilePath,
+            ExecutionConfiguration = new EtlRunExecutionConfiguration
+            {
+                SourceType = SourceType.Csv,
+                SourceOptions = options
+            }
         };
 
         reservation.TransferToRun();
@@ -1171,16 +1149,26 @@ public sealed class SourceInspectionServiceTests : IDisposable
         var uploadStorage = new LocalUploadStorage(new UploadStorageOptions { RootPath = _root });
         var runStore = new LocalRunSourceFileStore(
             new UploadStorageOptions { RootPath = _root },
-            uploadStorage);
-        await using (var source = runStore.Open(run))
-        using (var reader = new StreamReader(source, leaveOpen: true))
+            uploadStorage,
+            new FileExtractorResolver([new CsvFileExtractor(), new XlsxFileExtractor()]));
+        await using (var source = await runStore.OpenAsync(run, CancellationToken.None))
         {
-            Assert.Equal("Id", await reader.ReadLineAsync());
-            Assert.Equal("owned", await reader.ReadLineAsync());
+            Assert.Equal("owned", Assert.Single(await ReadRowsAsync(source)).Values["Id"]);
         }
 
-        await runStore.DeleteAsync(run, CancellationToken.None);
+        await runStore.ReleaseAsync(run, CancellationToken.None);
         Assert.False(File.Exists(run.StoredFilePath));
+    }
+
+    private static async Task<IReadOnlyList<DataRow>> ReadRowsAsync(IEtlSource source)
+    {
+        var rows = new List<DataRow>();
+        await foreach (var row in source.ReadAsync(CancellationToken.None))
+        {
+            rows.Add(row);
+        }
+
+        return rows;
     }
 
     public void Dispose()

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -463,14 +465,20 @@ public sealed class PipelineSourceCommitCoordinatorTests
 
     private sealed class TrackingLease : IWizardSourceLease
     {
-        public Stream Content { get; } = new MemoryStream();
-
         public int DisposeCallCount { get; private set; }
 
-        public async ValueTask DisposeAsync()
+        public async IAsyncEnumerable<DataRow> ReadAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            cancellationToken.ThrowIfCancellationRequested();
+            yield break;
+        }
+
+        public ValueTask DisposeAsync()
         {
             DisposeCallCount++;
-            await Content.DisposeAsync();
+            return ValueTask.CompletedTask;
         }
     }
 }

@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Text;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -515,9 +517,12 @@ public sealed class PipelinesControllerSchemaRemappingTests
                 restored.SourceType,
                 restored.SourceOptions,
                 CancellationToken.None));
-        using var reader = new StreamReader(lease.Content, leaveOpen: true);
-        _ = await reader.ReadLineAsync();
-        Assert.Equal("1,prior", await reader.ReadLineAsync());
+        var retainedRows = new List<DataRow>();
+        await foreach (var row in lease.ReadAsync(CancellationToken.None))
+        {
+            retainedRows.Add(row);
+        }
+        Assert.Equal("prior", Assert.Single(retainedRows).Values["Legacy"]);
     }
 
     [Fact]
@@ -729,8 +734,22 @@ public sealed class PipelinesControllerSchemaRemappingTests
 
     private sealed class MemorySourceLease(byte[] content) : IWizardSourceLease
     {
-        public Stream Content { get; } = new MemoryStream(content, writable: false);
+        public async IAsyncEnumerable<DataRow> ReadAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask;
+            cancellationToken.ThrowIfCancellationRequested();
+            var lines = Encoding.UTF8.GetString(content).Split('\n');
+            var headers = lines[0].Split(',');
+            var values = lines[1].Split(',');
+            var row = new DataRow { SourceRowNumber = 2 };
+            for (var index = 0; index < headers.Length; index++)
+            {
+                row.Values[headers[index]] = values[index];
+            }
+            yield return row;
+        }
 
-        public async ValueTask DisposeAsync() => await Content.DisposeAsync();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

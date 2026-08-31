@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using EtlTool.Application.Execution;
+using EtlTool.Application.Extraction;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -376,7 +377,7 @@ public sealed class BackgroundJobWorkerTests
             RunRepository = new InMemoryRecoveryRunRepository();
             SourceFiles = new RecordingRunSourceFileStore();
             services.AddSingleton<IEtlRunRepository>(RunRepository);
-            services.AddSingleton<IRunSourceFileStore>(SourceFiles);
+            services.AddSingleton<IRunSourceStore>(SourceFiles);
             services.AddSingleton<TimeProvider>(TimeProvider.System);
             services.AddSingleton<AbandonedRunRecoveryService>();
             services.AddSingleton(Probe);
@@ -503,13 +504,14 @@ public sealed class BackgroundJobWorkerTests
 
     private sealed record ExecutionRecord(Guid RunId, Guid ScopeId, bool TokenWasCancelled);
 
-    private sealed class RecordingRunSourceFileStore : IRunSourceFileStore
+    private sealed class RecordingRunSourceFileStore : IRunSourceStore
     {
         public ConcurrentQueue<Guid> DeletedRunIds { get; } = new();
 
-        public Stream Open(EtlRun run) => throw new NotSupportedException();
+        public Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
-        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken)
+        public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken)
         {
             DeletedRunIds.Enqueue(run.Id);
             return Task.CompletedTask;

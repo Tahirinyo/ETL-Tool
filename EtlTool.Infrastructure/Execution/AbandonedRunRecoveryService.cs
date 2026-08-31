@@ -7,7 +7,7 @@ namespace EtlTool.Infrastructure.Execution;
 
 public sealed class AbandonedRunRecoveryService(
     IEtlRunRepository runRepository,
-    IRunSourceFileStore sourceFileStore,
+    IRunSourceStore sourceStore,
     TimeProvider timeProvider,
     ILogger<AbandonedRunRecoveryService> logger)
 {
@@ -102,7 +102,7 @@ public sealed class AbandonedRunRecoveryService(
     {
         try
         {
-            await sourceFileStore.DeleteAsync(run, CancellationToken.None).ConfigureAwait(false);
+            await sourceStore.ReleaseAsync(run, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException or InvalidOperationException or ArgumentException)

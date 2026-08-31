@@ -1117,7 +1117,7 @@ public sealed class PipelinesController : Controller
             var source = snapshot.Source
                 ?? throw new InvalidOperationException("The ready preview snapshot has no retained source.");
             var preview = await _previewService.PreviewAsync(
-                source.Content,
+                source,
                 pipeline,
                 cancellationToken);
             return View(PipelinePreviewViewModel.FromPreview(pipeline, preview));

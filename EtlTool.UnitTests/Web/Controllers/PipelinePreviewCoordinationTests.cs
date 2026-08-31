@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Text;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
@@ -35,8 +37,10 @@ public sealed class PipelinePreviewCoordinationTests
         var previewService = new RecordingPreviewService(async (source, pipeline, cancellationToken) =>
         {
             capturedPipeline = pipeline.Name;
-            using var reader = new StreamReader(source, leaveOpen: true);
-            capturedSource = await reader.ReadToEndAsync(cancellationToken);
+            await foreach (var row in source.ReadAsync(cancellationToken))
+            {
+                capturedSource = Assert.IsType<string>(row.Values["Content"]);
+            }
             return new PreviewResult([]);
         });
         var controller = Controller(pipelineService, store, coordinator, previewService);
@@ -91,8 +95,10 @@ public sealed class PipelinePreviewCoordinationTests
             capturedPipeline = pipeline.Name;
             previewProcessingEntered.TrySetResult();
             await releasePreviewProcessing.Task.WaitAsync(cancellationToken);
-            using var reader = new StreamReader(source, leaveOpen: true);
-            capturedSource = await reader.ReadToEndAsync(cancellationToken);
+            await foreach (var row in source.ReadAsync(cancellationToken))
+            {
+                capturedSource = Assert.IsType<string>(row.Values["Content"]);
+            }
             return new PreviewResult([]);
         });
         var controller = Controller(pipelineService, store, coordinator, previewService);
@@ -321,7 +327,7 @@ public sealed class PipelinePreviewCoordinationTests
 
     private sealed class RecordingPreviewService : IPreviewService
     {
-        private readonly Func<Stream, PipelineDefinition, CancellationToken, Task<PreviewResult>> _handler;
+        private readonly Func<IEtlSource, PipelineDefinition, CancellationToken, Task<PreviewResult>> _handler;
 
         public RecordingPreviewService(PreviewResult result)
             : this((_, _, _) => Task.FromResult(result))
@@ -329,7 +335,7 @@ public sealed class PipelinePreviewCoordinationTests
         }
 
         public RecordingPreviewService(
-            Func<Stream, PipelineDefinition, CancellationToken, Task<PreviewResult>> handler)
+            Func<IEtlSource, PipelineDefinition, CancellationToken, Task<PreviewResult>> handler)
         {
             _handler = handler;
         }
@@ -337,7 +343,7 @@ public sealed class PipelinePreviewCoordinationTests
         public int CallCount { get; private set; }
 
         public Task<PreviewResult> PreviewAsync(
-            Stream source,
+            IEtlSource source,
             PipelineDefinition pipeline,
             CancellationToken cancellationToken)
         {
@@ -511,23 +517,25 @@ public sealed class PipelinePreviewCoordinationTests
         {
             private int _disposed;
 
-            public Stream Content { get; } = new MemoryStream(content, writable: false);
+            public async IAsyncEnumerable<DataRow> ReadAsync(
+                [EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                await Task.CompletedTask;
+                cancellationToken.ThrowIfCancellationRequested();
+                var row = new DataRow { SourceRowNumber = 1 };
+                row.Values["Content"] = Encoding.UTF8.GetString(content);
+                yield return row;
+            }
 
-            public async ValueTask DisposeAsync()
+            public ValueTask DisposeAsync()
             {
                 if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 {
-                    return;
+                    return ValueTask.CompletedTask;
                 }
 
-                try
-                {
-                    await Content.DisposeAsync();
-                }
-                finally
-                {
-                    Interlocked.Decrement(ref owner._activeLeaseCount);
-                }
+                Interlocked.Decrement(ref owner._activeLeaseCount);
+                return ValueTask.CompletedTask;
             }
         }
     }

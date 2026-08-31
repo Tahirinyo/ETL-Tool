@@ -13,6 +13,7 @@ using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Extraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using static EtlTool.IntegrationTests.Extraction.OpenXmlWorkbookFixture;
 
 namespace EtlTool.IntegrationTests.Execution;
 
@@ -54,7 +55,11 @@ public sealed class BatchOrchestratorIntegrationTests
         var orchestrator = scope.ServiceProvider.GetRequiredService<IBatchOrchestrator>();
         var pipeline = ReadyPipeline();
         var csv = "Id,Name\r\n1, Ada \r\n2, Grace \r\n3, Linus \r\n4, Margaret \r\n5, Barbara \r\n";
-        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+        await using var sourceStream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
+        await using var source = new FileEtlSource(
+            sourceStream,
+            new CsvFileExtractor(),
+            pipeline.SourceOptions);
         var batches = new List<IReadOnlyList<DataRow>>();
 
         var result = await orchestrator.ExecuteAsync(
@@ -80,7 +85,56 @@ public sealed class BatchOrchestratorIntegrationTests
         Assert.Equal(0, result.InvalidRows);
         Assert.Equal(0, result.FilteredRows);
         Assert.Equal(0, result.DeduplicatedRows);
-        Assert.True(source.CanRead);
+        Assert.True(sourceStream.CanRead);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ProcessesConfiguredXlsxWorksheetThroughSourceBoundary()
+    {
+        var mapping = new FieldMappingService();
+        var targetAccess = new AllowedTargetAccessService();
+        var processor = new PipelineRowProcessor(
+            mapping,
+            new TransformationEngine(
+                new TransformationHandlerRegistry([new TrimTransformationHandler()])),
+            new ValidationEngine(
+                new ValidationHandlerRegistry([new RequiredValidationHandler()])));
+        var orchestrator = new BatchOrchestrator(
+            new PipelineReadinessService(new NullRepository(), mapping, targetAccess),
+            processor,
+            targetAccess,
+            new BatchExecutionOptions { BatchSize = 2 });
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.Xlsx;
+        pipeline.SourceOptions = new SourceOptions { WorksheetName = "Data", FirstRowIsHeader = true };
+        await using var workbook = Create(
+            Sheet("Ignored", Row(Text(1, "Id")), Row(Text(1, "wrong"))),
+            Sheet(
+                "Data",
+                Row(Text(1, "Id"), Text(2, "Name")),
+                Row(Text(1, "1"), Text(2, " Ada ")),
+                Row(Text(1, "2"), Text(2, " Grace "))));
+        await using var source = new FileEtlSource(
+            workbook,
+            new XlsxFileExtractor(),
+            pipeline.SourceOptions);
+        var batches = new List<IReadOnlyList<DataRow>>();
+
+        var result = await orchestrator.ExecuteAsync(
+            source,
+            pipeline,
+            (batch, _) =>
+            {
+                batches.Add(batch);
+                return Task.CompletedTask;
+            },
+            (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        Assert.Equal([2L, 3L], batches.SelectMany(batch => batch).Select(row => row.SourceRowNumber));
+        Assert.Equal(["Ada", "Grace"], batches.SelectMany(batch => batch).Select(row => row.Values["name"]));
+        Assert.Equal(2, result.ProcessedRows);
+        Assert.Equal(2, result.ValidRows);
     }
 
     private static PipelineDefinition ReadyPipeline() => new()

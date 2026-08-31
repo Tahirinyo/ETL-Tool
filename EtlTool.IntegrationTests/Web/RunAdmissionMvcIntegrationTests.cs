@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using EtlTool.Application.Execution;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -186,7 +187,7 @@ public sealed class RunAdmissionMvcIntegrationTests
             builder.Services.AddSingleton<IWizardSourceStore>(sourceStore);
             builder.Services.AddSingleton<PipelineSourceCommitCoordinator>();
             builder.Services.AddSingleton<IEtlRunRepository>(runRepository);
-            builder.Services.AddSingleton<IRunSourceFileStore, NoOpRunSourceFileStore>();
+            builder.Services.AddSingleton<IRunSourceStore, NoOpRunSourceFileStore>();
             builder.Services.AddSingleton<AbandonedRunRecoveryService>();
             builder.Services.AddSingleton(queue);
             builder.Services.AddSingleton<IBackgroundJobQueue>(queue);
@@ -439,11 +440,12 @@ public sealed class RunAdmissionMvcIntegrationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class NoOpRunSourceFileStore : IRunSourceFileStore
+    private sealed class NoOpRunSourceFileStore : IRunSourceStore
     {
-        public Stream Open(EtlRun run) => throw new NotSupportedException();
+        public Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
-        public Task DeleteAsync(EtlRun run, CancellationToken cancellationToken) =>
+        public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken) =>
             Task.CompletedTask;
     }
 

@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
@@ -36,7 +38,7 @@ public sealed class PipelinesControllerPreviewTests
         Assert.Same(pipeline.SourceOptions, sourceStore.SourceOptions);
         Assert.Equal(1, previewService.CallCount);
         Assert.Same(pipeline, previewService.Pipeline);
-        Assert.Same(sourceStore.Content, previewService.Source);
+        Assert.Same(sourceStore.LastLease, previewService.Source);
         Assert.True(sourceStore.LeaseDisposed);
         Assert.Equal(1, sourceStore.LeaseDisposeCallCount);
     }
@@ -319,7 +321,7 @@ public sealed class PipelinesControllerPreviewTests
 
     private sealed class RecordingWizardSourceStore : IWizardSourceStore
     {
-        public MemoryStream Content { get; } = new([1, 2, 3]);
+        public IWizardSourceLease? LastLease { get; private set; }
         public bool SourceAvailable { get; init; } = true;
         public int AcquireCallCount { get; private set; }
         public Guid PipelineId { get; private set; }
@@ -362,8 +364,8 @@ public sealed class PipelinesControllerPreviewTests
             PipelineId = pipelineId;
             SourceType = sourceType;
             SourceOptions = sourceOptions;
-            return Task.FromResult<IWizardSourceLease?>(
-                SourceAvailable ? new Lease(this, Content) : null);
+            LastLease = SourceAvailable ? new Lease(this) : null;
+            return Task.FromResult(LastLease);
         }
 
         public Task RemoveAsync(Guid pipelineId, CancellationToken cancellationToken)
@@ -376,9 +378,15 @@ public sealed class PipelinesControllerPreviewTests
         public Task RetireActiveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
-        private sealed class Lease(RecordingWizardSourceStore owner, Stream content) : IWizardSourceLease
+        private sealed class Lease(RecordingWizardSourceStore owner) : IWizardSourceLease
         {
-            public Stream Content { get; } = content;
+            public async IAsyncEnumerable<DataRow> ReadAsync(
+                [EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                await Task.CompletedTask;
+                cancellationToken.ThrowIfCancellationRequested();
+                yield break;
+            }
 
             public ValueTask DisposeAsync()
             {
@@ -423,7 +431,7 @@ public sealed class PipelinesControllerPreviewTests
 
     private sealed class RecordingPreviewService : IPreviewService
     {
-        private readonly Func<Stream, PipelineDefinition, CancellationToken, Task<PreviewResult>> _handler;
+        private readonly Func<IEtlSource, PipelineDefinition, CancellationToken, Task<PreviewResult>> _handler;
 
         public RecordingPreviewService(PreviewResult result)
             : this((_, _, _) => Task.FromResult(result))
@@ -431,17 +439,17 @@ public sealed class PipelinesControllerPreviewTests
         }
 
         public RecordingPreviewService(
-            Func<Stream, PipelineDefinition, CancellationToken, Task<PreviewResult>> handler)
+            Func<IEtlSource, PipelineDefinition, CancellationToken, Task<PreviewResult>> handler)
         {
             _handler = handler;
         }
 
         public int CallCount { get; private set; }
-        public Stream? Source { get; private set; }
+        public IEtlSource? Source { get; private set; }
         public PipelineDefinition? Pipeline { get; private set; }
 
         public Task<PreviewResult> PreviewAsync(
-            Stream source,
+            IEtlSource source,
             PipelineDefinition pipeline,
             CancellationToken cancellationToken)
         {

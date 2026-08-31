@@ -1211,7 +1211,7 @@ public sealed class BatchOrchestratorTests
         BatchExecutionProgress progress,
         CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private static BatchOrchestrator Orchestrator(
+    private static TestBatchOrchestrator Orchestrator(
         IFileExtractor extractor,
         int batchSize = 1000,
         IEnumerable<ITransformationHandler>? transformations = null,
@@ -1224,7 +1224,7 @@ public sealed class BatchOrchestratorTests
             validations,
             targetAccessService);
 
-    private static BatchOrchestrator Orchestrator(
+    private static TestBatchOrchestrator Orchestrator(
         IFileExtractorResolver resolver,
         int batchSize = 1000,
         IEnumerable<ITransformationHandler>? transformations = null,
@@ -1234,18 +1234,19 @@ public sealed class BatchOrchestratorTests
         var mappingService = new FieldMappingService();
         var resolvedTargetAccessService =
             targetAccessService ?? AllowedTargetAccessService.Instance;
-        return new BatchOrchestrator(
-            resolver,
-            new PipelineReadinessService(
-                new NullRepository(),
-                mappingService,
-                resolvedTargetAccessService),
-            new PipelineRowProcessor(
-                mappingService,
-                new TransformationEngine(new TransformationHandlerRegistry(transformations ?? [])),
-                new ValidationEngine(new ValidationHandlerRegistry(validations ?? []))),
-            resolvedTargetAccessService,
-            new BatchExecutionOptions { BatchSize = batchSize });
+        return new TestBatchOrchestrator(
+            new BatchOrchestrator(
+                new PipelineReadinessService(
+                    new NullRepository(),
+                    mappingService,
+                    resolvedTargetAccessService),
+                new PipelineRowProcessor(
+                    mappingService,
+                    new TransformationEngine(new TransformationHandlerRegistry(transformations ?? [])),
+                    new ValidationEngine(new ValidationHandlerRegistry(validations ?? []))),
+                resolvedTargetAccessService,
+                new BatchExecutionOptions { BatchSize = batchSize }),
+            resolver);
     }
 
     private static PipelineDefinition ReadyPipeline(params string[] sourceFields) => new()
@@ -1322,6 +1323,83 @@ public sealed class BatchOrchestratorTests
             Assert.Equal(extractor.SourceType, sourceType);
             return extractor;
         }
+    }
+
+    private sealed class TestBatchOrchestrator(
+        BatchOrchestrator inner,
+        IFileExtractorResolver resolver)
+    {
+        public Task<BatchExecutionResult> ExecuteAsync(
+            Stream source,
+            PipelineDefinition pipeline,
+            Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
+            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+            CancellationToken cancellationToken) =>
+            inner.ExecuteAsync(
+                Wrap(source, pipeline),
+                pipeline,
+                processBatchAsync,
+                reportProgressAsync,
+                cancellationToken);
+
+        public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
+            Stream source,
+            PipelineDefinition pipeline,
+            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+            CancellationToken cancellationToken) =>
+            inner.ExecuteWithLoadResultAsync(
+                Wrap(source, pipeline),
+                pipeline,
+                processBatchAsync,
+                reportProgressAsync,
+                cancellationToken);
+
+        public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
+            Stream source,
+            PipelineDefinition pipeline,
+            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+            Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
+            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+            CancellationToken cancellationToken) =>
+            inner.ExecuteWithLoadResultAsync(
+                Wrap(source, pipeline),
+                pipeline,
+                processBatchAsync,
+                reportInvalidRowAsync,
+                reportProgressAsync,
+                cancellationToken);
+
+        private IEtlSource Wrap(Stream source, PipelineDefinition pipeline) =>
+            source is null ? null! : new TestEtlSource(source, resolver, pipeline);
+    }
+
+    private sealed class TestEtlSource : IEtlSource
+    {
+        private readonly Stream _stream;
+        private readonly IFileExtractorResolver _resolver;
+        private readonly PipelineDefinition _pipeline;
+
+        public TestEtlSource(
+            Stream stream,
+            IFileExtractorResolver resolver,
+            PipelineDefinition pipeline)
+        {
+            if (!stream.CanRead)
+            {
+                throw new ArgumentException("The execution source stream must be readable.", nameof(stream));
+            }
+
+            _stream = stream;
+            _resolver = resolver;
+            _pipeline = pipeline;
+        }
+
+        public IAsyncEnumerable<DataRow> ReadAsync(CancellationToken cancellationToken) =>
+            _resolver.Resolve(_pipeline.SourceType)
+                .ReadAsync(_stream, _pipeline.SourceOptions, cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class SequenceExtractor(
