@@ -12,3 +12,20 @@ public sealed record PostgreSqlColumnMetadata(
     string NativeType,
     bool IsNullable,
     int OrdinalPosition);
+
+public enum PostgreSqlKeyConstraintKind
+{
+    PrimaryKey = 1,
+    Unique = 2
+}
+
+public sealed record PostgreSqlKeyColumnMetadata(
+    string Name,
+    int KeyOrdinal,
+    bool IsNullable);
+
+public sealed record PostgreSqlKeyConstraintMetadata(
+    string Name,
+    PostgreSqlKeyConstraintKind Kind,
+    IReadOnlyList<PostgreSqlKeyColumnMetadata> Columns,
+    bool IsNullsNotDistinct = false);

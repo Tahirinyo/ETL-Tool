@@ -68,6 +68,29 @@ public sealed class PostgreSqlMetadataDiscoveryService(
         ORDER BY a.attnum;
         """;
 
+    private const string KeyConstraintsQuery = """
+        SELECT con.conname,
+               con.contype::text,
+               a.attname,
+               key_columns.ordinality,
+               NOT a.attnotnull,
+               key_index.indnullsnotdistinct
+        FROM pg_catalog.pg_constraint AS con
+        INNER JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
+        INNER JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        INNER JOIN pg_catalog.pg_index AS key_index ON key_index.indexrelid = con.conindid
+        INNER JOIN unnest(con.conkey) WITH ORDINALITY AS key_columns(attnum, ordinality) ON TRUE
+        INNER JOIN pg_catalog.pg_attribute AS a
+            ON a.attrelid = c.oid
+           AND a.attnum = key_columns.attnum
+        WHERE n.nspname = @schema
+          AND c.relname = @table
+          AND c.relkind IN ('r', 'p')
+          AND has_table_privilege(c.oid, 'SELECT')
+          AND con.contype IN ('p', 'u')
+        ORDER BY con.conname, key_columns.ordinality;
+        """;
+
     public async Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(
         string connectionProfile,
         CancellationToken cancellationToken)
@@ -147,6 +170,55 @@ public sealed class PostgreSqlMetadataDiscoveryService(
                 reader.GetBoolean(2),
                 reader.GetInt16(3)),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(
+        string connectionProfile,
+        string database,
+        string schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory
+            .OpenDatabaseAsync(connectionProfile, database, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSchemaExistsAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+        await EnsureTableExistsAsync(connection, schema, table, cancellationToken).ConfigureAwait(false);
+
+        var rows = await ExecuteReaderAsync(
+            connection,
+            KeyConstraintsQuery,
+            command =>
+            {
+                AddParameter(command, "@schema", schema);
+                AddParameter(command, "@table", table);
+            },
+            reader => new KeyConstraintRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetBoolean(4),
+                reader.GetBoolean(5)),
+            cancellationToken).ConfigureAwait(false);
+
+        return rows
+            .GroupBy(row => new { row.Name, row.Kind })
+            .OrderBy(group => group.Key.Name, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.Kind, StringComparer.Ordinal)
+            .Select(group => new PostgreSqlKeyConstraintMetadata(
+                group.Key.Name,
+                group.Key.Kind == "p"
+                    ? PostgreSqlKeyConstraintKind.PrimaryKey
+                    : PostgreSqlKeyConstraintKind.Unique,
+                group.OrderBy(row => row.KeyOrdinal)
+                    .Select(row => new PostgreSqlKeyColumnMetadata(
+                        row.ColumnName,
+                        checked((int)row.KeyOrdinal),
+                        row.IsNullable))
+                    .ToArray(),
+                group.First().IsNullsNotDistinct))
+            .ToArray();
     }
 
     private static async Task EnsureSchemaExistsAsync(
@@ -259,4 +331,12 @@ public sealed class PostgreSqlMetadataDiscoveryService(
         parameter.Value = value;
         command.Parameters.Add(parameter);
     }
+
+    private sealed record KeyConstraintRow(
+        string Name,
+        string Kind,
+        string ColumnName,
+        long KeyOrdinal,
+        bool IsNullable,
+        bool IsNullsNotDistinct);
 }

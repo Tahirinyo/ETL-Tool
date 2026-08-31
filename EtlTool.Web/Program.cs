@@ -106,6 +106,7 @@ builder.Services.AddSingleton<IPostgreSqlConnectionProfileCatalog>(provider =>
     (PostgreSqlConnectionFactory)provider.GetRequiredService<IPostgreSqlConnectionFactory>());
 builder.Services.AddSingleton<IPostgreSqlMetadataDiscoveryService, PostgreSqlMetadataDiscoveryService>();
 builder.Services.AddSingleton<PostgreSqlSourceSchemaConverter>();
+builder.Services.AddSingleton<PostgreSqlDeterministicOrderingResolver>();
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();

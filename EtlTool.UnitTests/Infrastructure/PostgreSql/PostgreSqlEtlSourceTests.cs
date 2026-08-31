@@ -21,7 +21,7 @@ public sealed class PostgreSqlEtlSourceTests
         var connection = new TrackingDbConnection(() => reader);
         var factory = new TrackingConnectionFactory(connection);
         var options = CreateOptions();
-        await using var source = new PostgreSqlEtlSource(factory, options);
+        await using var source = CreateSource(factory, options);
 
         var rows = source.ReadAsync(CancellationToken.None);
         options.ConnectionProfile = "Changed";
@@ -37,7 +37,7 @@ public sealed class PostgreSqlEtlSourceTests
         Assert.Equal("ReportingDb", factory.ConnectionProfile);
         Assert.Equal("reporting", factory.Database);
         Assert.Equal(
-            "SELECT * FROM \"Mixed \"\"Schema\".\"Rows \"\"Table\";",
+            "SELECT * FROM \"Mixed \"\"Schema\".\"Rows \"\"Table\" ORDER BY \"Id\" ASC;",
             connection.Command.CommandText);
         Assert.Equal(CommandBehavior.SequentialAccess, connection.Command.Behavior);
         Assert.Equal([1L, 2L], result.Select(row => row.SourceRowNumber));
@@ -56,7 +56,7 @@ public sealed class PostgreSqlEtlSourceTests
             ["Id"],
             [[1], [2], [3]]);
         var connection = new TrackingDbConnection(() => reader);
-        await using var source = new PostgreSqlEtlSource(
+        await using var source = CreateSource(
             new TrackingConnectionFactory(connection),
             CreateOptions());
 
@@ -78,7 +78,7 @@ public sealed class PostgreSqlEtlSourceTests
     {
         var reader = new TrackingDataReader(["Id"], [[1], [2]]);
         var connection = new TrackingDbConnection(() => reader);
-        await using var source = new PostgreSqlEtlSource(
+        await using var source = CreateSource(
             new TrackingConnectionFactory(connection),
             CreateOptions());
 
@@ -97,7 +97,7 @@ public sealed class PostgreSqlEtlSourceTests
             FailureReadNumber = 2
         };
         var connection = new TrackingDbConnection(() => reader);
-        await using var source = new PostgreSqlEtlSource(
+        await using var source = CreateSource(
             new TrackingConnectionFactory(connection),
             CreateOptions());
 
@@ -120,7 +120,7 @@ public sealed class PostgreSqlEtlSourceTests
             ReadException = new NpgsqlException("secret provider detail")
         };
         var connection = new TrackingDbConnection(() => reader);
-        await using var source = new PostgreSqlEtlSource(
+        await using var source = CreateSource(
             new TrackingConnectionFactory(connection),
             CreateOptions());
 
@@ -139,7 +139,7 @@ public sealed class PostgreSqlEtlSourceTests
         var connection = new TrackingDbConnection(
             () => throw new InvalidOperationException("A reader should not be created."));
         connection.Command.ExecutionException = new TimeoutException("secret detail");
-        await using var source = new PostgreSqlEtlSource(
+        await using var source = CreateSource(
             new TrackingConnectionFactory(connection),
             CreateOptions());
 
@@ -157,7 +157,7 @@ public sealed class PostgreSqlEtlSourceTests
         var reader = new TrackingDataReader(["Id"], []) { BlockReadUntilCanceled = true };
         var connection = new TrackingDbConnection(() => reader);
         var factory = new TrackingConnectionFactory(connection);
-        await using var source = new PostgreSqlEtlSource(factory, CreateOptions());
+        await using var source = CreateSource(factory, CreateOptions());
         using var cancellation = new CancellationTokenSource();
 
         var moveNext = source
@@ -181,7 +181,7 @@ public sealed class PostgreSqlEtlSourceTests
     [Fact]
     public async Task DisposeAsync_IsIdempotentAndRejectsNewEnumeration()
     {
-        var source = new PostgreSqlEtlSource(
+        var source = CreateSource(
             new TrackingConnectionFactory(new TrackingDbConnection(
                 () => new TrackingDataReader([], []))),
             CreateOptions());
@@ -200,6 +200,83 @@ public sealed class PostgreSqlEtlSourceTests
         Schema = "Mixed \"Schema",
         Table = "Rows \"Table"
     };
+
+    [Fact]
+    public async Task ReadAsync_UsesEveryCompositeKeyColumnWithSafeQuoting()
+    {
+        var reader = new TrackingDataReader(["Id"], [[1]]);
+        var connection = new TrackingDbConnection(() => reader);
+        IReadOnlyList<PostgreSqlKeyConstraintMetadata> constraints =
+        [
+            new PostgreSqlKeyConstraintMetadata(
+                "PK Rows",
+                PostgreSqlKeyConstraintKind.PrimaryKey,
+                [
+                    new PostgreSqlKeyColumnMetadata("First \"Key", 1, false),
+                    new PostgreSqlKeyColumnMetadata("Second Key", 2, false)
+                ])
+        ];
+        await using var source = CreateSource(
+            new TrackingConnectionFactory(connection),
+            CreateOptions(),
+            constraints);
+
+        _ = await ReadAllAsync(source.ReadAsync(CancellationToken.None));
+
+        Assert.Equal(
+            "SELECT * FROM \"Mixed \"\"Schema\".\"Rows \"\"Table\" ORDER BY \"First \"\"Key\" ASC, \"Second Key\" ASC;",
+            connection.Command.CommandText);
+    }
+
+    [Fact]
+    public async Task ReadAsync_OrderingUnavailableDoesNotExecuteAnUnorderedDataCommand()
+    {
+        var connection = new TrackingDbConnection(() => new TrackingDataReader(["Id"], [[1]]));
+        await using var source = CreateSource(
+            new TrackingConnectionFactory(connection),
+            CreateOptions(),
+            []);
+
+        await Assert.ThrowsAsync<PostgreSqlDeterministicOrderingUnavailableException>(
+            () => ReadAllAsync(source.ReadAsync(CancellationToken.None)));
+
+        Assert.Equal(0, connection.Command.ExecutionCount);
+    }
+
+    [Fact]
+    public async Task ReadAsync_MetadataCancellationRemainsCancellationAndDoesNotOpenDataConnection()
+    {
+        var connection = new TrackingDbConnection(() => new TrackingDataReader(["Id"], [[1]]));
+        var metadata = new CancelingMetadataDiscoveryService();
+        await using var source = new PostgreSqlEtlSource(
+            new TrackingConnectionFactory(connection),
+            metadata,
+            new PostgreSqlDeterministicOrderingResolver(),
+            CreateOptions());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => ReadAllAsync(source.ReadAsync(cancellation.Token)));
+
+        Assert.Equal(cancellation.Token, metadata.CancellationToken);
+        Assert.Equal(0, connection.Command.ExecutionCount);
+    }
+
+    private static PostgreSqlEtlSource CreateSource(
+        IPostgreSqlConnectionFactory connectionFactory,
+        PostgreSqlSourceOptions options,
+        IReadOnlyList<PostgreSqlKeyConstraintMetadata>? constraints = null) => new(
+            connectionFactory,
+            new TrackingMetadataDiscoveryService(constraints ??
+            [
+                new PostgreSqlKeyConstraintMetadata(
+                    "PK Rows",
+                    PostgreSqlKeyConstraintKind.PrimaryKey,
+                    [new PostgreSqlKeyColumnMetadata("Id", 1, false)])
+            ]),
+            new PostgreSqlDeterministicOrderingResolver(),
+            options);
 
     private static async Task ConsumeAndFailAsync(PostgreSqlEtlSource source)
     {
@@ -248,6 +325,77 @@ public sealed class PostgreSqlEtlSourceTests
             Database = database;
             CancellationToken = cancellationToken;
             return Task.FromResult(connection);
+        }
+    }
+
+    private sealed class TrackingMetadataDiscoveryService(
+        IReadOnlyList<PostgreSqlKeyConstraintMetadata> constraints) : IPostgreSqlMetadataDiscoveryService
+    {
+        public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(
+            string connectionProfile,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlSchemaMetadata>> DiscoverSchemasAsync(
+            string connectionProfile,
+            string database,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlTableMetadata>> DiscoverTablesAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverColumnsAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) => Task.FromResult(constraints);
+    }
+
+    private sealed class CancelingMetadataDiscoveryService : IPostgreSqlMetadataDiscoveryService
+    {
+        public CancellationToken CancellationToken { get; private set; }
+
+        public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(
+            string connectionProfile,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlSchemaMetadata>> DiscoverSchemasAsync(
+            string connectionProfile,
+            string database,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlTableMetadata>> DiscoverTablesAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverColumnsAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken)
+        {
+            CancellationToken = cancellationToken;
+            return Task.FromCanceled<IReadOnlyList<PostgreSqlKeyConstraintMetadata>>(cancellationToken);
         }
     }
 
@@ -307,6 +455,8 @@ public sealed class PostgreSqlEtlSourceTests
 
         public int DisposeCount { get; private set; }
 
+        public int ExecutionCount { get; private set; }
+
         [AllowNull]
         public override string CommandText { get; set; } = string.Empty;
 
@@ -346,6 +496,7 @@ public sealed class PostgreSqlEtlSourceTests
             CommandBehavior behavior,
             CancellationToken cancellationToken)
         {
+            ExecutionCount++;
             Behavior = behavior;
             CancellationToken = cancellationToken;
             return ExecutionException is null

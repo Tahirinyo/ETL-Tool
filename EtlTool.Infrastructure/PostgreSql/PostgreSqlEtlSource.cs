@@ -12,14 +12,20 @@ namespace EtlTool.Infrastructure.PostgreSql;
 public sealed class PostgreSqlEtlSource : IEtlSource
 {
     private readonly IPostgreSqlConnectionFactory _connectionFactory;
+    private readonly IPostgreSqlMetadataDiscoveryService _metadataDiscoveryService;
+    private readonly PostgreSqlDeterministicOrderingResolver _orderingResolver;
     private readonly PostgreSqlSourceOptions _options;
     private int _disposed;
 
     public PostgreSqlEtlSource(
         IPostgreSqlConnectionFactory connectionFactory,
+        IPostgreSqlMetadataDiscoveryService metadataDiscoveryService,
+        PostgreSqlDeterministicOrderingResolver orderingResolver,
         PostgreSqlSourceOptions options)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
+        ArgumentNullException.ThrowIfNull(metadataDiscoveryService);
+        ArgumentNullException.ThrowIfNull(orderingResolver);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ConnectionProfile);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Database);
@@ -27,6 +33,8 @@ public sealed class PostgreSqlEtlSource : IEtlSource
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Table);
 
         _connectionFactory = connectionFactory;
+        _metadataDiscoveryService = metadataDiscoveryService;
+        _orderingResolver = orderingResolver;
         _options = new PostgreSqlSourceOptions
         {
             ConnectionProfile = options.ConnectionProfile,
@@ -43,6 +51,13 @@ public sealed class PostgreSqlEtlSource : IEtlSource
             Volatile.Read(ref _disposed) != 0,
             this);
 
+        var ordering = _orderingResolver.Resolve(
+            await _metadataDiscoveryService.DiscoverKeyConstraintsAsync(
+                _options.ConnectionProfile,
+                _options.Database,
+                _options.Schema,
+                _options.Table,
+                cancellationToken).ConfigureAwait(false));
         await using var connection = await _connectionFactory
             .OpenDatabaseAsync(
                 _options.ConnectionProfile,
@@ -50,7 +65,7 @@ public sealed class PostgreSqlEtlSource : IEtlSource
                 cancellationToken)
             .ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT * FROM {QuoteIdentifier(_options.Schema)}.{QuoteIdentifier(_options.Table)};";
+        command.CommandText = BuildQuery(ordering);
 
         await using var reader = await ExecuteReaderAsync(command, cancellationToken)
             .ConfigureAwait(false);
@@ -155,4 +170,14 @@ public sealed class PostgreSqlEtlSource : IEtlSource
 
     private static string QuoteIdentifier(string identifier) =>
         $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+
+    private string BuildQuery(PostgreSqlSourceOrdering ordering)
+    {
+        ArgumentNullException.ThrowIfNull(ordering);
+
+        var orderBy = string.Join(
+            ", ",
+            ordering.Columns.Select(column => $"{QuoteIdentifier(column)} ASC"));
+        return $"SELECT * FROM {QuoteIdentifier(_options.Schema)}.{QuoteIdentifier(_options.Table)} ORDER BY {orderBy};";
+    }
 }

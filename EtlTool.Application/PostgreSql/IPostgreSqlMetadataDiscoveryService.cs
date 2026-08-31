@@ -23,4 +23,11 @@ public interface IPostgreSqlMetadataDiscoveryService
         string schema,
         string table,
         CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(
+        string connectionProfile,
+        string database,
+        string schema,
+        string table,
+        CancellationToken cancellationToken);
 }

@@ -331,6 +331,14 @@ public sealed class PipelinesControllerPostgreSqlTests
             DiscoverColumnsCallCount++;
             return Task.FromResult(Columns);
         }
+
+        public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PostgreSqlKeyConstraintMetadata>>([]);
     }
 
     private sealed class RecordingSourceInspectionService : ISourceInspectionService
