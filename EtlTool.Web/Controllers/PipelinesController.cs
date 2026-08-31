@@ -4,6 +4,7 @@ using EtlTool.Application.Execution;
 using EtlTool.Application.Sources;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -25,6 +26,9 @@ public sealed class PipelinesController : Controller
     private readonly IMongoTargetAccessService? _targetAccessService;
     private readonly SourceSchemaComparisonService _schemaComparisonService;
     private readonly IRunAdmissionService? _runAdmissionService;
+    private readonly IPostgreSqlMetadataDiscoveryService? _postgreSqlMetadataDiscoveryService;
+    private readonly IPostgreSqlConnectionProfileCatalog? _postgreSqlConnectionProfileCatalog;
+    private readonly PostgreSqlSourceSchemaConverter _postgreSqlSourceSchemaConverter;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -37,7 +41,10 @@ public sealed class PipelinesController : Controller
         PipelineSourceCommitCoordinator? sourceCommitCoordinator = null,
         IMongoTargetAccessService? targetAccessService = null,
         SourceSchemaComparisonService? schemaComparisonService = null,
-        IRunAdmissionService? runAdmissionService = null)
+        IRunAdmissionService? runAdmissionService = null,
+        IPostgreSqlMetadataDiscoveryService? postgreSqlMetadataDiscoveryService = null,
+        IPostgreSqlConnectionProfileCatalog? postgreSqlConnectionProfileCatalog = null,
+        PostgreSqlSourceSchemaConverter? postgreSqlSourceSchemaConverter = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -51,6 +58,9 @@ public sealed class PipelinesController : Controller
         _targetAccessService = targetAccessService;
         _schemaComparisonService = schemaComparisonService ?? new SourceSchemaComparisonService();
         _runAdmissionService = runAdmissionService;
+        _postgreSqlMetadataDiscoveryService = postgreSqlMetadataDiscoveryService;
+        _postgreSqlConnectionProfileCatalog = postgreSqlConnectionProfileCatalog;
+        _postgreSqlSourceSchemaConverter = postgreSqlSourceSchemaConverter ?? new PostgreSqlSourceSchemaConverter();
     }
 
     public async Task<IActionResult> Mapping(
@@ -169,10 +179,23 @@ public sealed class PipelinesController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> InspectSource([FromRoute] Guid id, SourceUploadViewModel model, CancellationToken cancellationToken)
+    public async Task<IActionResult> InspectSource(
+        [FromRoute] Guid id,
+        SourceUploadViewModel model,
+        CancellationToken cancellationToken,
+        string? postgreSqlAction = null)
     {
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
         if (pipeline is null) return NotFound();
+        if (model.SourceType == SourceType.PostgreSql)
+        {
+            return await ConfigurePostgreSqlSourceAsync(
+                id,
+                pipeline,
+                model,
+                postgreSqlAction,
+                cancellationToken);
+        }
         if (_sourceInspectionService is null) throw new InvalidOperationException("Source inspection is not configured.");
         if (model.SourceFile is null || model.SourceFile.Length == 0)
         {
@@ -423,12 +446,266 @@ public sealed class PipelinesController : Controller
         return View("Source", CreateSourceModel(pipeline));
     }
 
-    private static SourceUploadViewModel CreateSourceModel(PipelineDefinition pipeline) => new()
+    private SourceUploadViewModel CreateSourceModel(PipelineDefinition pipeline)
     {
-        SourceType = pipeline.SourceType is SourceType.Xlsx ? SourceType.Xlsx : SourceType.Csv,
-        Delimiter = pipeline.SourceOptions.Delimiter ?? CsvDelimiter.Comma,
-        WorksheetName = pipeline.SourceOptions.WorksheetName
-    };
+        var postgreSqlSource = pipeline.PostgreSqlSource;
+        var model = new SourceUploadViewModel
+        {
+            SourceType = pipeline.SourceType is SourceType.Xlsx or SourceType.PostgreSql
+                ? pipeline.SourceType
+                : SourceType.Csv,
+            Delimiter = pipeline.SourceOptions.Delimiter ?? CsvDelimiter.Comma,
+            WorksheetName = pipeline.SourceOptions.WorksheetName,
+            PostgreSqlConnectionProfile = postgreSqlSource?.ConnectionProfile,
+            PostgreSqlDatabase = postgreSqlSource?.Database,
+            PostgreSqlSchema = postgreSqlSource?.Schema,
+            PostgreSqlTable = postgreSqlSource?.Table,
+            LoadedPostgreSqlConnectionProfile = postgreSqlSource?.ConnectionProfile,
+            LoadedPostgreSqlDatabase = postgreSqlSource?.Database,
+            LoadedPostgreSqlSchema = postgreSqlSource?.Schema
+        };
+        PopulatePostgreSqlConnectionProfiles(model);
+        return model;
+    }
+
+    private async Task<IActionResult> ConfigurePostgreSqlSourceAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        SourceUploadViewModel model,
+        string? postgreSqlAction,
+        CancellationToken cancellationToken)
+    {
+        NormalizePostgreSqlSelection(model);
+        PopulatePostgreSqlConnectionProfiles(model);
+
+        if (_postgreSqlMetadataDiscoveryService is null
+            || _postgreSqlConnectionProfileCatalog is null)
+        {
+            ModelState.AddModelError(string.Empty, "PostgreSQL source configuration is not available.");
+            return PostgreSqlSourceView(model);
+        }
+
+        if (string.IsNullOrWhiteSpace(model.PostgreSqlConnectionProfile))
+        {
+            if (string.Equals(postgreSqlAction, "configure", StringComparison.Ordinal))
+            {
+                ModelState.AddModelError(
+                    nameof(model.PostgreSqlConnectionProfile),
+                    "Choose a PostgreSQL connection profile.");
+            }
+
+            return PostgreSqlSourceView(model);
+        }
+
+        if (!model.PostgreSqlConnectionProfiles.Contains(
+                model.PostgreSqlConnectionProfile,
+                StringComparer.Ordinal))
+        {
+            ModelState.AddModelError(
+                nameof(model.PostgreSqlConnectionProfile),
+                "The selected PostgreSQL connection profile is no longer available.");
+            return PostgreSqlSourceView(model);
+        }
+
+        try
+        {
+            model.PostgreSqlDatabases = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverDatabasesAsync(model.PostgreSqlConnectionProfile, cancellationToken))
+                .Select(database => database.Name)
+                .ToList();
+
+            if (!RequirePostgreSqlSelection(
+                    model,
+                    nameof(model.PostgreSqlDatabase),
+                    model.PostgreSqlDatabase,
+                    model.PostgreSqlDatabases,
+                    "database",
+                    postgreSqlAction))
+            {
+                return PostgreSqlSourceView(model);
+            }
+
+            model.PostgreSqlSchemas = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverSchemasAsync(
+                        model.PostgreSqlConnectionProfile,
+                        model.PostgreSqlDatabase!,
+                        cancellationToken))
+                .Select(schema => schema.Name)
+                .ToList();
+
+            if (!RequirePostgreSqlSelection(
+                    model,
+                    nameof(model.PostgreSqlSchema),
+                    model.PostgreSqlSchema,
+                    model.PostgreSqlSchemas,
+                    "schema",
+                    postgreSqlAction))
+            {
+                return PostgreSqlSourceView(model);
+            }
+
+            model.PostgreSqlTables = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverTablesAsync(
+                        model.PostgreSqlConnectionProfile,
+                        model.PostgreSqlDatabase!,
+                        model.PostgreSqlSchema!,
+                        cancellationToken))
+                .Select(table => table.Name)
+                .ToList();
+
+            if (!RequirePostgreSqlSelection(
+                    model,
+                    nameof(model.PostgreSqlTable),
+                    model.PostgreSqlTable,
+                    model.PostgreSqlTables,
+                    "table",
+                    postgreSqlAction))
+            {
+                return PostgreSqlSourceView(model);
+            }
+
+            if (!string.Equals(postgreSqlAction, "configure", StringComparison.Ordinal))
+            {
+                return PostgreSqlSourceView(model);
+            }
+
+            var schema = _postgreSqlSourceSchemaConverter.Convert(
+                await _postgreSqlMetadataDiscoveryService.DiscoverColumnsAsync(
+                    model.PostgreSqlConnectionProfile,
+                    model.PostgreSqlDatabase!,
+                    model.PostgreSqlSchema!,
+                    model.PostgreSqlTable!,
+                    cancellationToken));
+            if (schema.Count == 0)
+            {
+                ModelState.AddModelError(string.Empty, "The selected PostgreSQL table has no columns to map.");
+                return PostgreSqlSourceView(model);
+            }
+
+            var replacement = CopyPipeline(pipeline);
+            replacement.SourceType = SourceType.PostgreSql;
+            replacement.PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = model.PostgreSqlConnectionProfile,
+                Database = model.PostgreSqlDatabase!,
+                Schema = model.PostgreSqlSchema!,
+                Table = model.PostgreSqlTable!
+            };
+            replacement.ExpectedSchema = CopySchema(schema);
+            replacement.FieldMappings = ReconcileMappings(pipeline, schema);
+
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
+            {
+                return NotFound();
+            }
+
+            return RedirectToAction(nameof(Mapping), new { id });
+        }
+        catch (Exception exception) when (exception is PostgreSqlConnectionProfileNotFoundException
+                                         or PostgreSqlConnectionAccessException
+                                         or PostgreSqlMetadataObjectNotFoundException
+                                         or PostgreSqlUnsupportedColumnTypeException)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return PostgreSqlSourceView(model);
+        }
+    }
+
+    private bool RequirePostgreSqlSelection(
+        SourceUploadViewModel model,
+        string propertyName,
+        string? selectedValue,
+        IReadOnlyList<string> availableValues,
+        string displayName,
+        string? postgreSqlAction)
+    {
+        if (string.IsNullOrWhiteSpace(selectedValue))
+        {
+            if (string.Equals(postgreSqlAction, "configure", StringComparison.Ordinal))
+            {
+                ModelState.AddModelError(propertyName, $"Choose a PostgreSQL {displayName}.");
+            }
+
+            return false;
+        }
+
+        if (availableValues.Contains(selectedValue, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        ClearPostgreSqlSelection(model, propertyName);
+        ModelState.AddModelError(
+            propertyName,
+            $"The selected PostgreSQL {displayName} is no longer available.");
+        return false;
+    }
+
+    private void NormalizePostgreSqlSelection(SourceUploadViewModel model)
+    {
+        if (!string.Equals(
+                model.PostgreSqlConnectionProfile,
+                model.LoadedPostgreSqlConnectionProfile,
+                StringComparison.Ordinal))
+        {
+            ClearPostgreSqlSelection(model, nameof(model.PostgreSqlDatabase));
+            return;
+        }
+
+        if (!string.Equals(model.PostgreSqlDatabase, model.LoadedPostgreSqlDatabase, StringComparison.Ordinal))
+        {
+            ClearPostgreSqlSelection(model, nameof(model.PostgreSqlSchema));
+            return;
+        }
+
+        if (!string.Equals(model.PostgreSqlSchema, model.LoadedPostgreSqlSchema, StringComparison.Ordinal))
+        {
+            ClearPostgreSqlSelection(model, nameof(model.PostgreSqlTable));
+        }
+    }
+
+    private void ClearPostgreSqlSelection(SourceUploadViewModel model, string propertyName)
+    {
+        switch (propertyName)
+        {
+            case nameof(SourceUploadViewModel.PostgreSqlDatabase):
+                model.PostgreSqlDatabase = null;
+                model.PostgreSqlSchema = null;
+                model.PostgreSqlTable = null;
+                ModelState.Remove(nameof(model.PostgreSqlDatabase));
+                ModelState.Remove(nameof(model.PostgreSqlSchema));
+                ModelState.Remove(nameof(model.PostgreSqlTable));
+                break;
+            case nameof(SourceUploadViewModel.PostgreSqlSchema):
+                model.PostgreSqlSchema = null;
+                model.PostgreSqlTable = null;
+                ModelState.Remove(nameof(model.PostgreSqlSchema));
+                ModelState.Remove(nameof(model.PostgreSqlTable));
+                break;
+            case nameof(SourceUploadViewModel.PostgreSqlTable):
+                model.PostgreSqlTable = null;
+                ModelState.Remove(nameof(model.PostgreSqlTable));
+                break;
+        }
+    }
+
+    private void PopulatePostgreSqlConnectionProfiles(SourceUploadViewModel model) =>
+        model.PostgreSqlConnectionProfiles = _postgreSqlConnectionProfileCatalog?
+            .GetProfileNames()
+            .OrderBy(profileName => profileName, StringComparer.Ordinal)
+            .ToList()
+            ?? [];
+
+    private IActionResult PostgreSqlSourceView(SourceUploadViewModel model)
+    {
+        ModelState.Remove(nameof(model.LoadedPostgreSqlConnectionProfile));
+        ModelState.Remove(nameof(model.LoadedPostgreSqlDatabase));
+        ModelState.Remove(nameof(model.LoadedPostgreSqlSchema));
+        model.LoadedPostgreSqlConnectionProfile = model.PostgreSqlConnectionProfile;
+        model.LoadedPostgreSqlDatabase = model.PostgreSqlDatabase;
+        model.LoadedPostgreSqlSchema = model.PostgreSqlSchema;
+        return View("Source", model);
+    }
 
     private FieldMappingViewModel CreateMappingModel(
         PipelineDefinition pipeline,
@@ -578,6 +855,7 @@ public sealed class PipelinesController : Controller
         Description = pipeline.Description,
         SourceType = pipeline.SourceType,
         SourceOptions = CopySourceOptions(pipeline.SourceOptions),
+        PostgreSqlSource = CopyPostgreSqlSourceOptions(pipeline.PostgreSqlSource),
         ExpectedSchema = CopySchema(pipeline.ExpectedSchema),
         FieldMappings = CopyMappings(pipeline.FieldMappings ?? []),
         TransformationRules = (pipeline.TransformationRules ?? [])
@@ -620,6 +898,7 @@ public sealed class PipelinesController : Controller
         Description = pipeline.Description,
         SourceType = pipeline.SourceType,
         SourceOptions = pipeline.SourceOptions,
+        PostgreSqlSource = CopyPostgreSqlSourceOptions(pipeline.PostgreSqlSource),
         ExpectedSchema = pipeline.ExpectedSchema,
         FieldMappings = fieldMappings,
         TransformationRules = pipeline.TransformationRules,
@@ -645,6 +924,17 @@ public sealed class PipelinesController : Controller
         CultureName = options.CultureName,
         DateFormat = options.DateFormat
     };
+
+    private static PostgreSqlSourceOptions? CopyPostgreSqlSourceOptions(
+        PostgreSqlSourceOptions? options) => options is null
+        ? null
+        : new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = options.ConnectionProfile,
+            Database = options.Database,
+            Schema = options.Schema,
+            Table = options.Table
+        };
 
     private static List<FieldMapping> ReconcileMappings(
         PipelineDefinition pipeline,
@@ -707,6 +997,7 @@ public sealed class PipelinesController : Controller
             Description = pipeline.Description,
             SourceType = type,
             SourceOptions = CopySourceOptions(options),
+            PostgreSqlSource = null,
             ExpectedSchema = CopySchema(schema),
             FieldMappings = CopyMappings(mappings),
             TransformationRules = pipeline.TransformationRules,

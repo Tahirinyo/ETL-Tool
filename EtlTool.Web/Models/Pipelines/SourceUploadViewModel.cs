@@ -15,6 +15,17 @@ public sealed class SourceUploadViewModel
     public IReadOnlyList<SourceSampleRowViewModel> SampleRows { get; set; } = [];
     public SchemaDifferenceViewModel? SchemaDifference { get; set; }
     public Guid? PendingSourceReferenceId { get; set; }
+    public string? PostgreSqlConnectionProfile { get; set; }
+    public string? PostgreSqlDatabase { get; set; }
+    public string? PostgreSqlSchema { get; set; }
+    public string? PostgreSqlTable { get; set; }
+    public string? LoadedPostgreSqlConnectionProfile { get; set; }
+    public string? LoadedPostgreSqlDatabase { get; set; }
+    public string? LoadedPostgreSqlSchema { get; set; }
+    public IReadOnlyList<string> PostgreSqlConnectionProfiles { get; set; } = [];
+    public IReadOnlyList<string> PostgreSqlDatabases { get; set; } = [];
+    public IReadOnlyList<string> PostgreSqlSchemas { get; set; } = [];
+    public IReadOnlyList<string> PostgreSqlTables { get; set; } = [];
     public bool HasInspection => Columns.Count > 0 || SampleRows.Count > 0;
 }
 

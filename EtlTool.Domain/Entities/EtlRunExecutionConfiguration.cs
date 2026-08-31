@@ -9,6 +9,8 @@ public sealed class EtlRunExecutionConfiguration
 
     public SourceOptions SourceOptions { get; set; } = new();
 
+    public PostgreSqlSourceOptions? PostgreSqlSource { get; set; }
+
     public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
 
     public List<FieldMapping> FieldMappings { get; set; } = [];
@@ -31,6 +33,7 @@ public sealed class EtlRunExecutionConfiguration
         {
             SourceType = pipeline.SourceType,
             SourceOptions = Copy(pipeline.SourceOptions),
+            PostgreSqlSource = Copy(pipeline.PostgreSqlSource),
             ExpectedSchema = pipeline.ExpectedSchema.Select(Copy).ToList(),
             FieldMappings = pipeline.FieldMappings.Select(Copy).ToList(),
             TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
@@ -45,6 +48,7 @@ public sealed class EtlRunExecutionConfiguration
     {
         SourceType = SourceType,
         SourceOptions = Copy(SourceOptions),
+        PostgreSqlSource = Copy(PostgreSqlSource),
         ExpectedSchema = ExpectedSchema.Select(Copy).ToList(),
         FieldMappings = FieldMappings.Select(Copy).ToList(),
         TransformationRules = TransformationRules.Select(Copy).ToList(),
@@ -62,6 +66,16 @@ public sealed class EtlRunExecutionConfiguration
         WorksheetName = value.WorksheetName,
         FirstRowIsHeader = value.FirstRowIsHeader
     };
+
+    private static PostgreSqlSourceOptions? Copy(PostgreSqlSourceOptions? value) => value is null
+        ? null
+        : new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = value.ConnectionProfile,
+            Database = value.Database,
+            Schema = value.Schema,
+            Table = value.Table
+        };
 
     private static SourceFieldDefinition Copy(SourceFieldDefinition value) => new()
     {

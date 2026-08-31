@@ -25,6 +25,13 @@ public sealed class EtlRunExecutionConfigurationTests
                 WorksheetName = "Customers",
                 FirstRowIsHeader = false
             },
+            PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = "ReportingDb",
+                Database = "reporting",
+                Schema = "public",
+                Table = "customers"
+            },
             ExpectedSchema =
             [
                 new SourceFieldDefinition { Name = "CustomerId", DataType = SourceFieldType.Integer }
@@ -82,6 +89,10 @@ public sealed class EtlRunExecutionConfigurationTests
         pipeline.SourceOptions.Delimiter = CsvDelimiter.Comma;
         pipeline.SourceOptions.WorksheetName = "Edited";
         pipeline.SourceOptions.FirstRowIsHeader = true;
+        pipeline.PostgreSqlSource.ConnectionProfile = "EditedProfile";
+        pipeline.PostgreSqlSource.Database = "edited_database";
+        pipeline.PostgreSqlSource.Schema = "edited_schema";
+        pipeline.PostgreSqlSource.Table = "edited_table";
         pipeline.ExpectedSchema[0].Name = "EditedId";
         pipeline.FieldMappings[0].TargetField = "edited_id";
         pipeline.TransformationRules[0].Order = 99;
@@ -99,6 +110,11 @@ public sealed class EtlRunExecutionConfigurationTests
         Assert.Equal(CsvDelimiter.Tab, snapshot.SourceOptions.Delimiter);
         Assert.Equal("Customers", snapshot.SourceOptions.WorksheetName);
         Assert.False(snapshot.SourceOptions.FirstRowIsHeader);
+        Assert.NotNull(snapshot.PostgreSqlSource);
+        Assert.Equal("ReportingDb", snapshot.PostgreSqlSource.ConnectionProfile);
+        Assert.Equal("reporting", snapshot.PostgreSqlSource.Database);
+        Assert.Equal("public", snapshot.PostgreSqlSource.Schema);
+        Assert.Equal("customers", snapshot.PostgreSqlSource.Table);
         Assert.Equal("CustomerId", Assert.Single(snapshot.ExpectedSchema).Name);
         Assert.Equal(SourceFieldType.Integer, snapshot.ExpectedSchema[0].DataType);
         Assert.Equal("customer_id", Assert.Single(snapshot.FieldMappings).TargetField);
@@ -127,6 +143,13 @@ public sealed class EtlRunExecutionConfigurationTests
         var snapshot = EtlRunExecutionConfiguration.Capture(new PipelineDefinition
         {
             SourceOptions = new SourceOptions { CultureName = "tr-TR" },
+            PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = "ReportingDb",
+                Database = "reporting",
+                Schema = "public",
+                Table = "customers"
+            },
             ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
             FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
             TransformationRules =
@@ -153,12 +176,14 @@ public sealed class EtlRunExecutionConfigurationTests
 
         var runtime = snapshot.ToPipelineDefinition();
         runtime.SourceOptions.CultureName = "en-US";
+        runtime.PostgreSqlSource!.Table = "edited";
         runtime.ExpectedSchema[0].Name = "Edited";
         runtime.FieldMappings[0].TargetField = "edited";
         runtime.TransformationRules[0].Configuration["Value"] = "edited";
         runtime.ValidationRules[0].Configuration["Value"] = "edited";
 
         Assert.Equal("tr-TR", snapshot.SourceOptions.CultureName);
+        Assert.Equal("customers", snapshot.PostgreSqlSource!.Table);
         Assert.Equal("Id", snapshot.ExpectedSchema[0].Name);
         Assert.Equal("id", snapshot.FieldMappings[0].TargetField);
         Assert.Equal("admitted", snapshot.TransformationRules[0].Configuration["Value"]);

@@ -57,6 +57,13 @@ public sealed class MongoBsonMappingsTests
                     DateFormat = "dd.MM.yyyy",
                     Delimiter = CsvDelimiter.Semicolon
                 },
+                PostgreSqlSource = new PostgreSqlSourceOptions
+                {
+                    ConnectionProfile = "ReportingDb",
+                    Database = "reporting",
+                    Schema = "public",
+                    Table = "customers"
+                },
                 ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
                 FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
                 TransformationRules =
@@ -108,6 +115,47 @@ public sealed class MongoBsonMappingsTests
                 .AsBsonBinaryData.SubType);
         Assert.Equal(transformationId, roundTripped.ExecutionConfiguration.TransformationRules[0].Id);
         Assert.Equal(validationId, roundTripped.ExecutionConfiguration.ValidationRules[0].Id);
+        Assert.NotNull(roundTripped.ExecutionConfiguration.PostgreSqlSource);
+        Assert.Equal("ReportingDb", roundTripped.ExecutionConfiguration.PostgreSqlSource.ConnectionProfile);
+        Assert.DoesNotContain("ConnectionString", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);
         Assert.Null(legacy.ExecutionConfiguration);
+    }
+
+    [Fact]
+    public void PipelineMapping_RoundTripsExistingAndPostgreSqlSchemaFieldTypes()
+    {
+        _ = new MongoMetadataDatabase(new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_bson_mapping_tests"
+        });
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.PostgreSql,
+            PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = "ReportingDb",
+                Database = "reporting",
+                Schema = "public",
+                Table = "customers"
+            },
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "LegacyAmount", DataType = SourceFieldType.Decimal },
+                new SourceFieldDefinition { Name = "IsActive", DataType = SourceFieldType.Boolean }
+            ]
+        };
+
+        var document = pipeline.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<PipelineDefinition>(document);
+        var fields = document[nameof(PipelineDefinition.ExpectedSchema)].AsBsonArray;
+
+        Assert.Equal(3, fields[0].AsBsonDocument[nameof(SourceFieldDefinition.DataType)].AsInt32);
+        Assert.Equal(5, fields[1].AsBsonDocument[nameof(SourceFieldDefinition.DataType)].AsInt32);
+        Assert.Equal(
+            pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)),
+            roundTripped.ExpectedSchema.Select(field => (field.Name, field.DataType)));
     }
 }

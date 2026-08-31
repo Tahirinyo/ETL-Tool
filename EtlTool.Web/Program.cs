@@ -1,4 +1,5 @@
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Reporting;
@@ -15,6 +16,7 @@ using EtlTool.Infrastructure.Extraction;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
+using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.Reporting;
 using EtlTool.Infrastructure.Storage;
 using EtlTool.Infrastructure.Uploads;
@@ -90,7 +92,20 @@ var runAdmissionOptions = builder.Configuration
 
 runAdmissionOptions.Validate();
 
+var postgreSqlConnectionOptions = builder.Configuration
+    .GetSection(PostgreSqlConnectionOptions.SectionName)
+    .Get<PostgreSqlConnectionOptions>()
+    ?? new PostgreSqlConnectionOptions();
+
+postgreSqlConnectionOptions.Validate();
+
 builder.Services.AddSingleton(mongoDbOptions);
+builder.Services.AddSingleton(postgreSqlConnectionOptions);
+builder.Services.AddSingleton<IPostgreSqlConnectionFactory, PostgreSqlConnectionFactory>();
+builder.Services.AddSingleton<IPostgreSqlConnectionProfileCatalog>(provider =>
+    (PostgreSqlConnectionFactory)provider.GetRequiredService<IPostgreSqlConnectionFactory>());
+builder.Services.AddSingleton<IPostgreSqlMetadataDiscoveryService, PostgreSqlMetadataDiscoveryService>();
+builder.Services.AddSingleton<PostgreSqlSourceSchemaConverter>();
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();

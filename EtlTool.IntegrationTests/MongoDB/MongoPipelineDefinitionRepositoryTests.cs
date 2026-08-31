@@ -39,6 +39,41 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
     }
 
     [Fact]
+    public async Task AddAndGetAsync_RoundTripsPostgreSqlSourceMetadataWithoutCredentials()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        var pipeline = CreateMinimalPipeline("PostgreSQL source");
+        pipeline.SourceType = SourceType.PostgreSql;
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        };
+
+        await testDatabase.Repository.AddAsync(pipeline, CancellationToken.None);
+
+        var persisted = await testDatabase.Repository.GetByIdAsync(
+            pipeline.Id,
+            CancellationToken.None);
+        var document = await testDatabase.Database
+            .GetCollection<BsonDocument>(MongoMetadataCollectionNames.PipelineDefinitions)
+            .Find(FilterDefinition<BsonDocument>.Empty)
+            .SingleAsync();
+
+        Assert.NotNull(persisted);
+        Assert.NotNull(persisted.PostgreSqlSource);
+        Assert.Equal("ReportingDb", persisted.PostgreSqlSource.ConnectionProfile);
+        Assert.Equal("reporting", persisted.PostgreSqlSource.Database);
+        Assert.Equal("public", persisted.PostgreSqlSource.Schema);
+        Assert.Equal("customers", persisted.PostgreSqlSource.Table);
+        Assert.DoesNotContain("ConnectionString", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ListAsync_ReturnsEmptyThenMaterializesAllPipelinesWithoutOrderingContract()
     {
         await using var testDatabase = fixture.CreateDatabase();

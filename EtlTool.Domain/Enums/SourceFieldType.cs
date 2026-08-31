@@ -6,5 +6,6 @@ public enum SourceFieldType
     String = 1,
     Integer = 2,
     Decimal = 3,
-    Date = 4
+    Date = 4,
+    Boolean = 5
 }

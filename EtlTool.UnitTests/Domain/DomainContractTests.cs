@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -11,13 +12,13 @@ public sealed class DomainContractTests
     public void EnumContracts_ExposeApprovedNamesAndStableValues()
     {
         Assert.Equal(
-            ["Unspecified:0", "Csv:1", "Xlsx:2"],
+            ["Unspecified:0", "Csv:1", "Xlsx:2", "PostgreSql:3"],
             GetEnumContract<SourceType>());
         Assert.Equal(
             ["Comma:1", "Semicolon:2", "Tab:3"],
             GetEnumContract<CsvDelimiter>());
         Assert.Equal(
-            ["Unknown:0", "String:1", "Integer:2", "Decimal:3", "Date:4"],
+            ["Unknown:0", "String:1", "Integer:2", "Decimal:3", "Date:4", "Boolean:5"],
             GetEnumContract<SourceFieldType>());
         Assert.Equal(
             [
@@ -81,6 +82,7 @@ public sealed class DomainContractTests
         Assert.Empty(first.TransformationRules);
         Assert.Empty(first.ValidationRules);
         Assert.True(first.SourceOptions.FirstRowIsHeader);
+        Assert.Null(first.PostgreSqlSource);
 
         Assert.NotSame(first.SourceOptions, second.SourceOptions);
         Assert.NotSame(first.ExpectedSchema, second.ExpectedSchema);
@@ -97,6 +99,65 @@ public sealed class DomainContractTests
             property => property.Name.Contains("connection", StringComparison.OrdinalIgnoreCase)
                 || property.Name.Contains("credential", StringComparison.OrdinalIgnoreCase)
                 || property.Name.Contains("secret", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PostgreSqlSourceOptions_ContainsOnlySourceIdentityMetadata()
+    {
+        Assert.Equal(
+            ["ConnectionProfile", "Database", "Schema", "Table"],
+            typeof(PostgreSqlSourceOptions).GetProperties().Select(property => property.Name));
+    }
+
+    [Fact]
+    public void PostgreSqlSourceMetadata_SerializesWithoutCredentialOrConnectionStringFields()
+    {
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.PostgreSql,
+            PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = "ReportingDb",
+                Database = "reporting",
+                Schema = "public",
+                Table = "customers"
+            }
+        };
+
+        var pipelineJson = JsonSerializer.Serialize(pipeline);
+        var snapshotJson = JsonSerializer.Serialize(EtlRunExecutionConfiguration.Capture(pipeline));
+
+        Assert.Contains("ConnectionProfile", pipelineJson, StringComparison.Ordinal);
+        Assert.Contains("ConnectionProfile", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Secret", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Secret", snapshotJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceFieldType_BooleanAppendsWithoutChangingPersistedEnumValues()
+    {
+        var legacy = new SourceFieldDefinition
+        {
+            Name = "LegacyAmount",
+            DataType = SourceFieldType.Decimal
+        };
+        var boolean = new SourceFieldDefinition
+        {
+            Name = "IsActive",
+            DataType = SourceFieldType.Boolean
+        };
+
+        Assert.Equal(3, (int)legacy.DataType);
+        Assert.Equal(5, (int)boolean.DataType);
+        Assert.Contains("\"DataType\":3", JsonSerializer.Serialize(legacy), StringComparison.Ordinal);
+        Assert.Contains("\"DataType\":5", JsonSerializer.Serialize(boolean), StringComparison.Ordinal);
+        Assert.Equal(
+            SourceFieldType.Boolean,
+            JsonSerializer.Deserialize<SourceFieldDefinition>(JsonSerializer.Serialize(boolean))!.DataType);
     }
 
     [Fact]

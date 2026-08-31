@@ -15,6 +15,8 @@ public sealed class PipelineDefinition
 
     public SourceOptions SourceOptions { get; set; } = new();
 
+    public PostgreSqlSourceOptions? PostgreSqlSource { get; set; }
+
     public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
 
     public List<FieldMapping> FieldMappings { get; set; } = [];

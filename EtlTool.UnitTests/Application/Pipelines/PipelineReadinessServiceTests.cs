@@ -74,6 +74,20 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_PostgreSqlSourceIsNotReadyUntilExtractionIsSupported()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.PostgreSql;
+
+        var result = await EvaluateAsync(pipeline);
+
+        Assert.False(result!.IsReady);
+        Assert.Contains(result.Problems, problem =>
+            problem.Component == "Source"
+            && problem.Message.Contains("CSV or XLSX", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task EvaluateAsync_AggregatesIndependentProblemsInDeterministicOrder()
     {
         var pipeline = ReadyPipeline();
