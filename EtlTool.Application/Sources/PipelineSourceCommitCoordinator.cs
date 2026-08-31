@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Domain.Entities;
 
@@ -7,12 +8,16 @@ namespace EtlTool.Application.Sources;
 public sealed class PipelineSourceCommitCoordinator
 {
     private readonly IWizardSourceStore _sourceStore;
+    private readonly IPreviewSourceFactory _previewSourceFactory;
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _pipelineGates = [];
 
-    public PipelineSourceCommitCoordinator(IWizardSourceStore sourceStore)
+    public PipelineSourceCommitCoordinator(
+        IWizardSourceStore sourceStore,
+        IPreviewSourceFactory? previewSourceFactory = null)
     {
         ArgumentNullException.ThrowIfNull(sourceStore);
         _sourceStore = sourceStore;
+        _previewSourceFactory = previewSourceFactory ?? new WizardPreviewSourceFactory(sourceStore);
     }
 
     public async Task<PipelineSourceCommitStatus> CommitAsync(
@@ -184,7 +189,7 @@ public sealed class PipelineSourceCommitCoordinator
 
         var gate = GetGate(pipelineId);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        IWizardSourceLease? source = null;
+        IEtlSource? source = null;
 
         try
         {
@@ -202,10 +207,8 @@ public sealed class PipelineSourceCommitCoordinator
                 return PipelinePreviewSnapshot.NotReady(pipeline, readiness);
             }
 
-            source = await _sourceStore.AcquireAsync(
-                    pipeline.Id,
-                    pipeline.SourceType,
-                    pipeline.SourceOptions,
+            source = await _previewSourceFactory.AcquireAsync(
+                    pipeline,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (source is null)
@@ -443,6 +446,23 @@ public sealed class PipelineSourceCommitCoordinator
             "The unavailable source could not be cleaned up completely.",
             cleanupFailure);
     }
+
+    private sealed class WizardPreviewSourceFactory(IWizardSourceStore sourceStore) : IPreviewSourceFactory
+    {
+        public async Task<IEtlSource?> AcquireAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(pipeline);
+
+            return await sourceStore.AcquireAsync(
+                    pipeline.Id,
+                    pipeline.SourceType,
+                    pipeline.SourceOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
 }
 
 public enum PipelineSourceCommitStatus
@@ -454,13 +474,13 @@ public enum PipelineSourceCommitStatus
 
 public sealed class PipelinePreviewSnapshot : IAsyncDisposable
 {
-    private IWizardSourceLease? _source;
+    private IEtlSource? _source;
 
     private PipelinePreviewSnapshot(
         PipelinePreviewSnapshotStatus status,
         PipelineDefinition? pipeline,
         PipelineReadinessResult? readiness,
-        IWizardSourceLease? source)
+        IEtlSource? source)
     {
         Status = status;
         Pipeline = pipeline;
@@ -474,7 +494,7 @@ public sealed class PipelinePreviewSnapshot : IAsyncDisposable
 
     public PipelineReadinessResult? Readiness { get; }
 
-    public IWizardSourceLease? Source => _source;
+    public IEtlSource? Source => _source;
 
     internal static PipelinePreviewSnapshot NotFound() =>
         new(PipelinePreviewSnapshotStatus.NotFound, null, null, null);
@@ -492,7 +512,7 @@ public sealed class PipelinePreviewSnapshot : IAsyncDisposable
     internal static PipelinePreviewSnapshot Ready(
         PipelineDefinition pipeline,
         PipelineReadinessResult readiness,
-        IWizardSourceLease source) =>
+        IEtlSource source) =>
         new(PipelinePreviewSnapshotStatus.Ready, pipeline, readiness, source);
 
     public async ValueTask DisposeAsync()

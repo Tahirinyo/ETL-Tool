@@ -55,11 +55,22 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
     }
 
     public PipelineReadinessResult Evaluate(PipelineDefinition pipeline)
+        => EvaluateCore(pipeline, allowPostgreSqlSource: false);
+
+    public PipelineReadinessResult EvaluateForPreview(PipelineDefinition pipeline)
+        => EvaluateCore(pipeline, allowPostgreSqlSource: true);
+
+    private PipelineReadinessResult EvaluateCore(
+        PipelineDefinition pipeline,
+        bool allowPostgreSqlSource)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
 
         var problems = new List<PipelineReadinessProblem>();
-        var sourceState = EvaluateSourceAndSchema(pipeline, problems);
+        var sourceState = EvaluateSourceAndSchema(
+            pipeline,
+            allowPostgreSqlSource,
+            problems);
         var mappingState = EvaluateMappings(pipeline, sourceState.HasUsableSchema, problems);
 
         EvaluateTransformations(pipeline, mappingState, problems);
@@ -72,12 +83,16 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
 
     private static SourceState EvaluateSourceAndSchema(
         PipelineDefinition pipeline,
+        bool allowPostgreSqlSource,
         List<PipelineReadinessProblem> problems)
     {
         CultureInfo? sourceCulture = null;
         var sourceOptions = pipeline.SourceOptions;
 
-        if (pipeline.SourceType is not SourceType.Csv and not SourceType.Xlsx)
+        var isPostgreSqlPreview = allowPostgreSqlSource
+            && pipeline.SourceType == SourceType.PostgreSql;
+        if (pipeline.SourceType is not SourceType.Csv and not SourceType.Xlsx
+            && !isPostgreSqlPreview)
         {
             AddProblem(problems, SourceComponent, "The pipeline source type must be CSV or XLSX.");
         }
@@ -97,7 +112,8 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
                 AddProblem(problems, SourceComponent, exception.Message);
             }
 
-            if (!sourceOptions.FirstRowIsHeader)
+            if (pipeline.SourceType is SourceType.Csv or SourceType.Xlsx
+                && !sourceOptions.FirstRowIsHeader)
             {
                 AddProblem(problems, SourceComponent, "The configured source must have a header row.");
             }
@@ -126,6 +142,11 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
             }
         }
 
+        if (isPostgreSqlPreview)
+        {
+            EvaluatePostgreSqlSource(pipeline.PostgreSqlSource, problems);
+        }
+
         var hasUsableSchema = true;
         try
         {
@@ -138,6 +159,37 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         }
 
         return new SourceState(sourceCulture, hasUsableSchema);
+    }
+
+    private static void EvaluatePostgreSqlSource(
+        PostgreSqlSourceOptions? source,
+        List<PipelineReadinessProblem> problems)
+    {
+        if (source is null)
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL source configuration is missing.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(source.ConnectionProfile))
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL connection profile is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Database))
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL database is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Schema))
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL schema is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Table))
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL table is required.");
+        }
     }
 
     private MappingState EvaluateMappings(

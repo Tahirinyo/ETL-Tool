@@ -3,6 +3,14 @@ using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using EtlTool.Application.PostgreSql;
+using EtlTool.Application.Pipelines;
+using EtlTool.Application.Preview;
+using EtlTool.Application.Processing;
+using EtlTool.Application.Mapping;
+using EtlTool.Application.Transformations;
+using EtlTool.Application.Validations;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
 using Npgsql;
@@ -179,6 +187,42 @@ public sealed class PostgreSqlEtlSourceTests
     }
 
     [Fact]
+    public async Task PreviewAsync_StopsAtOneHundredRowsAndDisposesPostgreSqlResources()
+    {
+        var reader = new TrackingDataReader(
+            ["Id"],
+            Enumerable.Range(1, 101).Select(value => new object?[] { value }).ToArray());
+        var connection = new TrackingDbConnection(() => reader);
+        await using var source = CreateSource(
+            new TrackingConnectionFactory(connection),
+            CreateOptions());
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.PostgreSql,
+            SourceOptions = new SourceOptions(),
+            ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
+            FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true }],
+            DestinationDatabase = "demo",
+            DestinationCollection = "rows",
+            UpsertKeyField = "id"
+        };
+        var previewService = new PreviewService(
+            new PreviewReadyReadinessService(),
+            new PipelineRowProcessor(
+                new FieldMappingService(),
+                new TransformationEngine(new TransformationHandlerRegistry([])),
+                new ValidationEngine(new ValidationHandlerRegistry([]))));
+
+        var preview = await previewService.PreviewAsync(source, pipeline, CancellationToken.None);
+
+        Assert.Equal(100, preview.Rows.Count);
+        Assert.Equal(100, reader.ReadCount);
+        Assert.Equal(1, reader.DisposeCount);
+        Assert.Equal(1, connection.Command.DisposeCount);
+        Assert.Equal(1, connection.DisposeCount);
+    }
+
+    [Fact]
     public async Task DisposeAsync_IsIdempotentAndRejectsNewEnumeration()
     {
         var source = CreateSource(
@@ -299,6 +343,16 @@ public sealed class PostgreSqlEtlSourceTests
     }
 
     private sealed class ConsumerException : Exception;
+
+    private sealed class PreviewReadyReadinessService : IPipelineReadinessService
+    {
+        public PipelineReadinessResult Evaluate(PipelineDefinition pipeline) => new([]);
+
+        public Task<PipelineReadinessResult?> EvaluateAsync(
+            Guid pipelineId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<PipelineReadinessResult?>(new PipelineReadinessResult([]));
+    }
 
     private sealed class TrackingConnectionFactory(DbConnection connection) : IPostgreSqlConnectionFactory
     {

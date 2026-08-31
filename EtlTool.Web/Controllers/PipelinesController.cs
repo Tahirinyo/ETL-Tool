@@ -1369,7 +1369,7 @@ public sealed class PipelinesController : Controller
             await using var snapshot = await _sourceCommitCoordinator.CapturePreviewAsync(
                 id,
                 token => _pipelineService.GetByIdAsync(id, token),
-                _readinessService.Evaluate,
+                _readinessService.EvaluateForPreview,
                 cancellationToken);
             if (snapshot.Status == PipelinePreviewSnapshotStatus.NotFound)
             {
@@ -1607,5 +1607,8 @@ public sealed class PipelinesController : Controller
             or UnauthorizedAccessException
             or InvalidOperationException
             or ArgumentException
-            or NotSupportedException;
+            or NotSupportedException
+            or PostgreSqlConnectionProfileNotFoundException
+            or PostgreSqlConnectionAccessException
+            or PostgreSqlMetadataObjectNotFoundException;
 }

@@ -1,12 +1,16 @@
 using System.Data.Common;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.Processing;
+using EtlTool.Application.Pipelines;
+using EtlTool.Application.Preview;
+using EtlTool.Application.Sources;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
+using EtlTool.Infrastructure.Sources;
 using EtlTool.Application.PostgreSql;
 using EtlDataRow = EtlTool.Application.Extraction.DataRow;
 
@@ -205,6 +209,121 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
         }
     }
 
+    [Fact]
+    public async Task PreviewAsync_ProcessesOnlyTheFirstOneHundredDeterministicallyOrderedRows()
+    {
+        const string schema = "DB10 Preview";
+        const string table = "Preview Rows";
+        var factory = CreateFactory();
+        await using var setupConnection = await factory.OpenAsync("ReportingDb", CancellationToken.None);
+        try
+        {
+            await ExecuteAsync(
+                setupConnection,
+                "CREATE SCHEMA \"DB10 Preview\"; " +
+                "CREATE TABLE \"DB10 Preview\".\"Preview Rows\" " +
+                "(\"Source Id\" integer PRIMARY KEY, \"Kind\" text NOT NULL, \"Logical Id\" text NOT NULL, \"Value\" text NOT NULL); " +
+                "INSERT INTO \"DB10 Preview\".\"Preview Rows\" " +
+                "SELECT value, " +
+                "CASE value WHEN 4 THEN 'filtered' ELSE 'normal' END, " +
+                "CASE value WHEN 1 THEN 'A' WHEN 2 THEN 'A' WHEN 3 THEN 'A' ELSE 'K' || value::text END, " +
+                "CASE value WHEN 1 THEN '-1' WHEN 5 THEN 'not-a-number' ELSE '10' END " +
+                "FROM generate_series(105, 1, -1) AS value;");
+
+            var pipeline = new PipelineDefinition
+            {
+                SourceType = SourceType.PostgreSql,
+                SourceOptions = new SourceOptions { CultureName = "en-US" },
+                ExpectedSchema =
+                [
+                    new SourceFieldDefinition { Name = "Source Id" },
+                    new SourceFieldDefinition { Name = "Kind" },
+                    new SourceFieldDefinition { Name = "Logical Id" },
+                    new SourceFieldDefinition { Name = "Value" }
+                ],
+                FieldMappings =
+                [
+                    new FieldMapping { SourceField = "Source Id", TargetField = "sourceId", IsIncluded = true },
+                    new FieldMapping { SourceField = "Kind", TargetField = "kind", IsIncluded = true },
+                    new FieldMapping { SourceField = "Logical Id", TargetField = "id", IsIncluded = true },
+                    new FieldMapping { SourceField = "Value", TargetField = "value", IsIncluded = true }
+                ],
+                TransformationRules =
+                [
+                    Rule(1, TransformationType.FilterRow, "kind", ("Operator", FilterOperator.Equals.ToString()), ("Value", "filtered")),
+                    Rule(2, TransformationType.ConvertToInteger, "value"),
+                    DeduplicateRule(3, "id")
+                ],
+                ValidationRules =
+                [
+                    new ValidationRule
+                    {
+                        Type = ValidationType.NumericRange,
+                        Field = "value",
+                        Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["Minimum"] = "0"
+                        }
+                    }
+                ],
+                DestinationDatabase = "demo",
+                DestinationCollection = "rows",
+                UpsertKeyField = "id"
+            };
+            var previewSourcePipeline = new PipelineDefinition
+            {
+                Id = Guid.NewGuid(),
+                SourceType = SourceType.PostgreSql,
+                SourceOptions = pipeline.SourceOptions,
+                PostgreSqlSource = new PostgreSqlSourceOptions
+                {
+                    ConnectionProfile = "ReportingDb",
+                    Database = GetDatabaseName(),
+                    Schema = schema,
+                    Table = table
+                }
+            };
+            var previewSourceFactory = new PreviewSourceFactory(
+                new UnexpectedWizardSourceStore(),
+                factory,
+                new PostgreSqlMetadataDiscoveryService(factory),
+                new PostgreSqlDeterministicOrderingResolver());
+            await using var source = await previewSourceFactory.AcquireAsync(
+                previewSourcePipeline,
+                CancellationToken.None)
+                ?? throw new InvalidOperationException("The PostgreSQL preview source was unavailable.");
+            var preview = await new PreviewService(
+                    new PreviewReadyReadinessService(),
+                    new PipelineRowProcessor(
+                        new FieldMappingService(),
+                        new TransformationEngine(new TransformationHandlerRegistry(
+                        [
+                            new ConditionalFilterTransformationHandler(),
+                            new ConvertToIntegerTransformationHandler(),
+                            new DeduplicateTransformationHandler()
+                        ])),
+                        new ValidationEngine(new ValidationHandlerRegistry([new NumericRangeValidationHandler()]))))
+                .PreviewAsync(source, pipeline, CancellationToken.None);
+
+            Assert.Equal(100, preview.Rows.Count);
+            Assert.Equal(96, preview.ValidRowCount);
+            Assert.Equal(2, preview.InvalidRowCount);
+            Assert.Equal(1, preview.FilteredRowCount);
+            Assert.Equal(1, preview.DuplicateRowCount);
+            Assert.Equal(96, preview.FinalValidRows.Count);
+            Assert.Equal(
+                Enumerable.Range(1, 100),
+                preview.Rows.Select(row => Assert.IsType<int>(row.OriginalRow.Values["Source Id"])));
+            Assert.Equal(RowProcessingStatus.Invalid, preview.Rows[0].Status);
+            Assert.Equal(RowProcessingStatus.Valid, preview.Rows[1].Status);
+            Assert.Equal(RowProcessingStatus.Duplicate, preview.Rows[2].Status);
+        }
+        finally
+        {
+            await ExecuteAsync(setupConnection, "DROP SCHEMA IF EXISTS \"DB10 Preview\" CASCADE;");
+        }
+    }
+
     private PostgreSqlConnectionFactory CreateFactory() => new(
         new PostgreSqlConnectionOptions
         {
@@ -238,6 +357,65 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
         new FieldMappingService(),
         new TransformationEngine(new TransformationHandlerRegistry([])),
         new ValidationEngine(new ValidationHandlerRegistry([])));
+
+    private static TransformationRule Rule(
+        int order,
+        TransformationType type,
+        string sourceField,
+        params (string Key, string Value)[] configuration) => new()
+    {
+        Id = Guid.NewGuid(),
+        Order = order,
+        Type = type,
+        SourceField = sourceField,
+        Configuration = configuration.ToDictionary(
+            item => item.Key,
+            item => item.Value,
+            StringComparer.Ordinal)
+    };
+
+    private static TransformationRule DeduplicateRule(int order, string field) => new()
+    {
+        Id = Guid.NewGuid(),
+        Order = order,
+        Type = TransformationType.Deduplicate,
+        Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Fields"] = System.Text.Json.JsonSerializer.Serialize(new[] { field })
+        }
+    };
+
+    private sealed class PreviewReadyReadinessService : IPipelineReadinessService
+    {
+        public PipelineReadinessResult Evaluate(PipelineDefinition pipeline) => new([]);
+
+        public Task<PipelineReadinessResult?> EvaluateAsync(
+            Guid pipelineId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<PipelineReadinessResult?>(new PipelineReadinessResult([]));
+    }
+
+    private sealed class UnexpectedWizardSourceStore : IWizardSourceStore
+    {
+        public Task<bool> ActivateAsync(Guid pipelineId, Guid sourceReferenceId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task DiscardAsync(Guid sourceReferenceId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IWizardSourceLease?> AcquireAsync(
+            Guid pipelineId,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("PostgreSQL preview must not acquire a wizard file source.");
+
+        public Task RemoveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task RetireActiveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
 
     private static async Task ExecuteAsync(DbConnection connection, string commandText)
     {

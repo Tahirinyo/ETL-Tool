@@ -33,7 +33,7 @@ public sealed class PreviewService : IPreviewService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var readiness = _readinessService.Evaluate(pipeline);
+        var readiness = _readinessService.EvaluateForPreview(pipeline);
         if (!readiness.IsReady)
         {
             throw new PipelineNotReadyException(

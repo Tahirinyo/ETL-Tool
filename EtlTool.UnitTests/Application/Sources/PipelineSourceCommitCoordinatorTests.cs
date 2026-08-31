@@ -399,6 +399,35 @@ public sealed class PipelineSourceCommitCoordinatorTests
                 CancellationToken.None));
     }
 
+    [Fact]
+    public async Task CapturePreviewAsync_UsesPreviewSourceFactoryAndOwnsGenericSource()
+    {
+        var store = new RecordingSourceStore();
+        var source = new TrackingLease();
+        var factory = new RecordingPreviewSourceFactory(source);
+        var coordinator = new PipelineSourceCommitCoordinator(store, factory);
+        var pipeline = new PipelineDefinition
+        {
+            Id = Guid.NewGuid(),
+            SourceType = SourceType.PostgreSql,
+            SourceOptions = new SourceOptions()
+        };
+
+        await using (var snapshot = await coordinator.CapturePreviewAsync(
+                         pipeline.Id,
+                         _ => Task.FromResult<PipelineDefinition?>(pipeline),
+                         _ => new PipelineReadinessResult([]),
+                         CancellationToken.None))
+        {
+            Assert.Equal(PipelinePreviewSnapshotStatus.Ready, snapshot.Status);
+            Assert.Same(source, snapshot.Source);
+        }
+
+        Assert.Equal(1, factory.AcquireCallCount);
+        Assert.Equal(0, store.AcquireCallCount);
+        Assert.Equal(1, source.DisposeCallCount);
+    }
+
     private sealed class RecordingSourceStore : IWizardSourceStore
     {
         public bool ActivationSucceeds { get; init; } = true;
@@ -418,6 +447,8 @@ public sealed class PipelineSourceCommitCoordinatorTests
         public List<Guid> RetiredPipelineIds { get; } = [];
 
         public Func<CancellationToken, IWizardSourceLease?>? AcquireSource { get; init; }
+
+        public int AcquireCallCount { get; private set; }
 
         public Task<bool> ActivateAsync(
             Guid pipelineId,
@@ -450,8 +481,11 @@ public sealed class PipelineSourceCommitCoordinatorTests
             Guid pipelineId,
             SourceType sourceType,
             SourceOptions sourceOptions,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(AcquireSource?.Invoke(cancellationToken));
+            CancellationToken cancellationToken)
+        {
+            AcquireCallCount++;
+            return Task.FromResult(AcquireSource?.Invoke(cancellationToken));
+        }
 
         public Task RemoveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -479,6 +513,19 @@ public sealed class PipelineSourceCommitCoordinatorTests
         {
             DisposeCallCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingPreviewSourceFactory(IEtlSource source) : IPreviewSourceFactory
+    {
+        public int AcquireCallCount { get; private set; }
+
+        public Task<IEtlSource?> AcquireAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            AcquireCallCount++;
+            return Task.FromResult<IEtlSource?>(source);
         }
     }
 }

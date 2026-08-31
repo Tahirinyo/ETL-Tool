@@ -88,6 +88,58 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
+    public void EvaluateForPreview_AcceptsConfiguredPostgreSqlWithoutEnablingExecutionReadiness()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.PostgreSql;
+        pipeline.SourceOptions.FirstRowIsHeader = false;
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        };
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
+
+        Assert.True(service.EvaluateForPreview(pipeline).IsReady);
+        Assert.False(service.Evaluate(pipeline).IsReady);
+    }
+
+    [Fact]
+    public void EvaluateForPreview_RejectsMissingPostgreSqlIdentityAndRetainsRemapGuards()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.PostgreSql;
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions { ConnectionProfile = "ReportingDb" };
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Email", TargetField = "email", IsIncluded = true }
+        ];
+        pipeline.TransformationRules =
+        [
+            new TransformationRule { Type = TransformationType.Trim, Order = 1, SourceField = "amount" }
+        ];
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
+
+        var result = service.EvaluateForPreview(pipeline);
+
+        Assert.False(result.IsReady);
+        Assert.Contains(result.Problems, problem => problem.Message.Contains("database is required", StringComparison.Ordinal));
+        Assert.Contains(result.Problems, problem => problem.Message.Contains("schema is required", StringComparison.Ordinal));
+        Assert.Contains(result.Problems, problem => problem.Message.Contains("table is required", StringComparison.Ordinal));
+        Assert.Contains(result.Problems, problem =>
+            problem.Component == "Transformation"
+            && problem.Message.Contains("'amount' is not", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task EvaluateAsync_AggregatesIndependentProblemsInDeterministicOrder()
     {
         var pipeline = ReadyPipeline();

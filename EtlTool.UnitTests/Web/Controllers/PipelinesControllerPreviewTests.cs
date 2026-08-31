@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -95,6 +96,23 @@ public sealed class PipelinesControllerPreviewTests
         Assert.DoesNotContain("sensitive", model.FailureMessage, StringComparison.OrdinalIgnoreCase);
         Assert.True(sourceStore.LeaseDisposed);
         Assert.Equal(1, sourceStore.LeaseDisposeCallCount);
+    }
+
+    [Fact]
+    public async Task Preview_PostgreSqlAccessFailureReturnsSafeServerErrorAndDisposesLease()
+    {
+        var pipeline = ReadyPipeline();
+        var sourceStore = new RecordingWizardSourceStore();
+        var previewService = new RecordingPreviewService(
+            (_, _, _) => throw new PostgreSqlConnectionAccessException());
+        var controller = Controller(pipeline, Ready(), sourceStore, previewService);
+
+        var result = await controller.Preview(pipeline.Id, CancellationToken.None);
+
+        var model = Assert.IsType<PipelinePreviewViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(StatusCodes.Status500InternalServerError, controller.Response.StatusCode);
+        Assert.DoesNotContain("PostgreSQL", model.FailureMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sourceStore.LeaseDisposed);
     }
 
     [Fact]
