@@ -210,7 +210,7 @@ public sealed class PipelinesControllerTests
     }
 
     [Fact]
-    public async Task Edit_ValidPostPreservesHiddenAggregateStateAndRedirects()
+    public async Task Edit_MissingMongoSavedConnectionPreservesHiddenAggregateStateWithoutUpdating()
     {
         var id = Guid.NewGuid();
         var sourceOptions = new SourceOptions
@@ -268,28 +268,27 @@ public sealed class PipelinesControllerTests
 
         var result = await controller.Edit(id, model, cancellationSource.Token);
 
-        var redirect = Assert.IsType<RedirectToActionResult>(result);
-        Assert.Equal(nameof(PipelinesController.Edit), redirect.ActionName);
-        Assert.Equal(id, redirect.RouteValues!["id"]);
-        Assert.Equal("destination", redirect.Fragment);
-        Assert.Same(existing, service.UpdatedPipeline);
-        Assert.Equal(id, service.UpdatedId);
-        Assert.Equal("After", existing.Name);
-        Assert.Equal("After description", existing.Description);
+        Assert.IsType<ViewResult>(result);
+        Assert.Null(service.UpdatedPipeline);
+        Assert.Equal(Guid.Empty, service.UpdatedId);
+        Assert.Contains(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors,
+            error => error.ErrorMessage == "Choose a saved MongoDB connection.");
+        Assert.Equal("Before", existing.Name);
+        Assert.Equal("Before description", existing.Description);
         Assert.Same(sourceOptions, existing.SourceOptions);
         Assert.Same(expectedSchema, existing.ExpectedSchema);
         Assert.Same(mappings, existing.FieldMappings);
         Assert.Same(transformations, existing.TransformationRules);
         Assert.Same(validations, existing.ValidationRules);
-        Assert.Equal("warehouse", existing.DestinationDatabase);
-        Assert.Equal("curatedCustomers", existing.DestinationCollection);
+        Assert.Equal("analytics", existing.DestinationDatabase);
+        Assert.Equal("customers", existing.DestinationCollection);
         Assert.Equal("customerId", existing.UpsertKeyField);
         Assert.Equal(cancellationSource.Token, service.GetByIdCancellationTokens.Single());
-        Assert.Equal(cancellationSource.Token, service.UpdateCancellationToken);
+        Assert.Equal(default, service.UpdateCancellationToken);
     }
 
     [Fact]
-    public async Task Edit_ValidMongoDestinationAndMappedUpsertKeyAreCheckedAndSaved()
+    public async Task Edit_MongoDestinationWithoutSavedConnectionIsRejectedBeforeLegacyTargetValidation()
     {
         var id = Guid.NewGuid();
         var pipeline = new PipelineDefinition
@@ -315,20 +314,20 @@ public sealed class PipelinesControllerTests
             UpsertKeyField = "email"
         }, CancellationToken.None);
 
-        Assert.IsType<RedirectToActionResult>(result);
-        Assert.Equal(new MongoTarget("warehouse", "customers"), targetAccess.ValidatedTarget);
-        Assert.Equal(new MongoTarget("warehouse", "customers"), targetAccess.AccessibilityCheckedTarget);
-        Assert.Equal(1, service.UpdateCallCount);
-        Assert.Equal("warehouse", pipeline.DestinationDatabase);
-        Assert.Equal("customers", pipeline.DestinationCollection);
-        Assert.Equal("email", pipeline.UpsertKeyField);
+        Assert.IsType<ViewResult>(result);
+        Assert.Contains(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors,
+            error => error.ErrorMessage == "Choose a saved MongoDB connection.");
+        Assert.Null(targetAccess.ValidatedTarget);
+        Assert.Null(targetAccess.AccessibilityCheckedTarget);
+        Assert.Equal(0, service.UpdateCallCount);
+        Assert.Equal(string.Empty, pipeline.DestinationDatabase);
     }
 
     [Theory]
     [InlineData("admin", "The configured destination database cannot be used as an ETL target.")]
     [InlineData("pipeline_metadata", "The configured destination database cannot be used as an ETL target.")]
     [InlineData("invalid/name", "The configured MongoDB destination name is not valid.")]
-    public async Task Edit_ProtectedMetadataOrInvalidMongoDestinationIsNotPersisted(
+    public async Task Edit_MissingMongoSavedConnectionIsRejectedBeforeLegacyTargetValidation(
         string databaseName,
         string rejectionMessage)
     {
@@ -361,16 +360,15 @@ public sealed class PipelinesControllerTests
         var result = await controller.Edit(id, model, CancellationToken.None);
 
         Assert.Same(model, Assert.IsType<ViewResult>(result).Model);
-        Assert.Contains(
-            controller.ModelState[string.Empty]!.Errors,
-            error => error.ErrorMessage == rejectionMessage);
+        Assert.Contains(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors,
+            error => error.ErrorMessage == "Choose a saved MongoDB connection.");
         Assert.Null(targetAccess.AccessibilityCheckedTarget);
         Assert.Equal(0, service.UpdateCallCount);
         Assert.Equal(string.Empty, pipeline.DestinationDatabase);
     }
 
     [Fact]
-    public async Task Edit_StaleOrMissingUpsertKeyIsNotPersisted()
+    public async Task Edit_MissingMongoSavedConnectionIsRejectedBeforeUpsertKeyValidation()
     {
         var id = Guid.NewGuid();
         var pipeline = new PipelineDefinition
@@ -403,15 +401,14 @@ public sealed class PipelinesControllerTests
         }, CancellationToken.None);
 
         Assert.IsType<ViewResult>(result);
-        Assert.Contains(
-            controller.ModelState[nameof(PipelineFormViewModel.UpsertKeyField)]!.Errors,
-            error => error.ErrorMessage == "Choose an included mapped output field as the upsert key.");
+        Assert.Contains(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors,
+            error => error.ErrorMessage == "Choose a saved MongoDB connection.");
         Assert.Null(targetAccess.AccessibilityCheckedTarget);
         Assert.Equal(0, service.UpdateCallCount);
     }
 
     [Fact]
-    public async Task Edit_IncompleteDestinationIsNotPersisted()
+    public async Task Edit_MissingMongoSavedConnectionIsRejectedBeforeDestinationValidation()
     {
         var id = Guid.NewGuid();
         var pipeline = new PipelineDefinition
@@ -441,15 +438,14 @@ public sealed class PipelinesControllerTests
         }, CancellationToken.None);
 
         Assert.IsType<ViewResult>(result);
-        Assert.Contains(
-            controller.ModelState[nameof(PipelineFormViewModel.DestinationCollection)]!.Errors,
-            error => error.ErrorMessage == "The destination collection must be configured.");
+        Assert.Contains(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors,
+            error => error.ErrorMessage == "Choose a saved MongoDB connection.");
         Assert.Null(targetAccess.AccessibilityCheckedTarget);
         Assert.Equal(0, service.UpdateCallCount);
     }
 
     [Fact]
-    public async Task Edit_MongoAccessFailureReturnsSafeMessageWithoutPersisting()
+    public async Task Edit_MissingMongoSavedConnectionIsRejectedBeforeLegacyAccess()
     {
         var id = Guid.NewGuid();
         var pipeline = new PipelineDefinition
@@ -476,9 +472,8 @@ public sealed class PipelinesControllerTests
         }, CancellationToken.None);
 
         Assert.IsType<ViewResult>(result);
-        var message = Assert.Single(controller.ModelState[string.Empty]!.Errors).ErrorMessage;
-        Assert.Equal("The MongoDB destination could not be accessed. Check the destination and try again.", message);
-        Assert.DoesNotContain("mongodb://", message, StringComparison.OrdinalIgnoreCase);
+        var message = Assert.Single(controller.ModelState[nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId)]!.Errors).ErrorMessage;
+        Assert.Equal("Choose a saved MongoDB connection.", message);
         Assert.Equal(0, service.UpdateCallCount);
     }
 

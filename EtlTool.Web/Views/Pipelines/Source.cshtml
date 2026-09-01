@@ -40,20 +40,17 @@
         </div>
 
         <div id="postgresql-source-fields">
-            <input asp-for="LoadedPostgreSqlConnectionProfile" type="hidden" />
-            <input asp-for="LoadedPostgreSqlDatabase" type="hidden" />
-            <input asp-for="LoadedPostgreSqlSchema" type="hidden" />
             <div class="mb-3">
-                <label asp-for="PostgreSqlConnectionProfile" class="form-label">Connection profile</label>
-                <select asp-for="PostgreSqlConnectionProfile" class="form-select">
-                    <option value="">Select a connection profile</option>
-                    @foreach (var profile in Model.PostgreSqlConnectionProfiles) { <option value="@profile">@profile</option> }
+                <label asp-for="PostgreSqlSavedConnectionId" class="form-label">Saved connection</label>
+                <select asp-for="PostgreSqlSavedConnectionId" class="form-select" id="postgresql-connection">
+                    <option value="">Select a saved PostgreSQL connection</option>
+                    @foreach (var connection in Model.PostgreSqlSavedConnections) { <option value="@connection.Id">@connection.Name</option> }
                 </select>
-                <span asp-validation-for="PostgreSqlConnectionProfile" class="text-danger"></span>
+                <span asp-validation-for="PostgreSqlSavedConnectionId" class="text-danger"></span>
             </div>
             <div class="mb-3">
                 <label asp-for="PostgreSqlDatabase" class="form-label">Database</label>
-                <select asp-for="PostgreSqlDatabase" class="form-select" disabled="@(Model.PostgreSqlDatabases.Count == 0)">
+                <select asp-for="PostgreSqlDatabase" class="form-select" id="postgresql-database" disabled="@(Model.PostgreSqlDatabases.Count == 0)">
                     <option value="">Select a database</option>
                     @foreach (var database in Model.PostgreSqlDatabases) { <option value="@database">@database</option> }
                 </select>
@@ -61,7 +58,7 @@
             </div>
             <div class="mb-3">
                 <label asp-for="PostgreSqlSchema" class="form-label">Schema</label>
-                <select asp-for="PostgreSqlSchema" class="form-select" disabled="@(Model.PostgreSqlSchemas.Count == 0)">
+                <select asp-for="PostgreSqlSchema" class="form-select" id="postgresql-schema" disabled="@(Model.PostgreSqlSchemas.Count == 0)">
                     <option value="">Select a schema</option>
                     @foreach (var schema in Model.PostgreSqlSchemas) { <option value="@schema">@schema</option> }
                 </select>
@@ -69,27 +66,27 @@
             </div>
             <div class="mb-3">
                 <label asp-for="PostgreSqlTable" class="form-label">Table</label>
-                <select asp-for="PostgreSqlTable" class="form-select" disabled="@(Model.PostgreSqlTables.Count == 0)">
+                <select asp-for="PostgreSqlTable" class="form-select" id="postgresql-table" disabled="@(Model.PostgreSqlTables.Count == 0)">
                     <option value="">Select a table</option>
                     @foreach (var table in Model.PostgreSqlTables) { <option value="@table">@table</option> }
                 </select>
                 <span asp-validation-for="PostgreSqlTable" class="text-danger"></span>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <button type="submit" class="btn btn-outline-primary" name="postgreSqlAction" value="refresh">Load options</button>
                 <button type="submit" class="btn btn-primary" name="postgreSqlAction" value="configure">Inspect table and configure mapping</button>
             </div>
         </div>
         <div id="mongodb-source-fields">
-            <input asp-for="LoadedMongoDbDatabase" type="hidden" />
             <div class="mb-3">
-                <label class="form-label">Connection</label>
-                <input class="form-control" value="Configured application MongoDB connection" readonly aria-describedby="mongodb-connection-help" />
-                <div id="mongodb-connection-help" class="form-text">Connection credentials are supplied by application configuration and are not stored with this pipeline.</div>
+                <label asp-for="MongoDbSavedConnectionId" class="form-label">Saved connection</label>
+                <select asp-for="MongoDbSavedConnectionId" class="form-select" id="mongodb-connection">
+                    <option value="">Select a saved MongoDB connection</option>
+                    @foreach (var connection in Model.MongoDbSavedConnections) { <option value="@connection.Id">@connection.Name</option> }
+                </select>
             </div>
             <div class="mb-3">
                 <label asp-for="MongoDbDatabase" class="form-label">Database</label>
-                <select asp-for="MongoDbDatabase" class="form-select" disabled="@(Model.MongoDbDatabases.Count == 0)">
+                <select asp-for="MongoDbDatabase" class="form-select" id="mongodb-database" disabled="@(Model.MongoDbDatabases.Count == 0)">
                     <option value="">Select a database</option>
                     @foreach (var database in Model.MongoDbDatabases) { <option value="@database">@database</option> }
                 </select>
@@ -97,14 +94,13 @@
             </div>
             <div class="mb-3">
                 <label asp-for="MongoDbCollection" class="form-label">Collection</label>
-                <select asp-for="MongoDbCollection" class="form-select" disabled="@(Model.MongoDbCollections.Count == 0)">
+                <select asp-for="MongoDbCollection" class="form-select" id="mongodb-collection" disabled="@(Model.MongoDbCollections.Count == 0)">
                     <option value="">Select a collection</option>
                     @foreach (var collection in Model.MongoDbCollections) { <option value="@collection">@collection</option> }
                 </select>
                 <span asp-validation-for="MongoDbCollection" class="text-danger"></span>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <button type="submit" class="btn btn-outline-primary" name="mongoDbAction" value="refresh">Load options</button>
                 <button type="submit" class="btn btn-primary" name="mongoDbAction" value="configure">Inspect collection and configure mapping</button>
             </div>
         </div>
@@ -197,5 +193,35 @@
                 element.disabled = !isMongoDb || element.options.length <= 1);
         };
         type.addEventListener('change', sync); sync();
+
+        const escapeHtml = value => String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+        const request = async (url, select, parent, clear) => {
+            clear.forEach(item => { item.innerHTML = '<option value="">Select an option</option>'; item.disabled = true; });
+            if (!parent.value) return;
+            const controller = new AbortController();
+            select._request?.abort(); select._request = controller;
+            select.disabled = true;
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                const data = await response.json();
+                if (controller.signal.aborted || !response.ok || parent.value !== new URL(url, location.origin).searchParams.get('connectionId')) return;
+                select.innerHTML = '<option value="">Select an option</option>' + data.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
+                select.disabled = false;
+            } catch (error) {
+                if (error.name !== 'AbortError') select.innerHTML = '<option value="">Metadata is unavailable</option>';
+            }
+        };
+        const pgConnection = document.getElementById('postgresql-connection');
+        const pgDatabase = document.getElementById('postgresql-database');
+        const pgSchema = document.getElementById('postgresql-schema');
+        const pgTable = document.getElementById('postgresql-table');
+        pgConnection.addEventListener('change', () => request(`/Pipelines/Discovery/PostgreSql/Databases?connectionId=${encodeURIComponent(pgConnection.value)}`, pgDatabase, pgConnection, [pgSchema, pgTable]));
+        pgDatabase.addEventListener('change', () => request(`/Pipelines/Discovery/PostgreSql/Schemas?connectionId=${encodeURIComponent(pgConnection.value)}&database=${encodeURIComponent(pgDatabase.value)}`, pgSchema, pgConnection, [pgTable]));
+        pgSchema.addEventListener('change', () => request(`/Pipelines/Discovery/PostgreSql/Tables?connectionId=${encodeURIComponent(pgConnection.value)}&database=${encodeURIComponent(pgDatabase.value)}&schema=${encodeURIComponent(pgSchema.value)}`, pgTable, pgConnection, []));
+        const mongoConnection = document.getElementById('mongodb-connection');
+        const mongoDatabase = document.getElementById('mongodb-database');
+        const mongoCollection = document.getElementById('mongodb-collection');
+        mongoConnection.addEventListener('change', () => request(`/Pipelines/Discovery/MongoDb/Databases?connectionId=${encodeURIComponent(mongoConnection.value)}`, mongoDatabase, mongoConnection, [mongoCollection]));
+        mongoDatabase.addEventListener('change', () => request(`/Pipelines/Discovery/MongoDb/Collections?connectionId=${encodeURIComponent(mongoConnection.value)}&database=${encodeURIComponent(mongoDatabase.value)}`, mongoCollection, mongoConnection, []));
     </script>
 }

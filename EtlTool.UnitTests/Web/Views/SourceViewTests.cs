@@ -14,8 +14,12 @@ public sealed class SourceViewTests
         Assert.Contains("id=\"mongodb-source-fields\"", view);
         Assert.Contains("asp-for=\"MongoDbDatabase\"", view);
         Assert.Contains("asp-for=\"MongoDbCollection\"", view);
-        Assert.Contains("Configured application MongoDB connection", view);
-        Assert.Contains("name=\"mongoDbAction\"", view);
+        Assert.Contains("asp-for=\"MongoDbSavedConnectionId\"", view);
+        Assert.Contains("asp-for=\"PostgreSqlSavedConnectionId\"", view);
+        Assert.Contains("/Pipelines/Discovery/MongoDb/Databases", view);
+        Assert.Contains("/Pipelines/Discovery/PostgreSql/Databases", view);
+        Assert.DoesNotContain("Configured application MongoDB connection", view);
+        Assert.DoesNotContain("Load options", view);
         Assert.DoesNotContain("asp-for=\"DestinationDatabase\"", view);
         Assert.DoesNotContain("asp-for=\"DestinationCollection\"", view);
     }

@@ -1,3 +1,5 @@
+using EtlTool.Application.Connections;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Pipelines;
 using EtlTool.Domain.Entities;
@@ -11,6 +13,8 @@ namespace EtlTool.UnitTests.Web.Controllers;
 
 public sealed class PipelinesControllerPostgreSqlDestinationTests
 {
+    private static readonly Guid SavedConnectionId = Guid.Parse("37a127a1-1cf1-4381-9827-922f71261621");
+
     [Fact]
     public async Task Edit_PostgreSqlDestinationPersistsValidatedIdentityMappingAndUpsertKey()
     {
@@ -27,7 +31,8 @@ public sealed class PipelinesControllerPostgreSqlDestinationTests
         Assert.Equal(DestinationType.PostgreSql, saved.DestinationType);
         Assert.Empty(saved.DestinationDatabase);
         Assert.Empty(saved.DestinationCollection);
-        Assert.Equal("WarehouseDb", saved.PostgreSqlDestination!.ConnectionProfile);
+        Assert.Equal(SavedConnectionId, saved.PostgreSqlDestination!.SavedConnectionId);
+        Assert.Empty(saved.PostgreSqlDestination.ConnectionProfile);
         Assert.Equal("warehouse", saved.PostgreSqlDestination.Database);
         Assert.Equal("import", saved.PostgreSqlDestination.Schema);
         Assert.Equal("customers", saved.PostgreSqlDestination.Table);
@@ -71,11 +76,13 @@ public sealed class PipelinesControllerPostgreSqlDestinationTests
 
     private static PipelinesController CreateController(
         PipelineServiceStub service,
-        Discovery? discovery = null) => new(
+        Discovery? discovery = null)
+    {
+        var effectiveDiscovery = discovery ?? new Discovery();
+        return new PipelinesController(
             service,
-            postgreSqlMetadataDiscoveryService: discovery ?? new Discovery(),
-            postgreSqlConnectionProfileCatalog: new Profiles(),
-            postgreSqlDestinationAccessService: discovery ?? new Discovery());
+            savedMetadataDiscoveryService: new SavedDiscovery(effectiveDiscovery));
+    }
 
     private static PipelineDefinition Pipeline() => new()
     {
@@ -90,6 +97,7 @@ public sealed class PipelinesControllerPostgreSqlDestinationTests
     {
         Name = "Customer import",
         DestinationType = DestinationType.PostgreSql,
+        PostgreSqlDestinationSavedConnectionId = SavedConnectionId,
         PostgreSqlConnectionProfile = "WarehouseDb",
         PostgreSqlDatabase = "warehouse",
         PostgreSqlSchema = "import",
@@ -168,5 +176,37 @@ public sealed class PipelinesControllerPostgreSqlDestinationTests
         private Task Access(bool value) => ThrowAccess
             ? Task.FromException(new PostgreSqlConnectionAccessException())
             : Task.CompletedTask;
+    }
+
+    private sealed class SavedDiscovery(Discovery discovery) : ISavedConnectionMetadataDiscoveryService
+    {
+        public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverPostgreSqlDatabasesAsync(Guid id, CancellationToken token) =>
+            discovery.DiscoverDatabasesAsync(string.Empty, token);
+
+        public Task<IReadOnlyList<PostgreSqlSchemaMetadata>> DiscoverPostgreSqlSchemasAsync(Guid id, string database, CancellationToken token) =>
+            discovery.DiscoverSchemasAsync(string.Empty, database, token);
+
+        public Task<IReadOnlyList<PostgreSqlTableMetadata>> DiscoverPostgreSqlTablesAsync(Guid id, string database, string schema, CancellationToken token) =>
+            discovery.DiscoverTablesAsync(string.Empty, database, schema, token);
+
+        public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverPostgreSqlColumnsAsync(Guid id, string database, string schema, string table, CancellationToken token) =>
+            string.Equals(table, "removed", StringComparison.Ordinal)
+                ? Task.FromException<IReadOnlyList<PostgreSqlColumnMetadata>>(new PostgreSqlMetadataObjectNotFoundException("table"))
+                : discovery.DiscoverColumnsAsync(string.Empty, database, schema, table, token);
+
+        public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverPostgreSqlKeyConstraintsAsync(Guid id, string database, string schema, string table, CancellationToken token) =>
+            discovery.DiscoverKeyConstraintsAsync(string.Empty, database, schema, table, token);
+
+        public Task EnsurePostgreSqlDestinationAccessibleAsync(Guid id, string database, string schema, string table, CancellationToken token) =>
+            discovery.EnsureDestinationAccessibleAsync(string.Empty, database, schema, table, token);
+
+        public Task<IReadOnlyList<MongoDatabaseMetadata>> DiscoverMongoDatabasesAsync(Guid id, CancellationToken token) =>
+            Task.FromResult<IReadOnlyList<MongoDatabaseMetadata>>([]);
+
+        public Task<IReadOnlyList<MongoCollectionMetadata>> DiscoverMongoCollectionsAsync(Guid id, string database, CancellationToken token) =>
+            Task.FromResult<IReadOnlyList<MongoCollectionMetadata>>([]);
+
+        public Task<IReadOnlyList<SourceFieldDefinition>> InferMongoSchemaAsync(Guid id, string database, string collection, CancellationToken token) =>
+            Task.FromResult<IReadOnlyList<SourceFieldDefinition>>([]);
     }
 }

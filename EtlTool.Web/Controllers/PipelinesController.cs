@@ -1,4 +1,5 @@
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.Connections;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Sources;
@@ -32,6 +33,8 @@ public sealed class PipelinesController : Controller
     private readonly IMongoSourceMetadataDiscoveryService? _mongoSourceMetadataDiscoveryService;
     private readonly IMongoSourceSchemaInferenceService? _mongoSourceSchemaInferenceService;
     private readonly IPostgreSqlDestinationAccessService? _postgreSqlDestinationAccessService;
+    private readonly ISavedDatabaseConnectionService? _savedConnectionService;
+    private readonly ISavedConnectionMetadataDiscoveryService? _savedMetadataDiscoveryService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -50,7 +53,9 @@ public sealed class PipelinesController : Controller
         PostgreSqlSourceSchemaConverter? postgreSqlSourceSchemaConverter = null,
         IMongoSourceMetadataDiscoveryService? mongoSourceMetadataDiscoveryService = null,
         IMongoSourceSchemaInferenceService? mongoSourceSchemaInferenceService = null,
-        IPostgreSqlDestinationAccessService? postgreSqlDestinationAccessService = null)
+        IPostgreSqlDestinationAccessService? postgreSqlDestinationAccessService = null,
+        ISavedDatabaseConnectionService? savedConnectionService = null,
+        ISavedConnectionMetadataDiscoveryService? savedMetadataDiscoveryService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -70,6 +75,8 @@ public sealed class PipelinesController : Controller
         _mongoSourceMetadataDiscoveryService = mongoSourceMetadataDiscoveryService;
         _mongoSourceSchemaInferenceService = mongoSourceSchemaInferenceService;
         _postgreSqlDestinationAccessService = postgreSqlDestinationAccessService;
+        _savedConnectionService = savedConnectionService;
+        _savedMetadataDiscoveryService = savedMetadataDiscoveryService;
     }
 
     public async Task<IActionResult> Mapping(
@@ -184,8 +191,74 @@ public sealed class PipelinesController : Controller
     {
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
         if (pipeline is null) return NotFound();
-        return View(CreateSourceModel(pipeline));
+        var model = CreateSourceModel(pipeline);
+        await PopulateSavedConnectionsAsync(model, cancellationToken);
+        await PopulateSavedSourceMetadataAsync(model, cancellationToken);
+        return View(model);
     }
+
+    [HttpGet("/Pipelines/Discovery/PostgreSql/Databases")]
+    public Task<IActionResult> PostgreSqlDatabases(Guid connectionId, CancellationToken cancellationToken) =>
+        DiscoverAsync(connectionId, cancellationToken, async id =>
+            (await SavedDiscovery().DiscoverPostgreSqlDatabasesAsync(id, cancellationToken)).Select(value => new { value.Name }));
+
+    [HttpGet("/Pipelines/Discovery/PostgreSql/Schemas")]
+    public Task<IActionResult> PostgreSqlSchemas(Guid connectionId, string database, CancellationToken cancellationToken) =>
+        DiscoverAsync(connectionId, cancellationToken, async id =>
+            (await SavedDiscovery().DiscoverPostgreSqlSchemasAsync(id, database, cancellationToken)).Select(value => new { value.Name }));
+
+    [HttpGet("/Pipelines/Discovery/PostgreSql/Tables")]
+    public Task<IActionResult> PostgreSqlTables(Guid connectionId, string database, string schema, CancellationToken cancellationToken) =>
+        DiscoverAsync(connectionId, cancellationToken, async id =>
+            (await SavedDiscovery().DiscoverPostgreSqlTablesAsync(id, database, schema, cancellationToken)).Select(value => new { value.Name }));
+
+    [HttpGet("/Pipelines/Discovery/PostgreSql/TableMetadata")]
+    public Task<IActionResult> PostgreSqlTableMetadata(Guid connectionId, string database, string schema, string table, CancellationToken cancellationToken) =>
+        DiscoverAsync<PostgreSqlMetadataResponse>(connectionId, cancellationToken, async id =>
+        {
+            var service = SavedDiscovery();
+            var columns = await service.DiscoverPostgreSqlColumnsAsync(id, database, schema, table, cancellationToken);
+            var constraints = await service.DiscoverPostgreSqlKeyConstraintsAsync(id, database, schema, table, cancellationToken);
+            return new[] { new PostgreSqlMetadataResponse(
+                columns.Select(column => new PostgreSqlDestinationColumnViewModel
+                {
+                    Name = column.Name,
+                    NativeType = column.NativeType,
+                    IsNullable = column.IsNullable
+                }).ToArray(),
+                PostgreSqlDestinationConfigurationValidator.GetEligibleSingleColumnKeyColumns(constraints)) };
+        });
+
+    [HttpGet("/Pipelines/Discovery/MongoDb/Databases")]
+    public Task<IActionResult> MongoDbDatabases(Guid connectionId, CancellationToken cancellationToken) =>
+        DiscoverAsync(connectionId, cancellationToken, async id =>
+            (await SavedDiscovery().DiscoverMongoDatabasesAsync(id, cancellationToken)).Select(value => new { value.Name }));
+
+    [HttpGet("/Pipelines/Discovery/MongoDb/Collections")]
+    public Task<IActionResult> MongoDbCollections(Guid connectionId, string database, CancellationToken cancellationToken) =>
+        DiscoverAsync(connectionId, cancellationToken, async id =>
+            (await SavedDiscovery().DiscoverMongoCollectionsAsync(id, database, cancellationToken)).Select(value => new { value.Name }));
+
+    private ISavedConnectionMetadataDiscoveryService SavedDiscovery() => _savedMetadataDiscoveryService
+        ?? throw new InvalidOperationException("Saved connection discovery is not configured.");
+
+    private async Task<IActionResult> DiscoverAsync<T>(Guid connectionId, CancellationToken cancellationToken, Func<Guid, Task<IEnumerable<T>>> discover)
+    {
+        if (connectionId == Guid.Empty) return BadRequest(new { error = "Choose a saved connection." });
+        try
+        {
+            return Json(await discover(connectionId));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            return BadRequest(new { error = "The selected saved connection or database object is unavailable." });
+        }
+    }
+
+    private sealed record PostgreSqlMetadataResponse(
+        IReadOnlyList<PostgreSqlDestinationColumnViewModel> Columns,
+        IReadOnlyList<string> UpsertKeyColumns);
 
     [HttpPost]
     [ValidateAntiForgeryToken]
@@ -477,6 +550,7 @@ public sealed class PipelinesController : Controller
             Delimiter = pipeline.SourceOptions.Delimiter ?? CsvDelimiter.Comma,
             WorksheetName = pipeline.SourceOptions.WorksheetName,
             PostgreSqlConnectionProfile = postgreSqlSource?.ConnectionProfile,
+            PostgreSqlSavedConnectionId = postgreSqlSource?.SavedConnectionId,
             PostgreSqlDatabase = postgreSqlSource?.Database,
             PostgreSqlSchema = postgreSqlSource?.Schema,
             PostgreSqlTable = postgreSqlSource?.Table,
@@ -484,11 +558,92 @@ public sealed class PipelinesController : Controller
             LoadedPostgreSqlDatabase = postgreSqlSource?.Database,
             LoadedPostgreSqlSchema = postgreSqlSource?.Schema,
             MongoDbDatabase = pipeline.MongoDbSource?.Database,
+            MongoDbSavedConnectionId = pipeline.MongoDbSource?.SavedConnectionId,
             MongoDbCollection = pipeline.MongoDbSource?.Collection,
             LoadedMongoDbDatabase = pipeline.MongoDbSource?.Database
         };
         PopulatePostgreSqlConnectionProfiles(model);
         return model;
+    }
+
+    private async Task PopulateSavedConnectionsAsync(SourceUploadViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedConnectionService is null) return;
+        model.PostgreSqlSavedConnections = (await _savedConnectionService
+                .ListAsync(DatabaseProviderType.PostgreSql, cancellationToken))
+            .Select(EtlTool.Web.Models.Connections.SavedConnectionListItemViewModel.From).ToList();
+        model.MongoDbSavedConnections = (await _savedConnectionService
+                .ListAsync(DatabaseProviderType.MongoDb, cancellationToken))
+            .Select(EtlTool.Web.Models.Connections.SavedConnectionListItemViewModel.From).ToList();
+    }
+
+    private async Task PopulateSavedConnectionsAsync(PipelineFormViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedConnectionService is null) return;
+        model.PostgreSqlSavedConnections = (await _savedConnectionService
+                .ListAsync(DatabaseProviderType.PostgreSql, cancellationToken))
+            .Select(EtlTool.Web.Models.Connections.SavedConnectionListItemViewModel.From).ToList();
+        model.MongoDbSavedConnections = (await _savedConnectionService
+                .ListAsync(DatabaseProviderType.MongoDb, cancellationToken))
+            .Select(EtlTool.Web.Models.Connections.SavedConnectionListItemViewModel.From).ToList();
+    }
+
+    private async Task PopulateSavedSourceMetadataAsync(SourceUploadViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedMetadataDiscoveryService is null) return;
+        try
+        {
+            if (model.PostgreSqlSavedConnectionId is Guid postgreSqlConnectionId)
+            {
+                model.PostgreSqlDatabases = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlDatabasesAsync(postgreSqlConnectionId, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.PostgreSqlDatabase))
+                    model.PostgreSqlSchemas = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlSchemasAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.PostgreSqlDatabase) && !string.IsNullOrWhiteSpace(model.PostgreSqlSchema))
+                    model.PostgreSqlTables = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlTablesAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, model.PostgreSqlSchema, cancellationToken)).Select(value => value.Name).ToList();
+            }
+            if (model.MongoDbSavedConnectionId is Guid mongoConnectionId)
+            {
+                model.MongoDbDatabases = (await _savedMetadataDiscoveryService.DiscoverMongoDatabasesAsync(mongoConnectionId, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.MongoDbDatabase))
+                    model.MongoDbCollections = (await _savedMetadataDiscoveryService.DiscoverMongoCollectionsAsync(mongoConnectionId, model.MongoDbDatabase, cancellationToken)).Select(value => value.Name).ToList();
+            }
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            // The persisted logical selection remains visible; a later submit will revalidate it.
+        }
+    }
+
+    private async Task PopulateSavedDestinationMetadataAsync(PipelineFormViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedMetadataDiscoveryService is null) return;
+        try
+        {
+            if (model.MongoDbDestinationSavedConnectionId is Guid mongoConnectionId)
+            {
+                model.MongoDbDatabases = (await _savedMetadataDiscoveryService.DiscoverMongoDatabasesAsync(mongoConnectionId, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.DestinationDatabase))
+                    model.MongoDbCollections = (await _savedMetadataDiscoveryService.DiscoverMongoCollectionsAsync(mongoConnectionId, model.DestinationDatabase, cancellationToken)).Select(value => value.Name).ToList();
+            }
+            if (model.PostgreSqlDestinationSavedConnectionId is Guid postgreSqlConnectionId)
+            {
+                model.PostgreSqlDatabases = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlDatabasesAsync(postgreSqlConnectionId, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.PostgreSqlDatabase))
+                    model.PostgreSqlSchemas = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlSchemasAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.PostgreSqlDatabase) && !string.IsNullOrWhiteSpace(model.PostgreSqlSchema))
+                    model.PostgreSqlTables = (await _savedMetadataDiscoveryService.DiscoverPostgreSqlTablesAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, model.PostgreSqlSchema, cancellationToken)).Select(value => value.Name).ToList();
+                if (!string.IsNullOrWhiteSpace(model.PostgreSqlDatabase) && !string.IsNullOrWhiteSpace(model.PostgreSqlSchema) && !string.IsNullOrWhiteSpace(model.PostgreSqlTable))
+                {
+                    var columns = await _savedMetadataDiscoveryService.DiscoverPostgreSqlColumnsAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, model.PostgreSqlSchema, model.PostgreSqlTable, cancellationToken);
+                    var constraints = await _savedMetadataDiscoveryService.DiscoverPostgreSqlKeyConstraintsAsync(postgreSqlConnectionId, model.PostgreSqlDatabase, model.PostgreSqlSchema, model.PostgreSqlTable, cancellationToken);
+                    PopulatePostgreSqlDestinationMetadata(model, columns, constraints);
+                }
+            }
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            // Do not expose provider details while rendering an older saved pipeline.
+        }
     }
 
     private async Task<IActionResult> ConfigurePostgreSqlSourceAsync(
@@ -498,6 +653,10 @@ public sealed class PipelinesController : Controller
         string? postgreSqlAction,
         CancellationToken cancellationToken)
     {
+        if (model.PostgreSqlSavedConnectionId.HasValue)
+        {
+            return await ConfigureSavedPostgreSqlSourceAsync(id, pipeline, model, cancellationToken);
+        }
         NormalizePostgreSqlSelection(model);
         PopulatePostgreSqlConnectionProfiles(model);
 
@@ -621,6 +780,7 @@ public sealed class PipelinesController : Controller
                 Schema = model.PostgreSqlSchema!,
                 Table = model.PostgreSqlTable!
             };
+            ApplyDerivedDestination(replacement);
             replacement.ExpectedSchema = CopySchema(schema);
             replacement.FieldMappings = ReconcileMappings(pipeline, schema);
             replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
@@ -653,6 +813,153 @@ public sealed class PipelinesController : Controller
             return PostgreSqlSourceView(model);
         }
     }
+
+    private async Task<IActionResult> ConfigureSavedPostgreSqlSourceAsync(
+        Guid id, PipelineDefinition pipeline, SourceUploadViewModel model, CancellationToken cancellationToken)
+    {
+        await PopulateSavedConnectionsAsync(model, cancellationToken);
+        if (_savedMetadataDiscoveryService is null)
+        {
+            ModelState.AddModelError(string.Empty, "Saved connection discovery is not available.");
+            return View("Source", model);
+        }
+
+        if (model.PostgreSqlSavedConnectionId == Guid.Empty
+            || string.IsNullOrWhiteSpace(model.PostgreSqlDatabase)
+            || string.IsNullOrWhiteSpace(model.PostgreSqlSchema)
+            || string.IsNullOrWhiteSpace(model.PostgreSqlTable))
+        {
+            ModelState.AddModelError(string.Empty, "Choose a saved PostgreSQL connection, database, schema, and table.");
+            return View("Source", model);
+        }
+
+        try
+        {
+            var columns = await _savedMetadataDiscoveryService.DiscoverPostgreSqlColumnsAsync(
+                model.PostgreSqlSavedConnectionId.Value, model.PostgreSqlDatabase, model.PostgreSqlSchema,
+                model.PostgreSqlTable, cancellationToken);
+            var schema = _postgreSqlSourceSchemaConverter.Convert(columns);
+            if (schema.Count == 0) throw new InvalidOperationException("The selected PostgreSQL table has no columns to map.");
+
+            var comparison = pipeline.ExpectedSchema.Count > 0
+                ? _schemaComparisonService.Compare(pipeline.ExpectedSchema, schema, pipeline.FieldMappings ?? []) : null;
+            var replacement = CopyPipeline(pipeline);
+            replacement.SourceType = SourceType.PostgreSql;
+            replacement.MongoDbSource = null;
+            replacement.PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                SavedConnectionId = model.PostgreSqlSavedConnectionId,
+                Database = model.PostgreSqlDatabase,
+                Schema = model.PostgreSqlSchema,
+                Table = model.PostgreSqlTable
+            };
+            ApplyDerivedDestination(replacement);
+            replacement.ExpectedSchema = CopySchema(schema);
+            replacement.FieldMappings = ReconcileMappings(pipeline, schema);
+            replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken)) return NotFound();
+            await RetireFileSourceAfterDatabaseSwitchAsync(pipeline, id);
+            if (RequiresExplicitSchemaConfirmation(comparison))
+            {
+                var mapping = CreateMappingModelFromSchema(replacement.ExpectedSchema, replacement.FieldMappings, false);
+                mapping.SchemaDifference = CreateSchemaDifferenceModel(comparison!);
+                return View("Mapping", mapping);
+            }
+            return RedirectToAction(nameof(Mapping), new { id });
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            ModelState.AddModelError(string.Empty, "The selected PostgreSQL source could not be accessed. Check the connection and selected objects, then try again.");
+            return View("Source", model);
+        }
+    }
+
+    private async Task<IActionResult> ConfigureSavedMongoDbSourceAsync(
+        Guid id, PipelineDefinition pipeline, SourceUploadViewModel model, CancellationToken cancellationToken)
+    {
+        await PopulateSavedConnectionsAsync(model, cancellationToken);
+        if (_savedMetadataDiscoveryService is null)
+        {
+            ModelState.AddModelError(string.Empty, "Saved connection discovery is not available.");
+            return View("Source", model);
+        }
+        if (model.MongoDbSavedConnectionId == Guid.Empty
+            || string.IsNullOrWhiteSpace(model.MongoDbDatabase)
+            || string.IsNullOrWhiteSpace(model.MongoDbCollection))
+        {
+            ModelState.AddModelError(string.Empty, "Choose a saved MongoDB connection, database, and collection.");
+            return View("Source", model);
+        }
+        try
+        {
+            var schema = await _savedMetadataDiscoveryService.InferMongoSchemaAsync(
+                model.MongoDbSavedConnectionId.Value, model.MongoDbDatabase, model.MongoDbCollection, cancellationToken);
+            if (schema.Count == 0) throw new InvalidOperationException("The selected MongoDB collection has no fields to map.");
+            var comparison = pipeline.ExpectedSchema.Count > 0
+                ? _schemaComparisonService.Compare(pipeline.ExpectedSchema, schema, pipeline.FieldMappings ?? []) : null;
+            var replacement = CopyPipeline(pipeline);
+            replacement.SourceType = SourceType.MongoDb;
+            replacement.PostgreSqlSource = null;
+            replacement.MongoDbSource = new MongoDbSourceOptions
+            {
+                SavedConnectionId = model.MongoDbSavedConnectionId,
+                Database = model.MongoDbDatabase,
+                Collection = model.MongoDbCollection
+            };
+            ApplyDerivedDestination(replacement);
+            replacement.ExpectedSchema = CopySchema(schema);
+            replacement.FieldMappings = ReconcileMappings(pipeline, schema);
+            replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken)) return NotFound();
+            await RetireFileSourceAfterDatabaseSwitchAsync(pipeline, id);
+            if (RequiresExplicitSchemaConfirmation(comparison))
+            {
+                var mapping = CreateMappingModelFromSchema(replacement.ExpectedSchema, replacement.FieldMappings, false);
+                mapping.SchemaDifference = CreateSchemaDifferenceModel(comparison!);
+                return View("Mapping", mapping);
+            }
+            return RedirectToAction(nameof(Mapping), new { id });
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            ModelState.AddModelError(string.Empty, "The selected MongoDB source could not be accessed. Check the connection and selected objects, then try again.");
+            return View("Source", model);
+        }
+    }
+
+    private static void ApplyDerivedDestination(PipelineDefinition pipeline)
+    {
+        if (pipeline.SourceType == SourceType.PostgreSql)
+        {
+            if (pipeline.DestinationType == DestinationType.PostgreSql)
+            {
+                pipeline.PostgreSqlDestination = null;
+                pipeline.DestinationDatabase = string.Empty;
+                pipeline.DestinationCollection = string.Empty;
+                pipeline.UpsertKeyField = string.Empty;
+            }
+            pipeline.DestinationType = DestinationType.MongoDb;
+            return;
+        }
+        if (pipeline.SourceType == SourceType.MongoDb)
+        {
+            if (pipeline.DestinationType == DestinationType.MongoDb)
+            {
+                pipeline.MongoDbDestinationConnectionId = null;
+                pipeline.MongoDbDestinationConnectionRevision = null;
+                pipeline.DestinationDatabase = string.Empty;
+                pipeline.DestinationCollection = string.Empty;
+                pipeline.UpsertKeyField = string.Empty;
+            }
+            pipeline.DestinationType = DestinationType.PostgreSql;
+        }
+    }
+
+    private static bool IsSavedDiscoveryFailure(Exception exception) => exception is
+        SavedConnectionResolutionException or PostgreSqlConnectionAccessException or
+        PostgreSqlMetadataObjectNotFoundException or PostgreSqlUnsupportedColumnTypeException or
+        MongoSourceAccessException or MongoSourceMetadataObjectNotFoundException or
+        MongoSourceSchemaInferenceException or InvalidOperationException or ArgumentException;
 
     private bool RequirePostgreSqlSelection(
         SourceUploadViewModel model,
@@ -764,6 +1071,10 @@ public sealed class PipelinesController : Controller
         string? mongoDbAction,
         CancellationToken cancellationToken)
     {
+        if (model.MongoDbSavedConnectionId.HasValue)
+        {
+            return await ConfigureSavedMongoDbSourceAsync(id, pipeline, model, cancellationToken);
+        }
         NormalizeMongoDbSelection(model);
         if (_mongoSourceMetadataDiscoveryService is null
             || _mongoSourceSchemaInferenceService is null)
@@ -832,6 +1143,7 @@ public sealed class PipelinesController : Controller
             replacement.SourceType = SourceType.MongoDb;
             replacement.PostgreSqlSource = null;
             replacement.MongoDbSource = source;
+            ApplyDerivedDestination(replacement);
             replacement.ExpectedSchema = CopySchema(schema);
             replacement.FieldMappings = ReconcileMappings(pipeline, schema);
             replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
@@ -1549,10 +1861,13 @@ public sealed class PipelinesController : Controller
             Name = pipeline.Name,
             Description = pipeline.Description,
             DestinationType = pipeline.DestinationType,
+            SourceType = pipeline.SourceType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
+            MongoDbDestinationSavedConnectionId = pipeline.MongoDbDestinationConnectionId,
             UpsertKeyField = pipeline.UpsertKeyField,
             PostgreSqlConnectionProfile = pipeline.PostgreSqlDestination?.ConnectionProfile,
+            PostgreSqlDestinationSavedConnectionId = pipeline.PostgreSqlDestination?.SavedConnectionId,
             PostgreSqlDatabase = pipeline.PostgreSqlDestination?.Database,
             PostgreSqlSchema = pipeline.PostgreSqlDestination?.Schema,
             PostgreSqlTable = pipeline.PostgreSqlDestination?.Table,
@@ -1569,6 +1884,8 @@ public sealed class PipelinesController : Controller
         };
         PopulateAvailableMappedFields(model, pipeline);
         PopulatePostgreSqlConnectionProfiles(model);
+        await PopulateSavedConnectionsAsync(model, cancellationToken);
+        await PopulateSavedDestinationMetadataAsync(model, cancellationToken);
         return View(model);
     }
 
@@ -1594,6 +1911,17 @@ public sealed class PipelinesController : Controller
         }
 
         PopulateAvailableMappedFields(model, pipeline);
+        model.SourceType = pipeline.SourceType;
+        await PopulateSavedConnectionsAsync(model, cancellationToken);
+
+        if (pipeline.SourceType == SourceType.PostgreSql)
+        {
+            model.DestinationType = DestinationType.MongoDb;
+        }
+        else if (pipeline.SourceType == SourceType.MongoDb)
+        {
+            model.DestinationType = DestinationType.PostgreSql;
+        }
 
         if (!Enum.IsDefined(model.DestinationType)
             || model.DestinationType == DestinationType.Unspecified)
@@ -1603,6 +1931,14 @@ public sealed class PipelinesController : Controller
 
         if (model.DestinationType == DestinationType.PostgreSql)
         {
+            if (!model.PostgreSqlDestinationSavedConnectionId.HasValue)
+            {
+                ModelState.AddModelError(
+                    nameof(PipelineFormViewModel.PostgreSqlDestinationSavedConnectionId),
+                    "Choose a saved PostgreSQL connection.");
+                return View(model);
+            }
+
             return await ConfigurePostgreSqlDestinationAsync(
                 id,
                 pipeline,
@@ -1613,6 +1949,18 @@ public sealed class PipelinesController : Controller
 
         var hasDestinationConfiguration = !string.IsNullOrWhiteSpace(model.DestinationDatabase)
             || !string.IsNullOrWhiteSpace(model.DestinationCollection);
+        if (hasDestinationConfiguration
+            && !model.MongoDbDestinationSavedConnectionId.HasValue)
+        {
+            ModelState.AddModelError(
+                nameof(PipelineFormViewModel.MongoDbDestinationSavedConnectionId),
+                "Choose a saved MongoDB connection.");
+            return View(model);
+        }
+        if (hasDestinationConfiguration && model.MongoDbDestinationSavedConnectionId.HasValue)
+        {
+            return await ConfigureSavedMongoDbDestinationAsync(id, pipeline, model, cancellationToken);
+        }
         if (hasDestinationConfiguration)
         {
             ValidateDestination(model);
@@ -1692,6 +2040,10 @@ public sealed class PipelinesController : Controller
         string? postgreSqlDestinationAction,
         CancellationToken cancellationToken)
     {
+        if (model.PostgreSqlDestinationSavedConnectionId.HasValue)
+        {
+            return await ConfigureSavedPostgreSqlDestinationAsync(id, pipeline, model, cancellationToken);
+        }
         NormalizePostgreSqlDestinationSelection(model);
         PopulatePostgreSqlConnectionProfiles(model);
         var isSave = !string.Equals(postgreSqlDestinationAction, "refresh", StringComparison.Ordinal);
@@ -1843,6 +2195,105 @@ public sealed class PipelinesController : Controller
                 string.Empty,
                 "The PostgreSQL destination could not be accessed. Check the selected connection and target, then try again.");
             return PostgreSqlDestinationView(model);
+        }
+    }
+
+    private async Task<IActionResult> ConfigureSavedMongoDbDestinationAsync(
+        Guid id, PipelineDefinition pipeline, PipelineFormViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedMetadataDiscoveryService is null || model.MongoDbDestinationSavedConnectionId == Guid.Empty)
+        {
+            ModelState.AddModelError(string.Empty, "Choose a saved MongoDB connection.");
+            return View(model);
+        }
+        try
+        {
+            var databases = await _savedMetadataDiscoveryService.DiscoverMongoDatabasesAsync(
+                model.MongoDbDestinationSavedConnectionId.Value, cancellationToken);
+            var collections = await _savedMetadataDiscoveryService.DiscoverMongoCollectionsAsync(
+                model.MongoDbDestinationSavedConnectionId.Value, model.DestinationDatabase ?? string.Empty, cancellationToken);
+            if (!databases.Any(value => value.Name == model.DestinationDatabase)
+                || !collections.Any(value => value.Name == model.DestinationCollection))
+            {
+                ModelState.AddModelError(string.Empty, "The selected MongoDB destination is no longer available.");
+                return View(model);
+            }
+            if (string.IsNullOrWhiteSpace(model.UpsertKeyField)
+                || !model.AvailableMappedFields.Contains(model.UpsertKeyField, StringComparer.Ordinal))
+            {
+                ModelState.AddModelError(nameof(model.UpsertKeyField), "Choose an included mapped output field as the upsert key.");
+                return View(model);
+            }
+            var replacement = CopyPipeline(pipeline);
+            replacement.Name = model.Name;
+            replacement.Description = model.Description;
+            replacement.DestinationType = DestinationType.MongoDb;
+            replacement.PostgreSqlDestination = null;
+            replacement.MongoDbDestinationConnectionId = model.MongoDbDestinationSavedConnectionId;
+            replacement.MongoDbDestinationConnectionRevision = null;
+            replacement.DestinationDatabase = model.DestinationDatabase!;
+            replacement.DestinationCollection = model.DestinationCollection!;
+            replacement.UpsertKeyField = model.UpsertKeyField;
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken)) return NotFound();
+            return RedirectToAction(nameof(Edit), controllerName: null, routeValues: new { id }, fragment: "destination");
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            ModelState.AddModelError(string.Empty, "The MongoDB destination could not be accessed. Check the selected connection and target, then try again.");
+            return View(model);
+        }
+    }
+
+    private async Task<IActionResult> ConfigureSavedPostgreSqlDestinationAsync(
+        Guid id, PipelineDefinition pipeline, PipelineFormViewModel model, CancellationToken cancellationToken)
+    {
+        if (_savedMetadataDiscoveryService is null || model.PostgreSqlDestinationSavedConnectionId == Guid.Empty
+            || string.IsNullOrWhiteSpace(model.PostgreSqlDatabase) || string.IsNullOrWhiteSpace(model.PostgreSqlSchema)
+            || string.IsNullOrWhiteSpace(model.PostgreSqlTable))
+        {
+            ModelState.AddModelError(string.Empty, "Choose a saved PostgreSQL connection, database, schema, and table.");
+            return View(model);
+        }
+        try
+        {
+            var service = _savedMetadataDiscoveryService;
+            await service.EnsurePostgreSqlDestinationAccessibleAsync(model.PostgreSqlDestinationSavedConnectionId.Value,
+                model.PostgreSqlDatabase, model.PostgreSqlSchema, model.PostgreSqlTable, cancellationToken);
+            var columns = await service.DiscoverPostgreSqlColumnsAsync(model.PostgreSqlDestinationSavedConnectionId.Value,
+                model.PostgreSqlDatabase, model.PostgreSqlSchema, model.PostgreSqlTable, cancellationToken);
+            var constraints = await service.DiscoverPostgreSqlKeyConstraintsAsync(model.PostgreSqlDestinationSavedConnectionId.Value,
+                model.PostgreSqlDatabase, model.PostgreSqlSchema, model.PostgreSqlTable, cancellationToken);
+            PopulatePostgreSqlDestinationMetadata(model, columns, constraints);
+            var destination = new PostgreSqlDestinationOptions
+            {
+                SavedConnectionId = model.PostgreSqlDestinationSavedConnectionId,
+                Database = model.PostgreSqlDatabase,
+                Schema = model.PostgreSqlSchema,
+                Table = model.PostgreSqlTable,
+                ColumnMappings = (model.PostgreSqlColumnMappings ?? []).Select(mapping => new PostgreSqlDestinationColumnMapping
+                { OutputField = mapping.OutputField ?? string.Empty, DestinationColumn = mapping.DestinationColumn ?? string.Empty }).ToList(),
+                UpsertKeyColumn = model.PostgreSqlUpsertKeyColumn ?? string.Empty
+            };
+            PostgreSqlDestinationConfigurationValidator.Validate(destination,
+                model.AvailableMappedFields.ToHashSet(StringComparer.Ordinal), columns, constraints);
+            var upsertMapping = destination.ColumnMappings.Single(mapping => mapping.DestinationColumn == destination.UpsertKeyColumn);
+            var replacement = CopyPipeline(pipeline);
+            replacement.Name = model.Name;
+            replacement.Description = model.Description;
+            replacement.DestinationType = DestinationType.PostgreSql;
+            replacement.PostgreSqlDestination = destination;
+            replacement.MongoDbDestinationConnectionId = null;
+            replacement.MongoDbDestinationConnectionRevision = null;
+            replacement.DestinationDatabase = string.Empty;
+            replacement.DestinationCollection = string.Empty;
+            replacement.UpsertKeyField = upsertMapping.OutputField;
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken)) return NotFound();
+            return RedirectToAction(nameof(Edit), controllerName: null, routeValues: new { id }, fragment: "destination");
+        }
+        catch (Exception exception) when (IsSavedDiscoveryFailure(exception))
+        {
+            ModelState.AddModelError(string.Empty, "The PostgreSQL destination could not be accessed. Check the selected connection and target, then try again.");
+            return View(model);
         }
     }
 

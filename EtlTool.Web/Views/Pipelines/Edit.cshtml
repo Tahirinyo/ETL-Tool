@@ -15,6 +15,13 @@
 
             <fieldset id="destination" class="mt-4">
                 <legend class="h4">Destination</legend>
+                @if (Model.IsDestinationProviderDerived)
+                {
+                    <p class="text-muted">Destination is derived from the selected database source.</p>
+                    <input asp-for="DestinationType" type="hidden" />
+                }
+                else
+                {
                 <div class="form-check">
                     <input class="form-check-input" asp-for="DestinationType" type="radio" value="MongoDb" id="destination-mongodb" />
                     <label class="form-check-label" for="destination-mongodb">MongoDB</label>
@@ -23,20 +30,34 @@
                     <input class="form-check-input" asp-for="DestinationType" type="radio" value="PostgreSql" id="destination-postgresql" />
                     <label class="form-check-label" for="destination-postgresql">PostgreSQL</label>
                 </div>
+                }
                 <span asp-validation-for="DestinationType" class="text-danger"></span>
             </fieldset>
 
-            <fieldset class="mt-4">
+            <fieldset class="mt-4" id="mongodb-destination-fields">
                 <legend class="h4">MongoDB destination</legend>
-                <p class="text-muted">Enter a permitted database and collection. The destination is checked before it is saved; a permitted new collection can be used.</p>
+                <p class="text-muted">Choose a saved MongoDB connection and its destination namespace.</p>
+                <div class="mb-3">
+                    <label asp-for="MongoDbDestinationSavedConnectionId" class="form-label"></label>
+                    <select asp-for="MongoDbDestinationSavedConnectionId" class="form-select" id="destination-mongodb-connection">
+                        <option value="">Select a saved MongoDB connection</option>
+                        @foreach (var connection in Model.MongoDbSavedConnections) { <option value="@connection.Id">@connection.Name</option> }
+                    </select>
+                </div>
                 <div class="mb-3">
                     <label asp-for="DestinationDatabase" class="form-label"></label>
-                    <input asp-for="DestinationDatabase" class="form-control" />
+                    <select asp-for="DestinationDatabase" class="form-select" id="destination-mongodb-database">
+                        <option value="">Select a database</option>
+                        @foreach (var database in Model.MongoDbDatabases) { <option value="@database">@database</option> }
+                    </select>
                     <span asp-validation-for="DestinationDatabase" class="text-danger"></span>
                 </div>
                 <div class="mb-3">
                     <label asp-for="DestinationCollection" class="form-label"></label>
-                    <input asp-for="DestinationCollection" class="form-control" />
+                    <select asp-for="DestinationCollection" class="form-select" id="destination-mongodb-collection">
+                        <option value="">Select a collection</option>
+                        @foreach (var collection in Model.MongoDbCollections) { <option value="@collection">@collection</option> }
+                    </select>
                     <span asp-validation-for="DestinationCollection" class="text-danger"></span>
                 </div>
                 <div class="mb-3">
@@ -52,26 +73,20 @@
                 </div>
             </fieldset>
 
-            <fieldset class="mt-4">
+            <fieldset class="mt-4" id="postgresql-destination-fields">
                 <legend class="h4">PostgreSQL destination</legend>
-                <p class="text-muted">Select an accessible target, then refresh its columns and eligible single-column keys before saving.</p>
-                <input asp-for="LoadedPostgreSqlConnectionProfile" type="hidden" />
-                <input asp-for="LoadedPostgreSqlDatabase" type="hidden" />
-                <input asp-for="LoadedPostgreSqlSchema" type="hidden" />
+                <p class="text-muted">Select an accessible target; its columns and eligible keys load when the table is selected.</p>
                 <div class="mb-3">
-                    <label asp-for="PostgreSqlConnectionProfile" class="form-label"></label>
-                    <select asp-for="PostgreSqlConnectionProfile" class="form-select">
-                        <option value="">Select a connection profile</option>
-                        @foreach (var profile in Model.PostgreSqlConnectionProfiles)
-                        {
-                            <option value="@profile">@profile</option>
-                        }
+                    <label asp-for="PostgreSqlDestinationSavedConnectionId" class="form-label"></label>
+                    <select asp-for="PostgreSqlDestinationSavedConnectionId" class="form-select" id="destination-postgresql-connection">
+                        <option value="">Select a saved PostgreSQL connection</option>
+                        @foreach (var connection in Model.PostgreSqlSavedConnections) { <option value="@connection.Id">@connection.Name</option> }
                     </select>
-                    <span asp-validation-for="PostgreSqlConnectionProfile" class="text-danger"></span>
+                    <span asp-validation-for="PostgreSqlDestinationSavedConnectionId" class="text-danger"></span>
                 </div>
                 <div class="mb-3">
                     <label asp-for="PostgreSqlDatabase" class="form-label"></label>
-                    <select asp-for="PostgreSqlDatabase" class="form-select">
+                    <select asp-for="PostgreSqlDatabase" class="form-select" id="destination-postgresql-database">
                         <option value="">Select a database</option>
                         @foreach (var database in Model.PostgreSqlDatabases)
                         {
@@ -82,7 +97,7 @@
                 </div>
                 <div class="mb-3">
                     <label asp-for="PostgreSqlSchema" class="form-label"></label>
-                    <select asp-for="PostgreSqlSchema" class="form-select">
+                    <select asp-for="PostgreSqlSchema" class="form-select" id="destination-postgresql-schema">
                         <option value="">Select a schema</option>
                         @foreach (var schema in Model.PostgreSqlSchemas)
                         {
@@ -93,7 +108,7 @@
                 </div>
                 <div class="mb-3">
                     <label asp-for="PostgreSqlTable" class="form-label"></label>
-                    <select asp-for="PostgreSqlTable" class="form-select">
+                    <select asp-for="PostgreSqlTable" class="form-select" id="destination-postgresql-table">
                         <option value="">Select a table</option>
                         @foreach (var table in Model.PostgreSqlTables)
                         {
@@ -102,11 +117,10 @@
                     </select>
                     <span asp-validation-for="PostgreSqlTable" class="text-danger"></span>
                 </div>
-                <button type="submit" name="PostgreSqlDestinationAction" value="refresh" class="btn btn-outline-secondary">Refresh PostgreSQL metadata</button>
-
+                <div class="mt-3" id="postgresql-destination-metadata">
                 @if (Model.PostgreSqlColumns.Count > 0)
                 {
-                    <div class="mt-3">
+                    <div>
                         <div class="small text-muted mb-2">Destination columns</div>
                         <ul class="small mb-3">
                             @foreach (var column in Model.PostgreSqlColumns)
@@ -151,6 +165,7 @@
                         </div>
                     </div>
                 }
+                </div>
             </fieldset>
 
             <div class="mt-4">
@@ -183,4 +198,51 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <script>
+        const escapeHtml = value => String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+        const populate = async (url, select, connection, clear) => {
+            clear.forEach(element => { element.innerHTML = '<option value="">Select an option</option>'; element.disabled = true; });
+            if (!connection.value) return;
+            select._abort?.abort(); const abort = new AbortController(); select._abort = abort;
+            select.disabled = true;
+            try {
+                const response = await fetch(url, { signal: abort.signal }); const data = await response.json();
+                if (abort.signal.aborted || !response.ok || connection.value !== new URL(url, location.origin).searchParams.get('connectionId')) return;
+                select.innerHTML = '<option value="">Select an option</option>' + data.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join(''); select.disabled = false;
+            } catch (error) { if (error.name !== 'AbortError') select.innerHTML = '<option value="">Metadata is unavailable</option>'; }
+        };
+        const mongoConnection = document.getElementById('destination-mongodb-connection');
+        const mongoDatabase = document.getElementById('destination-mongodb-database');
+        const mongoCollection = document.getElementById('destination-mongodb-collection');
+        mongoConnection.addEventListener('change', () => populate(`/Pipelines/Discovery/MongoDb/Databases?connectionId=${encodeURIComponent(mongoConnection.value)}`, mongoDatabase, mongoConnection, [mongoCollection]));
+        mongoDatabase.addEventListener('change', () => populate(`/Pipelines/Discovery/MongoDb/Collections?connectionId=${encodeURIComponent(mongoConnection.value)}&database=${encodeURIComponent(mongoDatabase.value)}`, mongoCollection, mongoConnection, []));
+        const pgConnection = document.getElementById('destination-postgresql-connection');
+        const pgDatabase = document.getElementById('destination-postgresql-database');
+        const pgSchema = document.getElementById('destination-postgresql-schema');
+        const pgTable = document.getElementById('destination-postgresql-table');
+        const mongoFields = document.getElementById('mongodb-destination-fields');
+        const pgFields = document.getElementById('postgresql-destination-fields');
+        const syncDestinationFields = () => {
+            const selected = document.querySelector('input[name="DestinationType"]:checked')?.value || document.querySelector('input[name="DestinationType"]')?.value;
+            mongoFields.hidden = selected !== 'MongoDb'; pgFields.hidden = selected !== 'PostgreSql';
+        };
+        document.querySelectorAll('input[name="DestinationType"]').forEach(input => input.addEventListener('change', syncDestinationFields));
+        syncDestinationFields();
+        const metadata = document.getElementById('postgresql-destination-metadata');
+        const outputFields = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.AvailableMappedFields));
+        const optionMarkup = values => values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+        const renderMetadata = value => {
+            const columns = value.columns || []; const keys = value.upsertKeyColumns || [];
+            metadata.innerHTML = `<div class="small text-muted mb-2">Destination columns</div><ul class="small mb-3">${columns.map(column => `<li>${escapeHtml(column.name)} (${escapeHtml(column.nativeType)}${column.isNullable ? ', nullable' : ''})</li>`).join('')}</ul><div class="small text-muted mb-2">Output-to-column mapping</div>${outputFields.map((field, index) => `<div class="row g-2 mb-2"><div class="col-md-6"><select class="form-select" name="PostgreSqlColumnMappings[${index}].OutputField"><option value="">Select an output field</option>${optionMarkup(outputFields)}</select></div><div class="col-md-6"><select class="form-select" name="PostgreSqlColumnMappings[${index}].DestinationColumn"><option value="">Select a PostgreSQL column</option>${optionMarkup(columns.map(column => column.name))}</select></div></div>`).join('')}<div class="mb-3"><label class="form-label" for="PostgreSqlUpsertKeyColumn">PostgreSQL upsert key</label><select class="form-select" id="PostgreSqlUpsertKeyColumn" name="PostgreSqlUpsertKeyColumn"><option value="">Select a PRIMARY KEY or UNIQUE column</option>${optionMarkup(keys)}</select></div>`;
+        };
+        pgConnection.addEventListener('change', () => { metadata.innerHTML = ''; populate(`/Pipelines/Discovery/PostgreSql/Databases?connectionId=${encodeURIComponent(pgConnection.value)}`, pgDatabase, pgConnection, [pgSchema, pgTable]); });
+        pgDatabase.addEventListener('change', () => { metadata.innerHTML = ''; populate(`/Pipelines/Discovery/PostgreSql/Schemas?connectionId=${encodeURIComponent(pgConnection.value)}&database=${encodeURIComponent(pgDatabase.value)}`, pgSchema, pgConnection, [pgTable]); });
+        pgSchema.addEventListener('change', () => { metadata.innerHTML = ''; populate(`/Pipelines/Discovery/PostgreSql/Tables?connectionId=${encodeURIComponent(pgConnection.value)}&database=${encodeURIComponent(pgDatabase.value)}&schema=${encodeURIComponent(pgSchema.value)}`, pgTable, pgConnection, []); });
+        pgTable.addEventListener('change', async () => {
+            metadata.innerHTML = ''; if (!pgTable.value) return;
+            pgTable._metadataAbort?.abort(); const abort = new AbortController(); pgTable._metadataAbort = abort;
+            const selectedTable = pgTable.value;
+            try { const response = await fetch(`/Pipelines/Discovery/PostgreSql/TableMetadata?connectionId=${encodeURIComponent(pgConnection.value)}&database=${encodeURIComponent(pgDatabase.value)}&schema=${encodeURIComponent(pgSchema.value)}&table=${encodeURIComponent(selectedTable)}`, { signal: abort.signal }); const data = await response.json(); if (!abort.signal.aborted && response.ok && pgTable.value === selectedTable) renderMetadata(data[0]); } catch (error) { if (error.name !== 'AbortError') metadata.innerHTML = '<div class="text-danger">PostgreSQL metadata is unavailable. Try selecting the table again.</div>'; }
+        });
+    </script>
 }

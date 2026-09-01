@@ -1,4 +1,5 @@
 using EtlTool.Domain.Enums;
+using EtlTool.Web.Models.Connections;
 using Microsoft.AspNetCore.Http;
 
 namespace EtlTool.Web.Models.Pipelines;
@@ -16,6 +17,8 @@ public sealed class SourceUploadViewModel
     public SchemaDifferenceViewModel? SchemaDifference { get; set; }
     public Guid? PendingSourceReferenceId { get; set; }
     public string? PostgreSqlConnectionProfile { get; set; }
+    public Guid? PostgreSqlSavedConnectionId { get; set; }
+    public IReadOnlyList<SavedConnectionListItemViewModel> PostgreSqlSavedConnections { get; set; } = [];
     public string? PostgreSqlDatabase { get; set; }
     public string? PostgreSqlSchema { get; set; }
     public string? PostgreSqlTable { get; set; }
@@ -27,6 +30,8 @@ public sealed class SourceUploadViewModel
     public IReadOnlyList<string> PostgreSqlSchemas { get; set; } = [];
     public IReadOnlyList<string> PostgreSqlTables { get; set; } = [];
     public string? MongoDbDatabase { get; set; }
+    public Guid? MongoDbSavedConnectionId { get; set; }
+    public IReadOnlyList<SavedConnectionListItemViewModel> MongoDbSavedConnections { get; set; } = [];
     public string? MongoDbCollection { get; set; }
     public string? LoadedMongoDbDatabase { get; set; }
     public IReadOnlyList<string> MongoDbDatabases { get; set; } = [];

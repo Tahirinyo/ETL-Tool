@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using EtlTool.Domain.Enums;
+using EtlTool.Web.Models.Connections;
 
 namespace EtlTool.Web.Models.Pipelines;
 
@@ -18,6 +19,11 @@ public sealed class PipelineFormViewModel
 
     [Display(Name = "Destination collection")]
     public string? DestinationCollection { get; set; }
+    [Display(Name = "MongoDB connection")]
+    public Guid? MongoDbDestinationSavedConnectionId { get; set; }
+    public IReadOnlyList<SavedConnectionListItemViewModel> MongoDbSavedConnections { get; set; } = [];
+    public IReadOnlyList<string> MongoDbDatabases { get; set; } = [];
+    public IReadOnlyList<string> MongoDbCollections { get; set; } = [];
 
     [Display(Name = "Upsert key")]
     public string? UpsertKeyField { get; set; }
@@ -26,6 +32,9 @@ public sealed class PipelineFormViewModel
 
     [Display(Name = "PostgreSQL connection profile")]
     public string? PostgreSqlConnectionProfile { get; set; }
+    [Display(Name = "PostgreSQL connection")]
+    public Guid? PostgreSqlDestinationSavedConnectionId { get; set; }
+    public IReadOnlyList<SavedConnectionListItemViewModel> PostgreSqlSavedConnections { get; set; } = [];
 
     [Display(Name = "PostgreSQL database")]
     public string? PostgreSqlDatabase { get; set; }
@@ -60,6 +69,9 @@ public sealed class PipelineFormViewModel
     public IReadOnlyList<string> PostgreSqlUpsertKeyColumns { get; set; } = [];
 
     public string? PostgreSqlDestinationAction { get; set; }
+
+    public SourceType SourceType { get; set; }
+    public bool IsDestinationProviderDerived => SourceType is SourceType.PostgreSql or SourceType.MongoDb;
 }
 
 public sealed class PostgreSqlDestinationColumnViewModel

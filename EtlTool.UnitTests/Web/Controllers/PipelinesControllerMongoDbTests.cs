@@ -13,7 +13,7 @@ namespace EtlTool.UnitTests.Web.Controllers;
 public sealed class PipelinesControllerMongoDbTests
 {
     [Fact]
-    public async Task InspectSource_MongoDbPersistsSourceIdentitySchemaAndMappingsWithoutChangingDestination()
+    public async Task InspectSource_MongoDbPersistsSourceIdentitySchemaAndDerivesPostgreSqlDestination()
     {
         var pipeline = Pipeline();
         var service = new RecordingPipelineService(pipeline);
@@ -42,8 +42,10 @@ public sealed class PipelinesControllerMongoDbTests
         Assert.Equal(("reporting", "customers"),
             (saved.MongoDbSource!.Database, saved.MongoDbSource.Collection));
         Assert.Null(saved.PostgreSqlSource);
-        Assert.Equal(("destination_db", "destination_rows", "id"),
+        Assert.Equal((string.Empty, string.Empty, string.Empty),
             (saved.DestinationDatabase, saved.DestinationCollection, saved.UpsertKeyField));
+        Assert.Equal(DestinationType.PostgreSql, saved.DestinationType);
+        Assert.Null(saved.MongoDbDestinationConnectionId);
         Assert.Equal(["Id", "Name"], saved.ExpectedSchema.Select(field => field.Name));
         Assert.Collection(saved.FieldMappings,
             mapping => Assert.Equal(("Id", "id", true),

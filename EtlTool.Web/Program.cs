@@ -138,6 +138,8 @@ builder.Services.AddSingleton<ISavedConnectionConfigurationValidator,
 builder.Services.AddSingleton<ISavedConnectionReferenceChecker,
     MongoSavedConnectionReferenceChecker>();
 builder.Services.AddSingleton<SavedConnectionProviderFactory>();
+builder.Services.AddScoped<ISavedConnectionMetadataDiscoveryService,
+    SavedConnectionMetadataDiscoveryService>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IMongoSourceMetadataDiscoveryService, MongoSourceMetadataDiscoveryService>();
 builder.Services.AddSingleton<IMongoSourceSchemaInferenceService, MongoSourceSchemaInferenceService>();

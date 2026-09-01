@@ -44,7 +44,19 @@ public sealed class PipelinesControllerPostgreSqlTests
     public async Task InspectSource_PostgreSqlValidSelectionPersistsLogicalMetadataAndRedirectsToMapping()
     {
         var id = Guid.NewGuid();
-        var service = new RecordingPipelineService { Pipeline = Pipeline(id) };
+        var pipeline = Pipeline(id);
+        pipeline.DestinationType = DestinationType.PostgreSql;
+        pipeline.PostgreSqlDestination = new PostgreSqlDestinationOptions
+        {
+            ConnectionProfile = "WarehouseDb",
+            Database = "warehouse",
+            Schema = "import",
+            Table = "customers"
+        };
+        pipeline.DestinationDatabase = "stale";
+        pipeline.DestinationCollection = "stale";
+        pipeline.UpsertKeyField = "stale";
+        var service = new RecordingPipelineService { Pipeline = pipeline };
         var discovery = new RecordingPostgreSqlMetadataDiscoveryService();
         var controller = CreateController(service, discovery, new RecordingProfileCatalog("ReportingDb"));
 
@@ -68,6 +80,11 @@ public sealed class PipelinesControllerPostgreSqlTests
         Assert.Equal("reporting", saved.PostgreSqlSource.Database);
         Assert.Equal("public", saved.PostgreSqlSource.Schema);
         Assert.Equal("customers", saved.PostgreSqlSource.Table);
+        Assert.Equal(DestinationType.MongoDb, saved.DestinationType);
+        Assert.Null(saved.PostgreSqlDestination);
+        Assert.Equal(string.Empty, saved.DestinationDatabase);
+        Assert.Equal(string.Empty, saved.DestinationCollection);
+        Assert.Equal(string.Empty, saved.UpsertKeyField);
         Assert.Collection(saved.ExpectedSchema,
             field => Assert.Equal(("Id", SourceFieldType.Integer), (field.Name, field.DataType)),
             field => Assert.Equal(("Name", SourceFieldType.String), (field.Name, field.DataType)));
