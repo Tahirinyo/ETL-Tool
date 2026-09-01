@@ -2,6 +2,7 @@ using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Reporting;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
@@ -385,6 +386,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         BatchExecutionException => "MongoDB batch loading failed.",
         BatchLoadException => "MongoDB batch loading failed.",
         MongoTargetAccessException => "The MongoDB target is not accessible.",
+        PostgreSqlSourceSchemaChangedException => PostgreSqlSourceSchemaChangedException.SafeMessage,
         IOException => "The ETL source file could not be read.",
         UnauthorizedAccessException => "The ETL source file could not be accessed.",
         ErrorReportGenerationException => "Error report generation failed.",

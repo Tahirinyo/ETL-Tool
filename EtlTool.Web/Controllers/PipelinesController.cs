@@ -1484,6 +1484,14 @@ public sealed class PipelinesController : Controller
                     FailureMessage = "The inspected source is no longer available or no longer matches this pipeline. Upload and inspect the source again.",
                     RequiresSourceUpload = true
                 });
+            case RunAdmissionStatus.RunAlreadyActive:
+                Response.StatusCode = StatusCodes.Status409Conflict;
+                return View("Preview", new PipelinePreviewViewModel
+                {
+                    PipelineId = result.PipelineId ?? id,
+                    PipelineName = result.PipelineName,
+                    FailureMessage = "This pipeline already has a queued or running execution. Wait for it to finish before starting another run."
+                });
             case RunAdmissionStatus.Failed:
                 _logger?.LogError(
                     result.Failure,

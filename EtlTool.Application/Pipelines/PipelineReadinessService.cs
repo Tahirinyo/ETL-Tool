@@ -55,22 +55,17 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
     }
 
     public PipelineReadinessResult Evaluate(PipelineDefinition pipeline)
-        => EvaluateCore(pipeline, allowPostgreSqlSource: false);
+        => EvaluateCore(pipeline);
 
     public PipelineReadinessResult EvaluateForPreview(PipelineDefinition pipeline)
-        => EvaluateCore(pipeline, allowPostgreSqlSource: true);
+        => Evaluate(pipeline);
 
-    private PipelineReadinessResult EvaluateCore(
-        PipelineDefinition pipeline,
-        bool allowPostgreSqlSource)
+    private PipelineReadinessResult EvaluateCore(PipelineDefinition pipeline)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
 
         var problems = new List<PipelineReadinessProblem>();
-        var sourceState = EvaluateSourceAndSchema(
-            pipeline,
-            allowPostgreSqlSource,
-            problems);
+        var sourceState = EvaluateSourceAndSchema(pipeline, problems);
         var mappingState = EvaluateMappings(pipeline, sourceState.HasUsableSchema, problems);
 
         EvaluateTransformations(pipeline, mappingState, problems);
@@ -83,18 +78,16 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
 
     private static SourceState EvaluateSourceAndSchema(
         PipelineDefinition pipeline,
-        bool allowPostgreSqlSource,
         List<PipelineReadinessProblem> problems)
     {
         CultureInfo? sourceCulture = null;
         var sourceOptions = pipeline.SourceOptions;
 
-        var isPostgreSqlPreview = allowPostgreSqlSource
-            && pipeline.SourceType == SourceType.PostgreSql;
+        var isPostgreSql = pipeline.SourceType == SourceType.PostgreSql;
         if (pipeline.SourceType is not SourceType.Csv and not SourceType.Xlsx
-            && !isPostgreSqlPreview)
+            && !isPostgreSql)
         {
-            AddProblem(problems, SourceComponent, "The pipeline source type must be CSV or XLSX.");
+            AddProblem(problems, SourceComponent, "The pipeline source type must be CSV, XLSX, or PostgreSQL.");
         }
 
         if (sourceOptions is null)
@@ -142,7 +135,7 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
             }
         }
 
-        if (isPostgreSqlPreview)
+        if (isPostgreSql)
         {
             EvaluatePostgreSqlSource(pipeline.PostgreSqlSource, problems);
         }

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 
 namespace EtlTool.Application.Sources;
 
@@ -272,15 +273,23 @@ public sealed class PipelineSourceCommitCoordinator
                 return PipelineRunSourceSnapshot.NotReady(pipeline, readiness);
             }
 
-            source = await _sourceStore.ReserveForRunAsync(
-                    pipeline.Id,
-                    pipeline.SourceType,
-                    pipeline.SourceOptions,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (source is null)
+            if (pipeline.SourceType is SourceType.Csv or SourceType.Xlsx)
             {
-                return PipelineRunSourceSnapshot.SourceUnavailable(pipeline, readiness);
+                source = await _sourceStore.ReserveForRunAsync(
+                        pipeline.Id,
+                        pipeline.SourceType,
+                        pipeline.SourceOptions,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (source is null)
+                {
+                    return PipelineRunSourceSnapshot.SourceUnavailable(pipeline, readiness);
+                }
+            }
+            else if (pipeline.SourceType != SourceType.PostgreSql)
+            {
+                throw new InvalidOperationException(
+                    $"The pipeline source type '{pipeline.SourceType}' is not supported for execution.");
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -576,15 +585,22 @@ public sealed class PipelineRunSourceSnapshot : IAsyncDisposable
     internal static PipelineRunSourceSnapshot Ready(
         PipelineDefinition pipeline,
         PipelineReadinessResult readiness,
-        IWizardRunSourceReservation source,
+        IWizardRunSourceReservation? source,
         SemaphoreSlim gate) =>
         new(PipelineRunSourceSnapshotStatus.Ready, pipeline, readiness, source, gate);
 
     public void TransferSourceToRun()
     {
-        var source = _source
-            ?? throw new InvalidOperationException("The run source reservation is no longer available.");
-        source.TransferToRun();
+        if (_source is not null)
+        {
+            _source.TransferToRun();
+            return;
+        }
+
+        if (Pipeline?.SourceType != SourceType.PostgreSql)
+        {
+            throw new InvalidOperationException("The run source reservation is no longer available.");
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -62,6 +62,36 @@ public sealed class RunAdmissionMvcIntegrationTests
     }
 
     [Fact]
+    public async Task Execute_PostAdmitsPostgreSqlRunWithoutWizardFileReservation()
+    {
+        var pipeline = PostgreSqlPipeline();
+        await using var host = await RunAdmissionHost.StartAsync(pipeline, startWorker: false);
+        var token = await host.Client.GetFromJsonAsync<AntiforgeryTokenResponse>(
+            "/ValidationAntiforgery");
+        Assert.NotNull(token);
+        using var content = new FormUrlEncodedContent(
+        [
+            new KeyValuePair<string, string>(
+                "__RequestVerificationToken",
+                token.RequestToken)
+        ]);
+
+        using var response = await host.Client.PostAsync(
+            $"/Pipelines/{pipeline.Id}/Execute",
+            content);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var run = Assert.Single(host.RunRepository.Runs);
+        Assert.Equal(EtlRunStatus.Queued, run.Status);
+        Assert.Equal(string.Empty, run.OriginalFileName);
+        Assert.Equal(string.Empty, run.StoredFilePath);
+        Assert.Equal(0, host.SourceStore.ReservationCount);
+        Assert.True(host.SourceStore.HasActiveSource);
+        Assert.Equal(run.Id, Assert.Single(host.QueueJobs).RunId);
+        Assert.Equal($"/Runs/{run.Id}", response.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
     public async Task Execute_SaturatedQueueReturnsSafeFailureAndDoesNotRetainTimedOutJob()
     {
         var pipeline = Pipeline();
@@ -121,6 +151,21 @@ public sealed class RunAdmissionMvcIntegrationTests
             CultureName = "en-US",
             Delimiter = CsvDelimiter.Comma,
             FirstRowIsHeader = true
+        }
+    };
+
+    private static PipelineDefinition PostgreSqlPipeline() => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "PostgreSQL Customers",
+        SourceType = SourceType.PostgreSql,
+        SourceOptions = new SourceOptions { CultureName = "en-US" },
+        PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
         }
     };
 
@@ -275,6 +320,8 @@ public sealed class RunAdmissionMvcIntegrationTests
 
         public int RollbackCount { get; private set; }
 
+        public int ReservationCount { get; private set; }
+
         public Task<IWizardRunSourceReservation?> ReserveForRunAsync(
             Guid requestedPipelineId,
             SourceType sourceType,
@@ -287,6 +334,7 @@ public sealed class RunAdmissionMvcIntegrationTests
             }
 
             _reserved = true;
+            ReservationCount++;
             return Task.FromResult<IWizardRunSourceReservation?>(new Reservation(this));
         }
 

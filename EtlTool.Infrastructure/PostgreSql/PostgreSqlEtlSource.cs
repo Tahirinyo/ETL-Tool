@@ -150,9 +150,15 @@ public sealed class PostgreSqlEtlSource : IEtlSource
                 return null;
             }
 
-            return await reader
+            var value = await reader
                 .GetFieldValueAsync<object>(ordinal, cancellationToken)
                 .ConfigureAwait(false);
+
+            // A PostgreSQL date has no timezone. Preserve its calendar value in the
+            // shared ETL DateTime representation without applying a local offset.
+            return value is DateOnly date
+                ? date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified)
+                : value;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

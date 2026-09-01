@@ -15,6 +15,7 @@ public enum RunAdmissionStatus
     PipelineNotFound,
     PipelineNotReady,
     SourceUnavailable,
+    RunAlreadyActive,
     Failed
 }
 
@@ -65,6 +66,11 @@ public sealed class RunAdmissionResult
 
     internal static RunAdmissionResult SourceUnavailable(Guid pipelineId, string pipelineName) =>
         new(RunAdmissionStatus.SourceUnavailable,
+            pipelineId: pipelineId,
+            pipelineName: pipelineName);
+
+    internal static RunAdmissionResult RunAlreadyActive(Guid pipelineId, string pipelineName) =>
+        new(RunAdmissionStatus.RunAlreadyActive,
             pipelineId: pipelineId,
             pipelineName: pipelineName);
 

@@ -58,6 +58,30 @@ public sealed class PostgreSqlEtlSourceTests
     }
 
     [Fact]
+    public async Task ReadAsync_NormalizesDateOnlyToUnspecifiedDateTimeAtMidnightAndPreservesOtherValues()
+    {
+        var date = new DateOnly(2026, 6, 15);
+        var reader = new TrackingDataReader(
+            ["Id", "Name", "Is Active", "Occurred On", "Optional Date"],
+            [[42, "Ada", true, date, DBNull.Value]]);
+        var connection = new TrackingDbConnection(() => reader);
+        await using var source = CreateSource(
+            new TrackingConnectionFactory(connection),
+            CreateOptions());
+
+        var row = Assert.Single(await ReadAllAsync(source.ReadAsync(CancellationToken.None)));
+
+        Assert.Equal(42, Assert.IsType<int>(row.Values["Id"]));
+        Assert.Equal("Ada", Assert.IsType<string>(row.Values["Name"]));
+        Assert.True(Assert.IsType<bool>(row.Values["Is Active"]));
+        var normalized = Assert.IsType<DateTime>(row.Values["Occurred On"]);
+        Assert.Equal(new DateTime(2026, 6, 15), normalized);
+        Assert.Equal(DateTimeKind.Unspecified, normalized.Kind);
+        Assert.Equal(TimeOnly.MinValue, TimeOnly.FromDateTime(normalized));
+        Assert.Null(row.Values["Optional Date"]);
+    }
+
+    [Fact]
     public async Task ReadAsync_YieldsFirstRowBeforeRequestingTheRemainderAndEarlyStopDisposesResources()
     {
         var reader = new TrackingDataReader(

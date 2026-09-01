@@ -74,21 +74,27 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
-    public async Task EvaluateAsync_PostgreSqlSourceIsNotReadyUntilExtractionIsSupported()
+    public async Task EvaluateAsync_ConfiguredPostgreSqlSourceIsReadyForExecution()
     {
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.PostgreSql;
+        pipeline.SourceOptions.FirstRowIsHeader = false;
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        };
 
         var result = await EvaluateAsync(pipeline);
 
-        Assert.False(result!.IsReady);
-        Assert.Contains(result.Problems, problem =>
-            problem.Component == "Source"
-            && problem.Message.Contains("CSV or XLSX", StringComparison.Ordinal));
+        Assert.True(result!.IsReady);
+        Assert.Empty(result.Problems);
     }
 
     [Fact]
-    public void EvaluateForPreview_AcceptsConfiguredPostgreSqlWithoutEnablingExecutionReadiness()
+    public void EvaluateForPreview_AndExecutionShareConfiguredPostgreSqlReadiness()
     {
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.PostgreSql;
@@ -106,7 +112,7 @@ public sealed class PipelineReadinessServiceTests
             AllowedTargetAccessService.Instance);
 
         Assert.True(service.EvaluateForPreview(pipeline).IsReady);
-        Assert.False(service.Evaluate(pipeline).IsReady);
+        Assert.True(service.Evaluate(pipeline).IsReady);
     }
 
     [Fact]
@@ -129,6 +135,7 @@ public sealed class PipelineReadinessServiceTests
             AllowedTargetAccessService.Instance);
 
         var result = service.EvaluateForPreview(pipeline);
+        var executionResult = service.Evaluate(pipeline);
 
         Assert.False(result.IsReady);
         Assert.Contains(result.Problems, problem => problem.Message.Contains("database is required", StringComparison.Ordinal));
@@ -137,6 +144,7 @@ public sealed class PipelineReadinessServiceTests
         Assert.Contains(result.Problems, problem =>
             problem.Component == "Transformation"
             && problem.Message.Contains("'amount' is not", StringComparison.Ordinal));
+        Assert.Equal(result.Problems, executionResult.Problems);
     }
 
     [Fact]

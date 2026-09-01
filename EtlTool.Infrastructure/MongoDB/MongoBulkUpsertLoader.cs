@@ -152,8 +152,15 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
         return document;
     }
 
-    private static BsonValue ToBsonValue(object? value) =>
-        value is null ? BsonNull.Value : BsonValue.Create(value);
+    private static BsonValue ToBsonValue(object? value) => value switch
+    {
+        null => BsonNull.Value,
+        // Shared date parsing intentionally produces timezone-free DateTime values.
+        // Match upsert-key identity by treating those clock fields as UTC without shifting them.
+        DateTime { Kind: DateTimeKind.Unspecified } dateTime =>
+            new BsonDateTime(DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)),
+        _ => BsonValue.Create(value)
+    };
 
     private static bool IsSafeApplicationRetry(MongoException exception) =>
         exception.HasErrorLabel(NoWritesPerformedLabel)

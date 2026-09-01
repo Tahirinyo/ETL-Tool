@@ -81,7 +81,7 @@ public sealed class RunAdmissionService : IRunAdmissionService
                         snapshot.Pipeline!.Id,
                         snapshot.Pipeline.Name),
                 PipelineRunSourceSnapshotStatus.Ready =>
-                    await AdmitReservedSourceAsync(snapshot).ConfigureAwait(false),
+                    await AdmitSourceAsync(snapshot).ConfigureAwait(false),
                 _ => throw new InvalidOperationException("The run-source snapshot status is invalid.")
             };
         }
@@ -112,21 +112,36 @@ public sealed class RunAdmissionService : IRunAdmissionService
         return result;
     }
 
-    private async Task<RunAdmissionResult> AdmitReservedSourceAsync(
+    private async Task<RunAdmissionResult> AdmitSourceAsync(
         PipelineRunSourceSnapshot snapshot)
     {
         var pipeline = snapshot.Pipeline
             ?? throw new InvalidOperationException("The ready run-source snapshot has no pipeline.");
-        var source = snapshot.Source
-            ?? throw new InvalidOperationException("The ready run-source snapshot has no source.");
+        var source = snapshot.Source;
+
+        if (pipeline.SourceType == SourceType.PostgreSql)
+        {
+            var existingRuns = await _runRepository
+                .ListByPipelineIdAsync(pipeline.Id, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (existingRuns.Any(run => run.Status is EtlRunStatus.Queued or EtlRunStatus.Running))
+            {
+                return RunAdmissionResult.RunAlreadyActive(pipeline.Id, pipeline.Name);
+            }
+        }
+        else if (source is null)
+        {
+            throw new InvalidOperationException("The ready run-source snapshot has no source.");
+        }
+
         var run = new EtlRun
         {
             Id = Guid.NewGuid(),
             PipelineId = pipeline.Id,
             PipelineName = pipeline.Name,
             Status = EtlRunStatus.Queued,
-            OriginalFileName = source.OriginalFileName,
-            StoredFilePath = source.StoredFilePath,
+            OriginalFileName = source?.OriginalFileName ?? string.Empty,
+            StoredFilePath = source?.StoredFilePath ?? string.Empty,
             ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(pipeline)
         };
 

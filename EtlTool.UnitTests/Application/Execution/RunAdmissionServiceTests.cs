@@ -76,6 +76,79 @@ public sealed class RunAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AdmitAsync_PostgreSqlPersistsImmutableLogicalSourceWithoutFileReservationOrSecrets()
+    {
+        var pipeline = PostgreSqlPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        var queue = new RecordingQueue();
+        var service = Service(pipeline, store, repository, queue);
+
+        var result = await service.AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.Admitted, result.Status);
+        var run = Assert.Single(repository.Runs);
+        Assert.Equal(string.Empty, run.OriginalFileName);
+        Assert.Equal(string.Empty, run.StoredFilePath);
+        Assert.Equal(0, store.ReservationCount);
+        Assert.True(store.HasActiveSource);
+        Assert.Equal(run.Id, Assert.Single(queue.Jobs).RunId);
+        var source = Assert.IsType<PostgreSqlSourceOptions>(run.ExecutionConfiguration!.PostgreSqlSource);
+        Assert.Equal("ReportingDb", source.ConnectionProfile);
+        Assert.Equal("reporting", source.Database);
+        Assert.Equal("public", source.Schema);
+        Assert.Equal("customers", source.Table);
+        Assert.DoesNotContain(
+            run.ExecutionConfiguration.GetType().GetProperties(),
+            property => property.Name.Contains("Password", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("ConnectionString", StringComparison.OrdinalIgnoreCase));
+
+        pipeline.PostgreSqlSource!.Table = "edited_after_admission";
+        Assert.Equal("customers", source.Table);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_PostgreSqlRejectsSecondActiveRunWithoutFileReservation()
+    {
+        var pipeline = PostgreSqlPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        repository.Runs.Add(new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            PipelineId = pipeline.Id,
+            Status = EtlRunStatus.Running
+        });
+        var queue = new RecordingQueue();
+
+        var result = await Service(pipeline, store, repository, queue)
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.RunAlreadyActive, result.Status);
+        Assert.Single(repository.Runs);
+        Assert.Empty(queue.Jobs);
+        Assert.Equal(0, store.ReservationCount);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_PostgreSqlQueueFailureInterruptsRunWithoutFileRollback()
+    {
+        var pipeline = PostgreSqlPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        var queue = new RecordingQueue { Failure = new IOException("Queue unavailable.") };
+
+        var result = await Service(pipeline, store, repository, queue)
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.Failed, result.Status);
+        Assert.Equal(EtlRunStatus.Interrupted, Assert.Single(repository.Runs).Status);
+        Assert.Equal(0, store.ReservationCount);
+        Assert.Equal(0, store.RollbackCount);
+        Assert.Empty(queue.Jobs);
+    }
+
+    [Fact]
     public async Task AdmitAsync_ConcurrentPostsConsumeOneActiveSourceOnlyOnce()
     {
         var pipeline = Pipeline();
@@ -373,6 +446,21 @@ public sealed class RunAdmissionServiceTests
         }
     };
 
+    private static PipelineDefinition PostgreSqlPipeline() => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "PostgreSQL Customers",
+        SourceType = SourceType.PostgreSql,
+        SourceOptions = new SourceOptions { CultureName = "en-US" },
+        PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        }
+    };
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -568,8 +656,14 @@ public sealed class RunAdmissionServiceTests
         public Task<EtlRun?> GetByIdAsync(Guid runId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid id, CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+        public Task<IReadOnlyList<EtlRun>> ListByPipelineIdAsync(Guid id, CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                return Task.FromResult<IReadOnlyList<EtlRun>>(
+                    Runs.Where(run => run.PipelineId == id).ToArray());
+            }
+        }
 
         public Task<IReadOnlyList<EtlRun>> ListNonTerminalAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();

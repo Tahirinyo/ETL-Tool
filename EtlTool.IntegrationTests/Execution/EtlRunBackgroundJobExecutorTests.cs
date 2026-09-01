@@ -3,6 +3,7 @@ using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.Pipelines;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Reporting;
 using EtlTool.Application.Sources;
@@ -126,6 +127,28 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal(0, harness.Loader.CallCount);
         Assert.Equal(0, harness.Orchestrator.ExecutionCount);
         Assert.Equal(1, harness.SourceFiles.DeleteCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PostgreSqlSchemaDriftFailsSafelyWithoutRowsLoadsOrErrorReport()
+    {
+        var harness = Harness();
+        harness.SourceFiles.OpenException = new PostgreSqlSourceSchemaChangedException();
+
+        var exception = await Assert.ThrowsAsync<PostgreSqlSourceSchemaChangedException>(() =>
+            harness.Executor.ExecuteAsync(
+                new BackgroundJob(harness.Run.Id),
+                CancellationToken.None));
+
+        Assert.Equal(PostgreSqlSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.Equal(EtlRunStatus.Failed, harness.Run.Status);
+        Assert.Equal(PostgreSqlSourceSchemaChangedException.SafeMessage, harness.Run.SystemError);
+        Assert.Equal((0L, 0L, 0L, 0L, 0L, 0L, 0L), Counters(harness.Run));
+        Assert.Equal(0, harness.Run.TotalRows);
+        Assert.Null(harness.Run.ErrorReportPath);
+        Assert.Equal(0, harness.Orchestrator.ExecutionCount);
+        Assert.Equal(0, harness.Loader.CallCount);
+        Assert.Equal(0, harness.Output.OpenCount);
     }
 
     [Fact]
@@ -1279,11 +1302,18 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         public bool ThrowOnDelete { get; set; }
 
+        public Exception? OpenException { get; set; }
+
         private MemoryStream? LastStream { get; set; }
 
         public Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _openCount);
+            if (OpenException is not null)
+            {
+                return Task.FromException<IEtlSource>(OpenException);
+            }
+
             LastStream = new MemoryStream([1]);
             return Task.FromResult<IEtlSource>(new MemoryEtlSource(LastStream));
         }

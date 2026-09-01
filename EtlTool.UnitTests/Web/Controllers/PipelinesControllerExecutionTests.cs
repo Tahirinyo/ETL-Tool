@@ -89,6 +89,22 @@ public sealed class PipelinesControllerExecutionTests
     }
 
     [Fact]
+    public async Task Execute_ActiveRunReturnsSafeConflictPreview()
+    {
+        var pipelineId = Guid.NewGuid();
+        var controller = Controller(new StubAdmissionService(
+            RunAdmissionResult.RunAlreadyActive(pipelineId, "Customers")));
+
+        var result = Assert.IsType<ViewResult>(
+            await controller.Execute(pipelineId, CancellationToken.None));
+        var model = Assert.IsType<PipelinePreviewViewModel>(result.Model);
+
+        Assert.Equal(StatusCodes.Status409Conflict, controller.Response.StatusCode);
+        Assert.Contains("already has a queued or running execution", model.FailureMessage, StringComparison.Ordinal);
+        Assert.False(model.RequiresSourceUpload);
+    }
+
+    [Fact]
     public async Task Execute_AdmissionFailureReturnsSafeServiceUnavailablePreview()
     {
         var pipelineId = Guid.NewGuid();

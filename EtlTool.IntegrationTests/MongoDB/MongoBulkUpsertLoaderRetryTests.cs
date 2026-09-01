@@ -33,6 +33,28 @@ public sealed class MongoBulkUpsertLoaderRetryTests
     }
 
     [Fact]
+    public async Task Loader_StoresCanonicalUnspecifiedDatesAtUtcClockFieldsWithoutLocalShift()
+    {
+        var writer = new StubWriter();
+        var loader = Loader(writer, maximumAttempts: 1, delayMilliseconds: 0);
+        var canonicalDate = new DateTime(2026, 6, 15);
+
+        await loader.UpsertBatchAsync(
+            [Row(2, ("event_date", canonicalDate), ("raw_date", canonicalDate))],
+            Target(),
+            "event_date",
+            CancellationToken.None);
+
+        var request = Assert.IsType<ReplaceOneModel<BsonDocument>>(
+            Assert.Single(writer.LastRequests));
+        var expected = new BsonDateTime(
+            DateTime.SpecifyKind(canonicalDate, DateTimeKind.Utc));
+
+        Assert.Equal(expected, request.Replacement["event_date"]);
+        Assert.Equal(expected, request.Replacement["raw_date"]);
+    }
+
+    [Fact]
     public async Task SafeNoWriteFailure_RetriesThenReturnsConfirmedResult()
     {
         var writer = new StubWriter
