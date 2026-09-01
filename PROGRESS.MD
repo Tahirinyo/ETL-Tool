@@ -11,6 +11,7 @@
 - DB.14 added bounded, deterministic MongoDB source schema inference for top-level scalar fields, including null/missing handling, numeric widening, ObjectId mapping, safe conflict/unsupported-BSON failures, shared snapshot compatibility, and MongoDB source readiness validation. MongoDB extraction, Preview, and UI remain deferred.
 - DB.15 added cursor-based MongoDB streaming extraction with configurable fetch size, deterministic `_id` ordering, safe BSON-to-row conversion (including exact IEEE-754 Double-to-CLR-decimal admission), execution-time schema-drift detection, immutable logical-source admission, and background-run integration. MongoDB Preview and UI integration remain deferred.
 - DB.16 integrated MongoDB as a selectable pipeline source: configured-connection database/collection discovery, source-only UI binding, inferred schema handoff to the shared mapping flow, Preview source creation, safe source failures, and source/destination configuration separation. Existing schema comparison/remapping and execution-time drift guards apply to MongoDB sources.
+- Package E is complete: DB.17 made execution destination-neutral with admitted destination snapshots and safe loader resolution; DB.18 added validated PostgreSQL destination configuration and output-to-column mapping; DB.19 added transactional PostgreSQL batch upserts, retry classification, counters, and real-provider integration coverage; DB.20 acceptance verified insert/update/idempotency, source-key rejection and deduplication, retry/failure/partial-completion/cancellation propagation, safe errors, and committed-counter semantics. The only limitation is that deterministic commit-ambiguity coverage uses the explicit batch-executor seam because a real-provider commit-fault injection point is not available.
 
 ## In Progress
 
@@ -22,4 +23,4 @@
 
 ## Next
 
-- Package D Closeout cross-source regression and acceptance validation.
+- Select the next approved task.

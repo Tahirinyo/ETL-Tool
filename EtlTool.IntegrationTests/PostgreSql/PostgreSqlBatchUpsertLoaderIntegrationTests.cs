@@ -225,6 +225,77 @@ public sealed class PostgreSqlBatchUpsertLoaderIntegrationTests(PostgreSqlFixtur
         }
     }
 
+    [Fact]
+    public async Task Orchestrator_DeduplicatesSourceRowsAndRejectsEmptyKeysBeforePostgreSqlPersistence()
+    {
+        var schema = Name("db20_source_keys");
+        var factory = CreateFactory();
+        var loader = CreateLoader(factory);
+        var pipeline = Pipeline(schema, "customers");
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Id" },
+            new SourceFieldDefinition { Name = "Name" },
+            new SourceFieldDefinition { Name = "Score" },
+            new SourceFieldDefinition { Name = "Active" },
+            new SourceFieldDefinition { Name = "Occurred" }
+        ];
+
+        await using var connection = await factory.OpenAsync("ReportingDb", CancellationToken.None);
+        try
+        {
+            await ExecuteAsync(connection, $"""
+                CREATE SCHEMA {Quote(schema)};
+                CREATE TABLE {Quote(schema)}.customers (
+                    "Customer Id" text PRIMARY KEY,
+                    "Full Name" text NOT NULL,
+                    "Credit Score" integer,
+                    "Is Active" boolean,
+                    "Occurred Local" timestamp without time zone);
+                """);
+            var processor = new PipelineRowProcessor(
+                new FieldMappingService(),
+                new TransformationEngine(new TransformationHandlerRegistry([])),
+                new ValidationEngine(new ValidationHandlerRegistry([])));
+            var orchestrator = new BatchOrchestrator(
+                new AlwaysReady(),
+                processor,
+                new BatchExecutionOptions { BatchSize = 2 });
+            await using var source = new MemorySource(
+                SourceRow("one", "First wins", 1),
+                SourceRow("one", "Later duplicate", 2),
+                SourceRow(null, "Null key", 3),
+                SourceRow(string.Empty, "Empty key", 4),
+                SourceRow(" ", "Whitespace key", 5),
+                SourceRow("two", "Second valid", 6));
+
+            var result = await orchestrator.ExecuteWithLoadResultAsync(
+                source,
+                pipeline,
+                loader,
+                static (_, _) => Task.CompletedTask,
+                static (_, _) => Task.CompletedTask,
+                CancellationToken.None);
+
+            Assert.Equal((6L, 2L, 3L, 1L), (
+                result.ProcessedRows,
+                result.ValidRows,
+                result.InvalidRows,
+                result.DeduplicatedRows));
+            Assert.Equal((2L, 0L), (result.InsertedRows, result.UpdatedRows));
+            Assert.Equal(2L, await ScalarLongAsync(
+                connection,
+                $"SELECT count(*) FROM {Quote(schema)}.customers;"));
+            Assert.Equal("First wins", await ScalarStringAsync(
+                connection,
+                $"SELECT \"Full Name\" FROM {Quote(schema)}.customers WHERE \"Customer Id\" = 'one';"));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP SCHEMA IF EXISTS {Quote(schema)} CASCADE;");
+        }
+    }
+
     private PostgreSqlConnectionFactory CreateFactory() => new(
         new PostgreSqlConnectionOptions
         {
@@ -297,7 +368,7 @@ public sealed class PostgreSqlBatchUpsertLoaderIntegrationTests(PostgreSqlFixtur
         return row;
     }
 
-    private static DataRow SourceRow(string id, string name, object score)
+    private static DataRow SourceRow(string? id, string name, object score)
     {
         var row = new DataRow { SourceRowNumber = 2 };
         row.Values["Id"] = id;
