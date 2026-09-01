@@ -21,15 +21,16 @@ Edit `.env` and replace every placeholder. The file is ignored by Git and must r
 
 - `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD` create the local MongoDB root account.
 - `MONGODB_CONNECTION_STRING` is supplied to ASP.NET Core as `MongoDb__ConnectionString`; it must use the Compose hostname `mongo`, not `localhost`, and must specify `authSource=admin`.
+- `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` create the local PostgreSQL database and account.
 - URI-encode reserved characters in the MongoDB username or password before placing them in the connection string. Using a long local password made only of unreserved URI characters avoids accidental URI-format errors.
 
-No MongoDB credentials or usable connection strings are committed to the repository or included in the application image.
+No MongoDB or PostgreSQL credentials, or usable connection strings, are committed to the repository or included in the application image.
 
 Saved MongoDB and PostgreSQL connections entered through the **Connections** screen are protected with ASP.NET Core
-Data Protection before they are written to the metadata database. The key ring is stored under
+Data Protection before they are written to MongoDB metadata. The key ring is stored under
 `App_Data/data-protection-keys`; Docker Compose retains it in the existing `app-data` named volume. Keep that volume
-together with `mongo-data` across normal container recreation. If the key ring is lost while saved connection records
-remain, those protected credentials cannot be decrypted and must be entered again.
+together with `mongo-data` and `postgres-data` across normal container recreation. If the key ring is lost while saved
+connection records remain, those protected credentials cannot be decrypted and must be entered again.
 
 ### Start and verify
 
@@ -38,7 +39,21 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Open [http://localhost:8080](http://localhost:8080). Then open [http://localhost:8080/Pipelines](http://localhost:8080/Pipelines): a successful response confirms that the web application can use its Compose-network connection to MongoDB.
+`docker compose ps` should show `mongo` and `postgres` as healthy and `web` as running. Open
+[http://localhost:8080](http://localhost:8080), then use **Connections** to register the two included database
+services once:
+
+- **MongoDB**: give the saved connection a name such as `Compose MongoDB` and enter
+  `mongodb://<URI-encoded-username>:<URI-encoded-password>@mongo:27017/?authSource=admin`, substituting the
+  matching local `.env` values.
+- **PostgreSQL**: give the saved connection a name such as `Compose PostgreSQL` and enter
+  `Host=postgres;Port=5432;Database=<POSTGRES_DB>;Username=<POSTGRES_USER>;Password=<POSTGRES_PASSWORD>`,
+  substituting the matching local `.env` values.
+
+These are container-to-container connection strings: `mongo` and `postgres` are Docker Compose service hostnames.
+Do not use `localhost` or `host.docker.internal` from the web container. The application persists the protected saved
+connection records in MongoDB and pipeline workflows select those saved connections; it does not create them
+automatically.
 
 Inspect service output when diagnosing startup problems:
 
@@ -46,7 +61,9 @@ Inspect service output when diagnosing startup problems:
 docker compose logs --follow
 ```
 
-MongoDB is published only to the local host at `127.0.0.1:27018`. The application continues to reach it through Docker Compose’s default network by using the `mongo` service hostname.
+PostgreSQL has no host port because the normal demo flow uses the Connections UI from the web container. MongoDB is
+published only to the local host at `127.0.0.1:27018`; both databases remain reachable from the web container through
+Docker Compose's default network by using the `mongo` and `postgres` service hostnames.
 
 To inspect ETL output with MongoDB Compass, connect locally using:
 
@@ -58,7 +75,7 @@ Substitute the local `.env` values and URI-encode reserved characters in either 
 
 ### Stop, restart, or reset
 
-Stop the containers while keeping MongoDB and application data:
+Stop the containers while keeping MongoDB, PostgreSQL, and application data:
 
 ```powershell
 docker compose down
@@ -70,21 +87,30 @@ Restart the existing local stack and its named volumes:
 docker compose up -d
 ```
 
-Keep the same MongoDB credentials in `.env` when restarting an existing `mongo-data` volume. MongoDB initializes its root account only when that volume is first created; changing those credentials requires an intentional volume reset. Keep the existing `app-data` volume as well so saved-connection Data Protection keys remain available.
+Keep the same database credentials in `.env` when restarting existing volumes. MongoDB initializes its root account only
+when `mongo-data` is first created; PostgreSQL initializes its account, database, and demo schema only when
+`postgres-data` is first created. Changing these credentials or rerunning the PostgreSQL initialization requires an
+intentional volume reset. Keep the existing `app-data` volume as well so saved-connection Data Protection keys remain
+available.
 
-To remove all local data and start again from an empty MongoDB and `App_Data` volume, run:
+To remove all local data and start again from empty MongoDB, PostgreSQL, and `App_Data` volumes, run:
 
 ```powershell
 docker compose down --volumes
 ```
 
-> Warning: `docker compose down --volumes` permanently deletes this stack’s persisted MongoDB data and application-data contents, including retained local error reports and saved-connection Data Protection keys. Saved connection records cannot be decrypted after their corresponding key ring is removed.
+> Warning: `docker compose down --volumes` permanently deletes this stack's persisted MongoDB, PostgreSQL, and
+> application-data contents, including retained local error reports and saved-connection Data Protection keys. Saved
+> connection records cannot be decrypted after their corresponding key ring is removed.
 
 ## Configuration notes
 
-The application continues to use its existing ASP.NET Core configuration model. Docker Compose maps the external `MONGODB_CONNECTION_STRING` value to `MongoDb__ConnectionString`; no Docker-only configuration path has been added. PostgreSQL connections are named profiles under `PostgreSql:Profiles`; configure each profile's connection string through an environment variable, user secrets, or another secret provider (for example, `PostgreSql__Profiles__Demo__ConnectionString`). Profile names and selected database objects are stored with a pipeline; connection strings are not. The container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside this MVP packaging setup.
-
-CONN.1 adds saved-connection CRUD and safe ID/revision contracts alongside those legacy configuration paths. Existing pipelines continue using configured PostgreSQL profiles and the application MongoDB connection. Pipeline connection selection and cascading database/schema/table discovery remain deferred to CONN.2.
+Docker Compose maps the external `MONGODB_CONNECTION_STRING` value to `MongoDb__ConnectionString` for application
+metadata. PostgreSQL and MongoDB source/destination workflows use protected saved connections created in the
+**Connections** UI; pipelines retain only connection references and selected database objects, never connection
+strings. Legacy ASP.NET Core PostgreSQL profile configuration remains available for compatibility but is not the normal
+Compose demo workflow. The container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside
+this MVP packaging setup.
 
 ## MVP scope and known limitations
 
@@ -101,7 +127,7 @@ The released MVP supports reusable pipelines for CSV, modern Excel (`.xlsx`), Po
 
 For a database source, the user selects a saved provider-compatible connection and then cascades through the available database objects. PostgreSQL uses connection, database, schema, and table; MongoDB uses connection, database, and collection. PostgreSQL sources route to MongoDB destinations and MongoDB sources route to PostgreSQL destinations; CSV/XLSX retain the destination choice. Saved connection credentials remain protected server-side, while pipelines retain only the connection reference and logical object identities. PostgreSQL and MongoDB sources stream incrementally. Preview reads the first 100 rows through the same mapping, transformation, validation, filtering, and deduplication path used for execution; it performs live schema comparison and requires remapping when the source schema has changed. Unsupported PostgreSQL column types and unsupported or incompatible MongoDB BSON values fail safely instead of being silently coerced.
 
-Execution is admitted to an in-process background queue and incrementally loads valid rows in configured batches. MongoDB uses BulkWrite-style upserts; PostgreSQL uses batch upserts against the configured key column. In both supported destinations, confirmed inserts and updates are counted separately and a rerun with the same logical keys is idempotent. Empty upsert keys and later duplicates within an input are excluded. Run status/history and counters are retained; invalid rows are excluded from loading and available in a safely generated error CSV. The Compose build/start, MongoDB health, and `/Pipelines` HTTP 200 checks were completed during final acceptance.
+Execution is admitted to an in-process background queue and incrementally loads valid rows in configured batches. MongoDB uses BulkWrite-style upserts; PostgreSQL uses batch upserts against the configured key column. In both supported destinations, confirmed inserts and updates are counted separately and a rerun with the same logical keys is idempotent. Empty upsert keys and later duplicates within an input are excluded. Run status/history and counters are retained; invalid rows are excluded from loading and available in a safely generated error CSV. The Compose stack includes health-gated MongoDB and PostgreSQL services for local/demo onboarding.
 
 ### Intentional MVP exclusions
 

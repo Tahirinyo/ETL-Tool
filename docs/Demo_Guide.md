@@ -15,10 +15,11 @@ All values are fictional. The CSV files use comma delimiters and ISO dates (`yyy
 
 ## One-time setup
 
-1. Copy `.env.example` to `.env`, fill in local MongoDB credentials, and start the application with `docker compose up --build -d`.
-2. Open `http://localhost:8080/Pipelines`.
-3. Create a pipeline named `Customer import demo`.
-4. Open **Edit**, set a permitted destination such as database `etl_demo` and collection `customers`, and choose `CustomerId` as the upsert-key field after mapping is saved.
+1. Copy `.env.example` to `.env`, fill in the local MongoDB and PostgreSQL values, and start the application with `docker compose up --build -d`.
+2. Confirm `docker compose ps` shows `mongo` and `postgres` as healthy, then open `http://localhost:8080/Connections`.
+3. Save a MongoDB connection named `Compose MongoDB` with `mongodb://<URI-encoded-username>:<URI-encoded-password>@mongo:27017/?authSource=admin` and a PostgreSQL connection named `Compose PostgreSQL` with `Host=postgres;Port=5432;Database=<POSTGRES_DB>;Username=<POSTGRES_USER>;Password=<POSTGRES_PASSWORD>`. Substitute the local `.env` values. These `mongo` and `postgres` hostnames are for the web container; do not use `localhost`.
+4. Open `http://localhost:8080/Pipelines` and create a pipeline named `Customer import demo`.
+5. Open **Edit**, select the saved `Compose MongoDB` connection, choose database `etl_demo` and collection `customers`, and choose `CustomerId` as the upsert-key field after mapping is saved.
 
 ## Configure the pipeline
 
@@ -87,58 +88,32 @@ The repository also supports `.xlsx`, semicolon/tab CSV delimiters, additional t
 
 ## Database-to-database setup
 
-The following two demos require the application's MongoDB connection plus a reachable PostgreSQL instance. Docker Compose in this repository provisions MongoDB only; configure PostgreSQL before starting the application, without committing credentials. For example, set a local process/user-secret value for the named profile used below:
-
-```powershell
-$env:PostgreSql__Profiles__Demo__ConnectionString = '<local PostgreSQL connection string>'
-```
-
-`Demo` is a profile name, not a secret. The connection string is a placeholder and must remain local. In the source and destination forms, the application discovers the allowed PostgreSQL databases, schemas, tables, columns, and eligible key constraints from that profile. MongoDB uses the configured application connection; only the chosen database and collection are saved with a pipeline.
+The Compose PostgreSQL service initializes the `etl_demo` schema, the `customer_source` table, and the empty
+`mongo_customers` destination table only when a new `postgres-data` volume is created. Use the saved `Compose
+PostgreSQL` and `Compose MongoDB` connections from **Connections**; pipeline workflows discover databases, schemas,
+tables, columns, and eligible key constraints from those saved connections. The initialization is local/demo scoped and
+does not reset data on normal restarts.
 
 Use simple top-level scalar fields in the MongoDB scenario. Nested documents, arrays, and unsupported BSON values are intentionally outside this demo because the source rejects unsupported or incompatible values safely.
 
 ## Demo A — PostgreSQL to MongoDB
 
-Prepare a small PostgreSQL source table in the database exposed by the `Demo` profile. This fixture has no credentials and can be created with any local SQL client:
+The Compose initialization provides three fictional source rows: two `TR` customers and one `US` customer for the
+filtering demonstration.
 
-```sql
-CREATE SCHEMA IF NOT EXISTS etl_demo;
-CREATE TABLE IF NOT EXISTS etl_demo.customer_source (
-    customer_id bigint PRIMARY KEY,
-    full_name text NOT NULL,
-    email text NOT NULL,
-    country text NOT NULL
-);
-INSERT INTO etl_demo.customer_source (customer_id, full_name, email, country) VALUES
-    (101, ' Ada Lovelace ', 'ADA@EXAMPLE.TEST', 'TR'),
-    (102, ' Grace Hopper ', 'GRACE@EXAMPLE.TEST', 'TR'),
-    (103, ' Filtered Customer ', 'FILTERED@EXAMPLE.TEST', 'US')
-ON CONFLICT (customer_id) DO UPDATE SET
-    full_name = EXCLUDED.full_name, email = EXCLUDED.email, country = EXCLUDED.country;
-```
-
-1. Create `PostgreSQL to MongoDB demo`. On **Source**, select **PostgreSQL**, choose profile `Demo`, then select the discovered database, `etl_demo` schema, and `customer_source` table. Select **Inspect table and configure mapping**.
+1. Create `PostgreSQL to MongoDB demo`. On **Source**, select **PostgreSQL**, choose `Compose PostgreSQL`, then select the discovered database, `etl_demo` schema, and `customer_source` table. Select **Inspect table and configure mapping**.
 2. In **Configure fields**, map `customer_id` to `CustomerId`, `full_name` to `FullName`, `email` to `Email`, and `country` to `Country`.
 3. Add transformations in this order: **Trim** `FullName`, **To lower** `Email`, then **Conditional filter** `Country` with **NotEquals** `TR`. Add an **Email format** validation for `Email`.
-4. On **Edit**, select **MongoDB**, choose a permitted database such as `etl_demo` and collection `postgres_customers`, then select `CustomerId` as the upsert key.
+4. On **Edit**, select **MongoDB**, choose `Compose MongoDB`, then choose database `etl_demo` and collection `postgres_customers`; select `CustomerId` as the upsert key.
 5. Open **Preview**. It reads at most 100 PostgreSQL rows and applies the same mapping/rules as execution. With the sample data, expect two valid rows and one filtered row. If the table schema has changed since inspection, Preview stops for remapping rather than reading stale mappings.
 6. Select **Execute pipeline** and wait on the polling progress page for **Completed**. The first run should show two confirmed inserts, zero updates, zero invalid rows, and one filtered row. Check **Run history** for the saved status and counters.
 7. Inspect `etl_demo.postgres_customers` with the configured MongoDB client. It contains two documents with `CustomerId` values `101` and `102`, trimmed names, and lower-case emails. Run the pipeline again without changing the source: the documents remain two and the run reports two updates rather than inserts.
 
 ## Demo B — MongoDB to PostgreSQL
 
-Create a PostgreSQL destination table with a key constraint. The selected upsert key must correspond to a mapped destination column with a primary-key or unique constraint:
-
-```sql
-CREATE TABLE IF NOT EXISTS etl_demo.mongo_customers (
-    source_id text PRIMARY KEY,
-    customer_name text NOT NULL,
-    email text NOT NULL,
-    balance numeric NOT NULL
-);
-```
-
-Seed a MongoDB collection through any local client connected with the application's configured MongoDB credentials; the following commands contain no connection string:
+The Compose initialization already provides the empty `etl_demo.mongo_customers` PostgreSQL destination table with a
+primary key on `source_id`. Seed a MongoDB collection through any local client connected with the application's
+configured MongoDB credentials; the following commands contain no connection string:
 
 ```javascript
 db.getSiblingDB('etl_demo').mongo_customer_source.replaceOne(
@@ -151,9 +126,9 @@ db.getSiblingDB('etl_demo').mongo_customer_source.replaceOne(
   { upsert: true });
 ```
 
-1. Create `MongoDB to PostgreSQL demo`. On **Source**, select **MongoDB**, choose database `etl_demo` and collection `mongo_customer_source`, then select **Inspect collection and configure mapping**. The discovered schema includes the top-level scalar `_id`, `fullName`, `email`, and `balance` fields.
+1. Create `MongoDB to PostgreSQL demo`. On **Source**, select **MongoDB**, choose `Compose MongoDB`, then choose database `etl_demo` and collection `mongo_customer_source`; select **Inspect collection and configure mapping**. The discovered schema includes the top-level scalar `_id`, `fullName`, `email`, and `balance` fields.
 2. Map `_id` to `SourceId`, `fullName` to `CustomerName`, `email` to `Email`, and `balance` to `Balance`. Add **Trim** `CustomerName` and **To lower** `Email`, then add an **Email format** validation for `Email`.
-3. On **Edit**, select **PostgreSQL**, choose profile `Demo`, the discovered database, schema `etl_demo`, and table `mongo_customers`. Map `SourceId -> source_id`, `CustomerName -> customer_name`, `Email -> email`, and `Balance -> balance`; select `source_id` as the PostgreSQL upsert-key column.
+3. On **Edit**, select **PostgreSQL**, choose `Compose PostgreSQL`, the discovered database, schema `etl_demo`, and table `mongo_customers`. Map `SourceId -> source_id`, `CustomerName -> customer_name`, `Email -> email`, and `Balance -> balance`; select `source_id` as the PostgreSQL upsert-key column.
 4. Open **Preview**. It reads no more than 100 MongoDB documents, uses the saved mapping/transform/validation path, and performs live schema comparison. A source schema change requires remapping before Preview or execution proceeds.
 5. Execute the pipeline in the background and wait for **Completed**. The first sample run has two valid rows and two confirmed inserts. Query `etl_demo.mongo_customers` to see the renamed identifier, trimmed names, and lower-case emails.
 6. Execute it again unchanged. The target still has two rows and the second run reports two updates, demonstrating PostgreSQL idempotent upsert behavior. Run details retain the status and confirmed counters; any invalid source rows would be excluded and listed in the error CSV.
