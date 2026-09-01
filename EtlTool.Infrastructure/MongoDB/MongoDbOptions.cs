@@ -12,6 +12,8 @@ public sealed class MongoDbOptions
 
     public int BulkWriteRetryDelayMilliseconds { get; set; } = 200;
 
+    public int SourceSchemaSampleDocumentLimit { get; set; } = 100;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ConnectionString))
@@ -37,6 +39,12 @@ public sealed class MongoDbOptions
         {
             throw new InvalidOperationException(
                 $"Configuration value '{SectionName}:BulkWriteRetryDelayMilliseconds' must be between 0 and 60000.");
+        }
+
+        if (SourceSchemaSampleDocumentLimit is < 1 or > 1_000)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value '{SectionName}:SourceSchemaSampleDocumentLimit' must be between 1 and 1000.");
         }
     }
 }

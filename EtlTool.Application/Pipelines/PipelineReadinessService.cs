@@ -84,10 +84,13 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         var sourceOptions = pipeline.SourceOptions;
 
         var isPostgreSql = pipeline.SourceType == SourceType.PostgreSql;
+        var isMongoDb = pipeline.SourceType == SourceType.MongoDb;
         if (pipeline.SourceType is not SourceType.Csv and not SourceType.Xlsx
-            && !isPostgreSql)
+            && !isPostgreSql
+            && !isMongoDb)
         {
-            AddProblem(problems, SourceComponent, "The pipeline source type must be CSV, XLSX, or PostgreSQL.");
+            AddProblem(problems, SourceComponent,
+                "The pipeline source type must be CSV, XLSX, PostgreSQL, or MongoDB.");
         }
 
         if (sourceOptions is null)
@@ -140,6 +143,12 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
             EvaluatePostgreSqlSource(pipeline.PostgreSqlSource, problems);
         }
 
+        if (isMongoDb)
+        {
+            EvaluateMongoDbSource(pipeline.MongoDbSource, problems);
+            AddProblem(problems, SourceComponent, "MongoDB source execution is not available.");
+        }
+
         var hasUsableSchema = true;
         try
         {
@@ -182,6 +191,27 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         if (string.IsNullOrWhiteSpace(source.Table))
         {
             AddProblem(problems, SourceComponent, "The PostgreSQL table is required.");
+        }
+    }
+
+    private static void EvaluateMongoDbSource(
+        MongoDbSourceOptions? source,
+        List<PipelineReadinessProblem> problems)
+    {
+        if (source is null)
+        {
+            AddProblem(problems, SourceComponent, "The MongoDB source configuration is missing.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Database))
+        {
+            AddProblem(problems, SourceComponent, "The MongoDB source database is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(source.Collection))
+        {
+            AddProblem(problems, SourceComponent, "The MongoDB source collection is required.");
         }
     }
 

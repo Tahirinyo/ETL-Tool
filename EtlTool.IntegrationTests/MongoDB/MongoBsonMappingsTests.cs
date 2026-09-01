@@ -158,4 +158,50 @@ public sealed class MongoBsonMappingsTests
             pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)),
             roundTripped.ExpectedSchema.Select(field => (field.Name, field.DataType)));
     }
+
+    [Fact]
+    public void PipelineMapping_RoundTripsMongoDbSourceIdentityAndInferredSharedSchema()
+    {
+        _ = new MongoMetadataDatabase(new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_bson_mapping_tests"
+        });
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.MongoDb,
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "reporting",
+                Collection = "customers"
+            },
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "_id", DataType = SourceFieldType.String },
+                new SourceFieldDefinition { Name = "Age", DataType = SourceFieldType.Integer },
+                new SourceFieldDefinition { Name = "Amount", DataType = SourceFieldType.Decimal },
+                new SourceFieldDefinition { Name = "Active", DataType = SourceFieldType.Boolean },
+                new SourceFieldDefinition { Name = "Created", DataType = SourceFieldType.Date }
+            ]
+        };
+
+        var document = pipeline.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<PipelineDefinition>(document);
+        var execution = BsonSerializer.Deserialize<EtlRunExecutionConfiguration>(
+            EtlRunExecutionConfiguration.Capture(pipeline).ToBsonDocument());
+
+        Assert.Equal(SourceType.MongoDb, roundTripped.SourceType);
+        Assert.Equal("reporting", roundTripped.MongoDbSource!.Database);
+        Assert.Equal("customers", roundTripped.MongoDbSource.Collection);
+        Assert.Equal(
+            pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)),
+            roundTripped.ExpectedSchema.Select(field => (field.Name, field.DataType)));
+        Assert.Equal(
+            pipeline.ExpectedSchema.Select(field => (field.Name, field.DataType)),
+            execution.ExpectedSchema.Select(field => (field.Name, field.DataType)));
+        Assert.NotNull(execution.MongoDbSource);
+        Assert.DoesNotContain("ConnectionString", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+    }
 }

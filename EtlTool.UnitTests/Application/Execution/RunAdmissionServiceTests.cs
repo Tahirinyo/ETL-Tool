@@ -208,6 +208,34 @@ public sealed class RunAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AdmitAsync_MongoDbExecutionUnavailableReadinessProblemPreventsSourceCapture()
+    {
+        var pipeline = MongoDbPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        var queue = new RecordingQueue();
+        PipelineReadinessProblem[] problems =
+        [
+            new("Source", "MongoDB source execution is not available.")
+        ];
+        var service = Service(
+            pipeline,
+            store,
+            repository,
+            queue,
+            new PipelineReadinessResult(problems));
+
+        var result = await service.AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.PipelineNotReady, result.Status);
+        Assert.Equal(problems, result.ReadinessProblems);
+        Assert.Empty(repository.Runs);
+        Assert.Empty(queue.Jobs);
+        Assert.Equal(0, store.ReservationCount);
+        Assert.True(store.HasActiveSource);
+    }
+
+    [Fact]
     public async Task AdmitAsync_UnavailableSourceCreatesNothing()
     {
         var pipeline = Pipeline();
@@ -458,6 +486,19 @@ public sealed class RunAdmissionServiceTests
             Database = "reporting",
             Schema = "public",
             Table = "customers"
+        }
+    };
+
+    private static PipelineDefinition MongoDbPipeline() => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "MongoDB Customers",
+        SourceType = SourceType.MongoDb,
+        SourceOptions = new SourceOptions { CultureName = "en-US" },
+        MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
         }
     };
 

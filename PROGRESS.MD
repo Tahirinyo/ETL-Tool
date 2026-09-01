@@ -8,6 +8,7 @@
 - Day 15 final acceptance was completed. The demo configuration blocker was corrected in `01b4f1d`; fixture-backed acceptance verifies the documented clean and dirty row counters.
 - Task 15.3 reconciled released capability claims, intentional MVP exclusions, and known non-blocking limitations with implementation and acceptance evidence.
 - DB.13 added MongoDB source identity metadata and configured-connection database/collection discovery, including metadata/system-database exclusion and safe access failures. It does not include MongoDB schema inference, extraction, or UI integration.
+- DB.14 added bounded, deterministic MongoDB source schema inference for top-level scalar fields, including null/missing handling, numeric widening, ObjectId mapping, safe conflict/unsupported-BSON failures, shared snapshot compatibility, and MongoDB source readiness validation. MongoDB extraction, Preview, and UI remain deferred.
 
 ## In Progress
 
@@ -19,4 +20,4 @@
 
 ## Next
 
-- Perform Task 15.4 local repository/release closeout; do not start another MVP feature task.
+- Plan DB.15 MongoDB streaming extraction; do not start Preview/UI integration as part of that task.

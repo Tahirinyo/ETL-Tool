@@ -12,6 +12,87 @@ namespace EtlTool.UnitTests.Application.Pipelines;
 public sealed class PipelineReadinessServiceTests
 {
     [Fact]
+    public async Task EvaluateAsync_ReportsMongoDbExecutionUnavailableForConfiguredSourceWithSchema()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.MongoDb;
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
+        };
+
+        var result = await EvaluateAsync(pipeline);
+
+        Assert.False(result!.IsReady);
+        Assert.Contains(
+            new PipelineReadinessProblem("Source", "MongoDB source execution is not available."),
+            result.Problems);
+        Assert.DoesNotContain(result.Problems, problem =>
+            problem.Message.Contains("configuration is missing", StringComparison.Ordinal)
+            || problem.Message.Contains("database is required", StringComparison.Ordinal)
+            || problem.Message.Contains("collection is required", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EvaluateForPreview_ReportsMongoDbExecutionUnavailableAndRetainsRuleValidation()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.MongoDb;
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
+        };
+        pipeline.TransformationRules =
+        [
+            new TransformationRule { Type = TransformationType.Trim, Order = 1, SourceField = "missing" }
+        ];
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
+
+        var result = service.EvaluateForPreview(pipeline);
+
+        Assert.False(result.IsReady);
+        Assert.Contains(
+            new PipelineReadinessProblem("Source", "MongoDB source execution is not available."),
+            result.Problems);
+        Assert.Contains(result.Problems, problem =>
+            problem.Component == "Transformation"
+            && problem.Message.Contains("'missing' is not", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_ReportsMissingMongoDbSourceMetadata()
+    {
+        var missingConfiguration = ReadyPipeline();
+        missingConfiguration.SourceType = SourceType.MongoDb;
+        missingConfiguration.MongoDbSource = null;
+        var incompleteConfiguration = ReadyPipeline();
+        incompleteConfiguration.SourceType = SourceType.MongoDb;
+        incompleteConfiguration.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = " ",
+            Collection = string.Empty
+        };
+
+        var missingResult = await EvaluateAsync(missingConfiguration);
+        var incompleteResult = await EvaluateAsync(incompleteConfiguration);
+
+        Assert.Contains(missingResult!.Problems, problem =>
+            problem.Component == "Source"
+            && problem.Message.Contains("configuration is missing", StringComparison.Ordinal));
+        Assert.Contains(incompleteResult!.Problems, problem =>
+            problem.Component == "Source"
+            && problem.Message.Contains("database is required", StringComparison.Ordinal));
+        Assert.Contains(incompleteResult.Problems, problem =>
+            problem.Component == "Source"
+            && problem.Message.Contains("collection is required", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Evaluate_UsesProvidedDefinitionWithoutRepositoryAccess()
     {
         var pipeline = ReadyPipeline();
