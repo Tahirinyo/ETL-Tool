@@ -1,4 +1,5 @@
 using EtlTool.Domain.Entities;
+using EtlTool.Infrastructure.Connections;
 using MongoDB.Driver;
 
 namespace EtlTool.Infrastructure.MongoDB;
@@ -24,6 +25,10 @@ public sealed class MongoMetadataDatabase
 
     internal IMongoCollection<EtlRun> EtlRuns =>
         _database.GetCollection<EtlRun>(MongoMetadataCollectionNames.EtlRuns);
+
+    internal IMongoCollection<SavedDatabaseConnectionDocument> SavedDatabaseConnections =>
+        _database.GetCollection<SavedDatabaseConnectionDocument>(
+            MongoMetadataCollectionNames.SavedDatabaseConnections);
 
     internal IMongoDatabase GetDatabase(string databaseName) =>
         _client.GetDatabase(databaseName);

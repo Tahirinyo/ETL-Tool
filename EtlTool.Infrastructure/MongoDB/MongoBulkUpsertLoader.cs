@@ -1,10 +1,12 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
+using EtlTool.Application.Connections;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using EtlTool.Infrastructure.Connections;
 
 namespace EtlTool.Infrastructure.MongoDB;
 
@@ -18,12 +20,19 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
     private readonly IMongoBulkWriteExecutor _writeExecutor;
     private readonly int _maximumAttempts;
     private readonly TimeSpan _retryDelay;
+    private readonly SavedConnectionProviderFactory? _savedConnectionProviderFactory;
 
     public MongoBulkUpsertLoader(
         MongoMetadataDatabase metadataDatabase,
         IMongoTargetAccessService targetAccessService,
-        MongoDbOptions options)
-        : this(metadataDatabase, targetAccessService, options, new MongoBulkWriteExecutor())
+        MongoDbOptions options,
+        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
+        : this(
+            metadataDatabase,
+            targetAccessService,
+            options,
+            new MongoBulkWriteExecutor(),
+            savedConnectionProviderFactory)
     {
     }
 
@@ -31,7 +40,8 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
         MongoMetadataDatabase metadataDatabase,
         IMongoTargetAccessService targetAccessService,
         MongoDbOptions options,
-        IMongoBulkWriteExecutor writeExecutor)
+        IMongoBulkWriteExecutor writeExecutor,
+        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
     {
         ArgumentNullException.ThrowIfNull(metadataDatabase);
         ArgumentNullException.ThrowIfNull(targetAccessService);
@@ -44,6 +54,7 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
         _writeExecutor = writeExecutor;
         _maximumAttempts = options.BulkWriteMaximumAttempts;
         _retryDelay = TimeSpan.FromMilliseconds(options.BulkWriteRetryDelayMilliseconds);
+        _savedConnectionProviderFactory = savedConnectionProviderFactory;
     }
 
     public DestinationType DestinationType => DestinationType.MongoDb;
@@ -53,11 +64,13 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
         CancellationToken cancellationToken)
     {
         var target = CreateTarget(pipeline);
+        var (_, targetAccessService) = await ResolveRuntimeAsync(pipeline, cancellationToken)
+            .ConfigureAwait(false);
 
-        await _targetAccessService
+        await targetAccessService
             .EnsureAccessibleAsync(target, cancellationToken)
             .ConfigureAwait(false);
-        await _targetAccessService
+        await targetAccessService
             .EnsureUpsertIndexAsync(target, pipeline.UpsertKeyField, cancellationToken)
             .ConfigureAwait(false);
     }
@@ -78,7 +91,9 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
 
         cancellationToken.ThrowIfCancellationRequested();
         var requests = CreateRequests(rows, pipeline.UpsertKeyField);
-        var collection = _metadataDatabase
+        var (metadataDatabase, _) = await ResolveRuntimeAsync(pipeline, cancellationToken)
+            .ConfigureAwait(false);
+        var collection = metadataDatabase
             .GetDatabase(target.DatabaseName)
             .GetCollection<BsonDocument>(target.CollectionName);
 
@@ -120,6 +135,25 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
                     exception);
             }
         }
+    }
+
+    private async Task<(MongoMetadataDatabase Metadata, IMongoTargetAccessService TargetAccess)>
+        ResolveRuntimeAsync(PipelineDefinition pipeline, CancellationToken cancellationToken)
+    {
+        if (!pipeline.MongoDbDestinationConnectionId.HasValue)
+        {
+            return (_metadataDatabase, _targetAccessService);
+        }
+
+        var providerFactory = _savedConnectionProviderFactory
+            ?? throw new SavedConnectionResolutionException();
+        var context = await providerFactory.CreateMongoDbAsync(
+                pipeline.MongoDbDestinationConnectionId.Value,
+                pipeline.MongoDbDestinationConnectionRevision
+                    ?? throw new SavedConnectionResolutionException(),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return (context.MetadataDatabase, context.TargetAccess);
     }
 
     internal Task<BatchLoadResult> UpsertBatchAsync(

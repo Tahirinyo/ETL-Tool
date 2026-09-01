@@ -1,0 +1,26 @@
+@model GlobalRunHistoryViewModel
+
+@{ ViewData["Title"] = "Run History"; }
+
+<h1>Run History</h1>
+<p class="text-muted">Review ETL runs across saved pipelines.</p>
+
+@if (Model.Runs.Count == 0)
+{
+    <div class="alert alert-info" role="status">No ETL runs have been recorded yet.</div>
+}
+else
+{
+    <div class="table-responsive"><table class="table table-striped align-middle">
+        <thead><tr><th>Pipeline</th><th>Status</th><th>Started</th><th class="text-end">Actions</th></tr></thead>
+        <tbody>
+        @foreach (var item in Model.Runs)
+        {
+            <tr>
+                <td>@item.PipelineName</td><td>@item.Run.Status</td><td>@item.Run.StartedAtDisplay</td>
+                <td class="text-end"><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-pipelineId="@item.PipelineId" asp-route-runId="@item.Run.Id">Details</a></td>
+            </tr>
+        }
+        </tbody>
+    </table></div>
+}

@@ -86,12 +86,16 @@ public sealed class ValidationRuleService : IValidationRuleService
             Description = pipeline.Description,
             SourceType = pipeline.SourceType,
             SourceOptions = pipeline.SourceOptions,
+            PostgreSqlSource = pipeline.PostgreSqlSource,
+            MongoDbSource = pipeline.MongoDbSource,
             ExpectedSchema = pipeline.ExpectedSchema,
             FieldMappings = pipeline.FieldMappings,
             TransformationRules = pipeline.TransformationRules,
             ValidationRules = rules,
             DestinationType = pipeline.DestinationType,
             PostgreSqlDestination = CopyPostgreSqlDestination(pipeline.PostgreSqlDestination),
+            MongoDbDestinationConnectionId = pipeline.MongoDbDestinationConnectionId,
+            MongoDbDestinationConnectionRevision = pipeline.MongoDbDestinationConnectionRevision,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,
@@ -247,6 +251,8 @@ public sealed class ValidationRuleService : IValidationRuleService
         ? null
         : new PostgreSqlDestinationOptions
         {
+            SavedConnectionId = value.SavedConnectionId,
+            SavedConnectionRevision = value.SavedConnectionRevision,
             ConnectionProfile = value.ConnectionProfile,
             Database = value.Database,
             Schema = value.Schema,

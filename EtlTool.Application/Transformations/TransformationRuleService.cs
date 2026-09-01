@@ -131,12 +131,16 @@ public sealed class TransformationRuleService : ITransformationRuleService
             Description = pipeline.Description,
             SourceType = pipeline.SourceType,
             SourceOptions = pipeline.SourceOptions,
+            PostgreSqlSource = pipeline.PostgreSqlSource,
+            MongoDbSource = pipeline.MongoDbSource,
             ExpectedSchema = pipeline.ExpectedSchema,
             FieldMappings = pipeline.FieldMappings,
             TransformationRules = rules,
             ValidationRules = pipeline.ValidationRules,
             DestinationType = pipeline.DestinationType,
             PostgreSqlDestination = CopyPostgreSqlDestination(pipeline.PostgreSqlDestination),
+            MongoDbDestinationConnectionId = pipeline.MongoDbDestinationConnectionId,
+            MongoDbDestinationConnectionRevision = pipeline.MongoDbDestinationConnectionRevision,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,
@@ -360,6 +364,8 @@ public sealed class TransformationRuleService : ITransformationRuleService
         ? null
         : new PostgreSqlDestinationOptions
         {
+            SavedConnectionId = value.SavedConnectionId,
+            SavedConnectionRevision = value.SavedConnectionRevision,
             ConnectionProfile = value.ConnectionProfile,
             Database = value.Database,
             Schema = value.Schema,

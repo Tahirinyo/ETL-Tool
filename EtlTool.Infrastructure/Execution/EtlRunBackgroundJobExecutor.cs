@@ -1,4 +1,5 @@
 using EtlTool.Application.Execution;
+using EtlTool.Application.Connections;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
@@ -385,6 +386,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
         MongoSourceSchemaChangedException => MongoSourceSchemaChangedException.SafeMessage,
         PostgreSqlSourceSchemaChangedException => PostgreSqlSourceSchemaChangedException.SafeMessage,
         PostgreSqlDestinationPreparationException => PostgreSqlDestinationPreparationException.SafeMessage,
+        SavedConnectionResolutionException => "The saved database connection is unavailable.",
         IOException => "The ETL source file could not be read.",
         UnauthorizedAccessException => "The ETL source file could not be accessed.",
         ErrorReportGenerationException => "Error report generation failed.",

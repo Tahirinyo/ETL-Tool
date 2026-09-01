@@ -27,13 +27,20 @@ public sealed class EtlRunExecutionConfiguration
 
     public PostgreSqlDestinationOptions? PostgreSqlDestination { get; set; }
 
+    public SavedConnectionReference? SourceConnection { get; set; }
+
+    public SavedConnectionReference? DestinationConnection { get; set; }
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;
 
     public string UpsertKeyField { get; set; } = string.Empty;
 
-    public static EtlRunExecutionConfiguration Capture(PipelineDefinition pipeline)
+    public static EtlRunExecutionConfiguration Capture(
+        PipelineDefinition pipeline,
+        SavedConnectionReference? sourceConnection = null,
+        SavedConnectionReference? destinationConnection = null)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
 
@@ -50,14 +57,18 @@ public sealed class EtlRunExecutionConfiguration
             ValidationRules = pipeline.ValidationRules.Select(Copy).ToList(),
             DestinationType = pipeline.DestinationType,
             PostgreSqlDestination = Copy(pipeline.PostgreSqlDestination),
+            SourceConnection = Copy(sourceConnection),
+            DestinationConnection = Copy(destinationConnection),
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField
         };
     }
 
-    public PipelineDefinition ToPipelineDefinition() => new()
+    public PipelineDefinition ToPipelineDefinition()
     {
+        var pipeline = new PipelineDefinition
+        {
         SourceType = SourceType,
         SourceOptions = Copy(SourceOptions),
         PostgreSqlSource = Copy(PostgreSqlSource),
@@ -69,10 +80,38 @@ public sealed class EtlRunExecutionConfiguration
         ValidationRules = ValidationRules.Select(Copy).ToList(),
         DestinationType = DestinationType,
         PostgreSqlDestination = Copy(PostgreSqlDestination),
+        MongoDbDestinationConnectionId = DestinationConnection?.ProviderType == DatabaseProviderType.MongoDb
+            ? DestinationConnection.ConnectionId
+            : null,
+        MongoDbDestinationConnectionRevision = DestinationConnection?.ProviderType == DatabaseProviderType.MongoDb
+            ? DestinationConnection.Revision
+            : null,
         DestinationDatabase = DestinationDatabase,
         DestinationCollection = DestinationCollection,
         UpsertKeyField = UpsertKeyField
-    };
+        };
+
+        if (pipeline.PostgreSqlSource is not null
+            && SourceConnection?.ProviderType == DatabaseProviderType.PostgreSql)
+        {
+            pipeline.PostgreSqlSource.SavedConnectionId = SourceConnection.ConnectionId;
+            pipeline.PostgreSqlSource.SavedConnectionRevision = SourceConnection.Revision;
+        }
+        if (pipeline.MongoDbSource is not null
+            && SourceConnection?.ProviderType == DatabaseProviderType.MongoDb)
+        {
+            pipeline.MongoDbSource.SavedConnectionId = SourceConnection.ConnectionId;
+            pipeline.MongoDbSource.SavedConnectionRevision = SourceConnection.Revision;
+        }
+        if (pipeline.PostgreSqlDestination is not null
+            && DestinationConnection?.ProviderType == DatabaseProviderType.PostgreSql)
+        {
+            pipeline.PostgreSqlDestination.SavedConnectionId = DestinationConnection.ConnectionId;
+            pipeline.PostgreSqlDestination.SavedConnectionRevision = DestinationConnection.Revision;
+        }
+
+        return pipeline;
+    }
 
     private static SourceOptions Copy(SourceOptions value) => new()
     {
@@ -87,6 +126,8 @@ public sealed class EtlRunExecutionConfiguration
         ? null
         : new PostgreSqlSourceOptions
         {
+            SavedConnectionId = value.SavedConnectionId,
+            SavedConnectionRevision = value.SavedConnectionRevision,
             ConnectionProfile = value.ConnectionProfile,
             Database = value.Database,
             Schema = value.Schema,
@@ -97,6 +138,8 @@ public sealed class EtlRunExecutionConfiguration
         ? null
         : new MongoDbSourceOptions
         {
+            SavedConnectionId = value.SavedConnectionId,
+            SavedConnectionRevision = value.SavedConnectionRevision,
             Database = value.Database,
             Collection = value.Collection
         };
@@ -105,6 +148,8 @@ public sealed class EtlRunExecutionConfiguration
         ? null
         : new PostgreSqlDestinationOptions
         {
+            SavedConnectionId = value.SavedConnectionId,
+            SavedConnectionRevision = value.SavedConnectionRevision,
             ConnectionProfile = value.ConnectionProfile,
             Database = value.Database,
             Schema = value.Schema,
@@ -117,6 +162,15 @@ public sealed class EtlRunExecutionConfiguration
                 })
                 .ToList(),
             UpsertKeyColumn = value.UpsertKeyColumn
+        };
+
+    private static SavedConnectionReference? Copy(SavedConnectionReference? value) => value is null
+        ? null
+        : new SavedConnectionReference
+        {
+            ConnectionId = value.ConnectionId,
+            ProviderType = value.ProviderType,
+            Revision = value.Revision
         };
 
     private static SourceFieldDefinition Copy(SourceFieldDefinition value) => new()

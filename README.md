@@ -25,6 +25,12 @@ Edit `.env` and replace every placeholder. The file is ignored by Git and must r
 
 No MongoDB credentials or usable connection strings are committed to the repository or included in the application image.
 
+Saved MongoDB and PostgreSQL connections entered through the **Connections** screen are protected with ASP.NET Core
+Data Protection before they are written to the metadata database. The key ring is stored under
+`App_Data/data-protection-keys`; Docker Compose retains it in the existing `app-data` named volume. Keep that volume
+together with `mongo-data` across normal container recreation. If the key ring is lost while saved connection records
+remain, those protected credentials cannot be decrypted and must be entered again.
+
 ### Start and verify
 
 ```powershell
@@ -64,7 +70,7 @@ Restart the existing local stack and its named volumes:
 docker compose up -d
 ```
 
-Keep the same MongoDB credentials in `.env` when restarting an existing `mongo-data` volume. MongoDB initializes its root account only when that volume is first created; changing those credentials requires an intentional volume reset.
+Keep the same MongoDB credentials in `.env` when restarting an existing `mongo-data` volume. MongoDB initializes its root account only when that volume is first created; changing those credentials requires an intentional volume reset. Keep the existing `app-data` volume as well so saved-connection Data Protection keys remain available.
 
 To remove all local data and start again from an empty MongoDB and `App_Data` volume, run:
 
@@ -72,11 +78,13 @@ To remove all local data and start again from an empty MongoDB and `App_Data` vo
 docker compose down --volumes
 ```
 
-> Warning: `docker compose down --volumes` permanently deletes this stack’s persisted MongoDB data and application-data contents, including retained local error reports.
+> Warning: `docker compose down --volumes` permanently deletes this stack’s persisted MongoDB data and application-data contents, including retained local error reports and saved-connection Data Protection keys. Saved connection records cannot be decrypted after their corresponding key ring is removed.
 
 ## Configuration notes
 
 The application continues to use its existing ASP.NET Core configuration model. Docker Compose maps the external `MONGODB_CONNECTION_STRING` value to `MongoDb__ConnectionString`; no Docker-only configuration path has been added. PostgreSQL connections are named profiles under `PostgreSql:Profiles`; configure each profile's connection string through an environment variable, user secrets, or another secret provider (for example, `PostgreSql__Profiles__Demo__ConnectionString`). Profile names and selected database objects are stored with a pipeline; connection strings are not. The container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside this MVP packaging setup.
+
+CONN.1 adds saved-connection CRUD and safe ID/revision contracts alongside those legacy configuration paths. Existing pipelines continue using configured PostgreSQL profiles and the application MongoDB connection. Pipeline connection selection and cascading database/schema/table discovery remain deferred to CONN.2.
 
 ## MVP scope and known limitations
 

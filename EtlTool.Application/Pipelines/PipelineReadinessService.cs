@@ -179,9 +179,15 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(source.ConnectionProfile))
+        if (!source.SavedConnectionId.HasValue
+            && string.IsNullOrWhiteSpace(source.ConnectionProfile))
         {
             AddProblem(problems, SourceComponent, "The PostgreSQL connection profile is required.");
+        }
+
+        if (source.SavedConnectionId == Guid.Empty)
+        {
+            AddProblem(problems, SourceComponent, "The PostgreSQL saved connection identifier is invalid.");
         }
 
         if (string.IsNullOrWhiteSpace(source.Database))
@@ -208,6 +214,11 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         {
             AddProblem(problems, SourceComponent, "The MongoDB source configuration is missing.");
             return;
+        }
+
+        if (source.SavedConnectionId == Guid.Empty)
+        {
+            AddProblem(problems, SourceComponent, "The MongoDB saved connection identifier is invalid.");
         }
 
         if (string.IsNullOrWhiteSpace(source.Database))
@@ -485,6 +496,12 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         {
             AddProblem(problems, DestinationComponent, "The pipeline destination type is not supported.");
             return;
+        }
+
+        if (pipeline.MongoDbDestinationConnectionId == Guid.Empty)
+        {
+            AddProblem(problems, DestinationComponent,
+                "The MongoDB saved connection identifier is invalid.");
         }
 
         var hasDatabase = !string.IsNullOrWhiteSpace(pipeline.DestinationDatabase);

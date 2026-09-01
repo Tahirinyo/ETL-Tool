@@ -24,6 +24,36 @@ public sealed class RunsController : Controller
         _pipelineService = pipelineService;
     }
 
+    [HttpGet("")]
+    public async Task<IActionResult> Index(CancellationToken cancellationToken)
+    {
+        if (_pipelineService is null)
+        {
+            throw new InvalidOperationException("Run history is not configured.");
+        }
+
+        var pipelines = await _pipelineService.ListAsync(cancellationToken);
+        var items = new List<GlobalRunHistoryItemViewModel>();
+        foreach (var pipeline in pipelines)
+        {
+            var runs = await _runRepository.ListByPipelineIdAsync(pipeline.Id, cancellationToken);
+            items.AddRange(runs.Select(run => new GlobalRunHistoryItemViewModel
+            {
+                PipelineId = pipeline.Id,
+                PipelineName = pipeline.Name,
+                StartedAt = run.StartedAt,
+                Run = RunHistoryItemViewModel.From(run)
+            }));
+        }
+
+        return View(new GlobalRunHistoryViewModel
+        {
+            Runs = items
+                .OrderByDescending(item => item.StartedAt)
+                .ToList()
+        });
+    }
+
     [HttpGet("/Pipelines/{pipelineId:guid}/Runs")]
     public async Task<IActionResult> History(
         Guid pipelineId,

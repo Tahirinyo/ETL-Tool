@@ -1,7 +1,9 @@
+using EtlTool.Application.Connections;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
 
 namespace EtlTool.Application.Execution;
 
@@ -17,6 +19,7 @@ public sealed class RunAdmissionService : IRunAdmissionService
     private readonly IBackgroundJobQueue _backgroundJobQueue;
     private readonly RunAdmissionOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly ISavedConnectionRevisionResolver? _connectionRevisionResolver;
 
     public RunAdmissionService(
         IPipelineService pipelineService,
@@ -25,7 +28,8 @@ public sealed class RunAdmissionService : IRunAdmissionService
         IEtlRunRepository runRepository,
         IBackgroundJobQueue backgroundJobQueue,
         RunAdmissionOptions options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ISavedConnectionRevisionResolver? connectionRevisionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         ArgumentNullException.ThrowIfNull(readinessService);
@@ -44,6 +48,7 @@ public sealed class RunAdmissionService : IRunAdmissionService
         _backgroundJobQueue = backgroundJobQueue;
         _options = options;
         _timeProvider = timeProvider;
+        _connectionRevisionResolver = connectionRevisionResolver;
     }
 
     public async Task<RunAdmissionResult> AdmitAsync(
@@ -134,6 +139,9 @@ public sealed class RunAdmissionService : IRunAdmissionService
             throw new InvalidOperationException("The ready run-source snapshot has no source.");
         }
 
+        var (sourceConnection, destinationConnection) =
+            await ResolveConnectionReferencesAsync(pipeline).ConfigureAwait(false);
+
         var run = new EtlRun
         {
             Id = Guid.NewGuid(),
@@ -142,7 +150,10 @@ public sealed class RunAdmissionService : IRunAdmissionService
             Status = EtlRunStatus.Queued,
             OriginalFileName = source?.OriginalFileName ?? string.Empty,
             StoredFilePath = source?.StoredFilePath ?? string.Empty,
-            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(pipeline)
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(
+                pipeline,
+                sourceConnection,
+                destinationConnection)
         };
 
         try
@@ -195,6 +206,54 @@ public sealed class RunAdmissionService : IRunAdmissionService
 
         snapshot.TransferSourceToRun();
         return RunAdmissionResult.Admitted(pipeline.Id, pipeline.Name, run.Id);
+    }
+
+    private async Task<(SavedConnectionReference? Source, SavedConnectionReference? Destination)>
+        ResolveConnectionReferencesAsync(PipelineDefinition pipeline)
+    {
+        var sourceId = pipeline.SourceType switch
+        {
+            SourceType.PostgreSql => pipeline.PostgreSqlSource?.SavedConnectionId,
+            SourceType.MongoDb => pipeline.MongoDbSource?.SavedConnectionId,
+            _ => null
+        };
+        var sourceProvider = pipeline.SourceType switch
+        {
+            SourceType.PostgreSql => DatabaseProviderType.PostgreSql,
+            SourceType.MongoDb => DatabaseProviderType.MongoDb,
+            _ => DatabaseProviderType.Unspecified
+        };
+        var destinationId = pipeline.DestinationType switch
+        {
+            DestinationType.PostgreSql => pipeline.PostgreSqlDestination?.SavedConnectionId,
+            DestinationType.MongoDb => pipeline.MongoDbDestinationConnectionId,
+            _ => null
+        };
+        var destinationProvider = pipeline.DestinationType switch
+        {
+            DestinationType.PostgreSql => DatabaseProviderType.PostgreSql,
+            DestinationType.MongoDb => DatabaseProviderType.MongoDb,
+            _ => DatabaseProviderType.Unspecified
+        };
+
+        if (!sourceId.HasValue && !destinationId.HasValue)
+        {
+            return (null, null);
+        }
+
+        var resolver = _connectionRevisionResolver
+            ?? throw new SavedConnectionResolutionException();
+        var source = sourceId.HasValue
+            ? await resolver.ResolveCurrentAsync(
+                    sourceId.Value, sourceProvider, CancellationToken.None)
+                .ConfigureAwait(false)
+            : null;
+        var destination = destinationId.HasValue
+            ? await resolver.ResolveCurrentAsync(
+                    destinationId.Value, destinationProvider, CancellationToken.None)
+                .ConfigureAwait(false)
+            : null;
+        return (source, destination);
     }
 
     private static Exception Combine(Exception? primary, Exception additional) =>

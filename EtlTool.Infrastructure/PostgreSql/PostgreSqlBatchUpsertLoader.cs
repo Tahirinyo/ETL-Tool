@@ -3,10 +3,12 @@ using System.Text;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.PostgreSql;
+using EtlTool.Application.Connections;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using Npgsql;
+using EtlTool.Infrastructure.Connections;
 
 namespace EtlTool.Infrastructure.PostgreSql;
 
@@ -21,18 +23,21 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
     private readonly IPostgreSqlBatchExecutor _batchExecutor;
     private readonly int _maximumAttempts;
     private readonly TimeSpan _retryDelay;
+    private readonly SavedConnectionProviderFactory? _savedConnectionProviderFactory;
 
     public PostgreSqlBatchUpsertLoader(
         IPostgreSqlConnectionFactory connectionFactory,
         IPostgreSqlMetadataDiscoveryService metadataDiscoveryService,
         IPostgreSqlDestinationAccessService destinationAccessService,
-        PostgreSqlConnectionOptions options)
+        PostgreSqlConnectionOptions options,
+        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
         : this(
             connectionFactory,
             metadataDiscoveryService,
             destinationAccessService,
             options,
-            new PostgreSqlBatchExecutor())
+            new PostgreSqlBatchExecutor(),
+            savedConnectionProviderFactory)
     {
     }
 
@@ -41,7 +46,8 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
         IPostgreSqlMetadataDiscoveryService metadataDiscoveryService,
         IPostgreSqlDestinationAccessService destinationAccessService,
         PostgreSqlConnectionOptions options,
-        IPostgreSqlBatchExecutor batchExecutor)
+        IPostgreSqlBatchExecutor batchExecutor,
+        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
         ArgumentNullException.ThrowIfNull(metadataDiscoveryService);
@@ -56,6 +62,7 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
         _batchExecutor = batchExecutor;
         _maximumAttempts = options.BatchWriteMaximumAttempts;
         _retryDelay = TimeSpan.FromMilliseconds(options.BatchWriteRetryDelayMilliseconds);
+        _savedConnectionProviderFactory = savedConnectionProviderFactory;
     }
 
     public DestinationType DestinationType => DestinationType.PostgreSql;
@@ -68,22 +75,24 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
         {
             var destination = ValidatePipelineConfiguration(pipeline);
             cancellationToken.ThrowIfCancellationRequested();
+            var runtime = await ResolveRuntimeAsync(destination, cancellationToken)
+                .ConfigureAwait(false);
 
-            await _destinationAccessService.EnsureDestinationAccessibleAsync(
-                destination.ConnectionProfile,
+            await runtime.DestinationAccess.EnsureDestinationAccessibleAsync(
+                runtime.ConnectionProfile,
                 destination.Database,
                 destination.Schema,
                 destination.Table,
                 cancellationToken).ConfigureAwait(false);
 
-            var columns = await _metadataDiscoveryService.DiscoverColumnsAsync(
-                destination.ConnectionProfile,
+            var columns = await runtime.MetadataDiscovery.DiscoverColumnsAsync(
+                runtime.ConnectionProfile,
                 destination.Database,
                 destination.Schema,
                 destination.Table,
                 cancellationToken).ConfigureAwait(false);
-            var constraints = await _metadataDiscoveryService.DiscoverKeyConstraintsAsync(
-                destination.ConnectionProfile,
+            var constraints = await runtime.MetadataDiscovery.DiscoverKeyConstraintsAsync(
+                runtime.ConnectionProfile,
                 destination.Database,
                 destination.Schema,
                 destination.Table,
@@ -129,6 +138,8 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
         ValidateUpsertFieldMatchesDestinationMapping(pipeline, destination);
         cancellationToken.ThrowIfCancellationRequested();
         var command = CreateCommand(rows, pipeline, destination);
+        var runtime = await ResolveRuntimeAsync(destination, cancellationToken)
+            .ConfigureAwait(false);
 
         for (var attempt = 1; ; attempt++)
         {
@@ -136,8 +147,8 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
             try
             {
                 return await _batchExecutor.ExecuteAsync(
-                    _connectionFactory,
-                    destination.ConnectionProfile,
+                    runtime.ConnectionFactory,
+                    runtime.ConnectionProfile,
                     destination.Database,
                     command,
                     cancellationToken).ConfigureAwait(false);
@@ -162,6 +173,40 @@ public sealed class PostgreSqlBatchUpsertLoader : IDataLoader
             }
         }
     }
+
+    private async Task<PostgreSqlLoaderRuntime> ResolveRuntimeAsync(
+        PostgreSqlDestinationOptions destination,
+        CancellationToken cancellationToken)
+    {
+        if (!destination.SavedConnectionId.HasValue)
+        {
+            return new PostgreSqlLoaderRuntime(
+                _connectionFactory,
+                _metadataDiscoveryService,
+                _destinationAccessService,
+                destination.ConnectionProfile);
+        }
+
+        var providerFactory = _savedConnectionProviderFactory
+            ?? throw new SavedConnectionResolutionException();
+        var context = await providerFactory.CreatePostgreSqlAsync(
+                destination.SavedConnectionId.Value,
+                destination.SavedConnectionRevision
+                    ?? throw new SavedConnectionResolutionException(),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return new PostgreSqlLoaderRuntime(
+            context.ConnectionFactory,
+            context.MetadataDiscovery,
+            context.MetadataDiscovery,
+            SavedConnectionProviderFactory.RuntimePostgreSqlProfile);
+    }
+
+    private sealed record PostgreSqlLoaderRuntime(
+        IPostgreSqlConnectionFactory ConnectionFactory,
+        IPostgreSqlMetadataDiscoveryService MetadataDiscovery,
+        IPostgreSqlDestinationAccessService DestinationAccess,
+        string ConnectionProfile);
 
     private static PostgreSqlDestinationOptions ValidatePipelineConfiguration(
         PipelineDefinition pipeline)

@@ -10,6 +10,51 @@ namespace EtlTool.IntegrationTests.MongoDB;
 public sealed class MongoBsonMappingsTests
 {
     [Fact]
+    public void SavedConnectionReferences_RoundTripAsSafeStandardUuidDescriptors()
+    {
+        const string distinctiveSecret = "distinctive-password-must-not-serialize";
+        _ = new MongoMetadataDatabase(new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_bson_mapping_tests"
+        });
+        var connectionId = Guid.NewGuid();
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            PipelineId = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(
+                new PipelineDefinition
+                {
+                    DestinationType = DestinationType.MongoDb,
+                    MongoDbDestinationConnectionId = connectionId
+                },
+                destinationConnection: new SavedConnectionReference
+                {
+                    ConnectionId = connectionId,
+                    ProviderType = DatabaseProviderType.MongoDb,
+                    Revision = 6
+                })
+        };
+
+        var document = run.ToBsonDocument();
+        var descriptor = document[nameof(EtlRun.ExecutionConfiguration)]
+            .AsBsonDocument[nameof(EtlRunExecutionConfiguration.DestinationConnection)]
+            .AsBsonDocument;
+        var roundTripped = BsonSerializer.Deserialize<EtlRun>(document);
+        var json = document.ToJson();
+
+        Assert.Equal(BsonBinarySubType.UuidStandard,
+            descriptor[nameof(SavedConnectionReference.ConnectionId)].AsBsonBinaryData.SubType);
+        Assert.Equal(connectionId,
+            roundTripped.ExecutionConfiguration!.DestinationConnection!.ConnectionId);
+        Assert.Equal(6, roundTripped.ExecutionConfiguration.DestinationConnection.Revision);
+        Assert.DoesNotContain(distinctiveSecret, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void EtlRunMapping_SerializesRunAndPipelineIdentifiersAsStandardUuids()
     {
         _ = new MongoMetadataDatabase(new MongoDbOptions

@@ -1,11 +1,47 @@
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
+using System.Text.Json;
 
 namespace EtlTool.UnitTests.Domain;
 
 public sealed class EtlRunExecutionConfigurationTests
 {
+    [Fact]
+    public void Capture_SavedReferencesContainOnlySafeIdentityAndRevision()
+    {
+        const string distinctiveSecret = "distinctive-password-that-must-not-persist";
+        var sourceId = Guid.NewGuid();
+        var destinationId = Guid.NewGuid();
+        var snapshot = EtlRunExecutionConfiguration.Capture(
+            new PipelineDefinition
+            {
+                SourceType = SourceType.PostgreSql,
+                PostgreSqlSource = new PostgreSqlSourceOptions { SavedConnectionId = sourceId },
+                DestinationType = DestinationType.MongoDb,
+                MongoDbDestinationConnectionId = destinationId
+            },
+            new SavedConnectionReference
+            {
+                ConnectionId = sourceId,
+                ProviderType = DatabaseProviderType.PostgreSql,
+                Revision = 2
+            },
+            new SavedConnectionReference
+            {
+                ConnectionId = destinationId,
+                ProviderType = DatabaseProviderType.MongoDb,
+                Revision = 7
+            });
+
+        var json = JsonSerializer.Serialize(snapshot);
+
+        Assert.Contains(sourceId.ToString(), json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(destinationId.ToString(), json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(distinctiveSecret, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", json, StringComparison.OrdinalIgnoreCase);
+    }
     [Fact]
     public void Capture_PreservesEveryExecutionSettingAndDeeplyIsolatesMutableState()
     {

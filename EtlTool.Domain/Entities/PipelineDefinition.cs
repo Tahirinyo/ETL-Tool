@@ -33,6 +33,10 @@ public sealed class PipelineDefinition
 
     public PostgreSqlDestinationOptions? PostgreSqlDestination { get; set; }
 
+    public Guid? MongoDbDestinationConnectionId { get; set; }
+
+    public int? MongoDbDestinationConnectionRevision { get; set; }
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;

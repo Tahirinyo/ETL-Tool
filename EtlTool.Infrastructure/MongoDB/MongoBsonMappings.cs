@@ -1,5 +1,7 @@
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
+using EtlTool.Domain.ValueObjects;
+using EtlTool.Infrastructure.Connections;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
@@ -21,6 +23,7 @@ internal static class MongoBsonMappings
             }
 
             var guidSerializer = new GuidSerializer(GuidRepresentation.Standard);
+            var nullableGuidSerializer = new NullableSerializer<Guid>(guidSerializer);
 
             BsonClassMap.RegisterClassMap<PipelineDefinition>(classMap =>
             {
@@ -29,6 +32,8 @@ internal static class MongoBsonMappings
                     .SetSerializer(guidSerializer);
                 classMap.MapMember(pipeline => pipeline.DestinationType)
                     .SetDefaultValue(DestinationType.MongoDb);
+                classMap.MapMember(pipeline => pipeline.MongoDbDestinationConnectionId)
+                    .SetSerializer(nullableGuidSerializer);
             });
             BsonClassMap.RegisterClassMap<EtlRunExecutionConfiguration>(classMap =>
             {
@@ -54,6 +59,36 @@ internal static class MongoBsonMappings
             {
                 classMap.AutoMap();
                 classMap.MapIdMember(rule => rule.Id)
+                    .SetSerializer(guidSerializer);
+            });
+            BsonClassMap.RegisterClassMap<SavedDatabaseConnectionDocument>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapIdMember(connection => connection.Id)
+                    .SetSerializer(guidSerializer);
+            });
+            BsonClassMap.RegisterClassMap<PostgreSqlSourceOptions>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapMember(value => value.SavedConnectionId)
+                    .SetSerializer(nullableGuidSerializer);
+            });
+            BsonClassMap.RegisterClassMap<MongoDbSourceOptions>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapMember(value => value.SavedConnectionId)
+                    .SetSerializer(nullableGuidSerializer);
+            });
+            BsonClassMap.RegisterClassMap<PostgreSqlDestinationOptions>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapMember(value => value.SavedConnectionId)
+                    .SetSerializer(nullableGuidSerializer);
+            });
+            BsonClassMap.RegisterClassMap<SavedConnectionReference>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapMember(value => value.ConnectionId)
                     .SetSerializer(guidSerializer);
             });
 

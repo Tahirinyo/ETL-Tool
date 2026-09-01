@@ -23,6 +23,7 @@ public sealed class PipelineService : IPipelineService
         CancellationToken cancellationToken)
     {
         ValidatePipeline(pipeline);
+        ClearAdmittedConnectionRevisions(pipeline);
 
         var now = _timeProvider.GetUtcNow();
         pipeline.Id = Guid.NewGuid();
@@ -55,6 +56,7 @@ public sealed class PipelineService : IPipelineService
     {
         ValidateId(id);
         ValidatePipeline(pipeline);
+        ClearAdmittedConnectionRevisions(pipeline);
 
         if (pipeline.Id != Guid.Empty && pipeline.Id != id)
         {
@@ -101,5 +103,22 @@ public sealed class PipelineService : IPipelineService
         {
             throw new ArgumentException("Pipeline identifier cannot be empty.", nameof(id));
         }
+    }
+
+    private static void ClearAdmittedConnectionRevisions(PipelineDefinition pipeline)
+    {
+        if (pipeline.PostgreSqlSource is not null)
+        {
+            pipeline.PostgreSqlSource.SavedConnectionRevision = null;
+        }
+        if (pipeline.MongoDbSource is not null)
+        {
+            pipeline.MongoDbSource.SavedConnectionRevision = null;
+        }
+        if (pipeline.PostgreSqlDestination is not null)
+        {
+            pipeline.PostgreSqlDestination.SavedConnectionRevision = null;
+        }
+        pipeline.MongoDbDestinationConnectionRevision = null;
     }
 }

@@ -93,11 +93,12 @@ public sealed class DomainContractTests
     }
 
     [Fact]
-    public void PipelineDefinition_DoesNotContainMongoConnectionOrCredentialState()
+    public void PipelineDefinition_DoesNotContainMongoCredentialMaterial()
     {
         Assert.DoesNotContain(
             typeof(PipelineDefinition).GetProperties(),
-            property => property.Name.Contains("connection", StringComparison.OrdinalIgnoreCase)
+            property => property.Name.Contains("connectionstring", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("password", StringComparison.OrdinalIgnoreCase)
                 || property.Name.Contains("credential", StringComparison.OrdinalIgnoreCase)
                 || property.Name.Contains("secret", StringComparison.OrdinalIgnoreCase));
     }
@@ -106,7 +107,7 @@ public sealed class DomainContractTests
     public void PostgreSqlSourceOptions_ContainsOnlySourceIdentityMetadata()
     {
         Assert.Equal(
-            ["ConnectionProfile", "Database", "Schema", "Table"],
+            ["SavedConnectionId", "SavedConnectionRevision", "ConnectionProfile", "Database", "Schema", "Table"],
             typeof(PostgreSqlSourceOptions).GetProperties().Select(property => property.Name));
     }
 
@@ -114,7 +115,7 @@ public sealed class DomainContractTests
     public void MongoDbSourceOptions_ContainsOnlySourceIdentityMetadata()
     {
         Assert.Equal(
-            ["Database", "Collection"],
+            ["SavedConnectionId", "SavedConnectionRevision", "Database", "Collection"],
             typeof(MongoDbSourceOptions).GetProperties().Select(property => property.Name));
     }
 

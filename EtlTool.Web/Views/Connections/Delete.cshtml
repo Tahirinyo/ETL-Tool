@@ -1,0 +1,14 @@
+@model DeleteSavedConnectionViewModel
+
+@{ ViewData["Title"] = "Delete connection"; }
+
+<h1>Delete connection</h1>
+@if (!string.IsNullOrWhiteSpace(Model.FailureMessage))
+{
+    <div class="alert alert-danger" role="alert">@Model.FailureMessage</div>
+}
+<p>Delete <strong>@Model.Name</strong> (@Model.ProviderDisplay)?</p>
+<p class="text-muted">Deletion is blocked when a pipeline or active run still references this connection.</p>
+<form asp-action="Delete" asp-route-id="@Model.Id" method="post">
+    <div class="d-flex gap-2"><button type="submit" class="btn btn-danger">Delete connection</button><a class="btn btn-outline-secondary" asp-action="Index">Cancel</a></div>
+</form>

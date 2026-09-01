@@ -1130,6 +1130,8 @@ public sealed class PipelinesController : Controller
             .ToList(),
         DestinationType = pipeline.DestinationType,
         PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
+        MongoDbDestinationConnectionId = pipeline.MongoDbDestinationConnectionId,
+        MongoDbDestinationConnectionRevision = pipeline.MongoDbDestinationConnectionRevision,
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1155,6 +1157,8 @@ public sealed class PipelinesController : Controller
         ValidationRules = pipeline.ValidationRules,
         DestinationType = pipeline.DestinationType,
         PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
+        MongoDbDestinationConnectionId = pipeline.MongoDbDestinationConnectionId,
+        MongoDbDestinationConnectionRevision = pipeline.MongoDbDestinationConnectionRevision,
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1182,6 +1186,8 @@ public sealed class PipelinesController : Controller
         ? null
         : new PostgreSqlSourceOptions
         {
+            SavedConnectionId = options.SavedConnectionId,
+            SavedConnectionRevision = options.SavedConnectionRevision,
             ConnectionProfile = options.ConnectionProfile,
             Database = options.Database,
             Schema = options.Schema,
@@ -1193,6 +1199,8 @@ public sealed class PipelinesController : Controller
         ? null
         : new MongoDbSourceOptions
         {
+            SavedConnectionId = options.SavedConnectionId,
+            SavedConnectionRevision = options.SavedConnectionRevision,
             Database = options.Database,
             Collection = options.Collection
         };
@@ -1202,6 +1210,8 @@ public sealed class PipelinesController : Controller
         ? null
         : new PostgreSqlDestinationOptions
         {
+            SavedConnectionId = options.SavedConnectionId,
+            SavedConnectionRevision = options.SavedConnectionRevision,
             ConnectionProfile = options.ConnectionProfile,
             Database = options.Database,
             Schema = options.Schema,
@@ -1284,6 +1294,8 @@ public sealed class PipelinesController : Controller
             ValidationRules = pipeline.ValidationRules,
             DestinationType = pipeline.DestinationType,
             PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
+            MongoDbDestinationConnectionId = pipeline.MongoDbDestinationConnectionId,
+            MongoDbDestinationConnectionRevision = pipeline.MongoDbDestinationConnectionRevision,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,
@@ -1647,6 +1659,8 @@ public sealed class PipelinesController : Controller
         pipeline.Description = model.Description;
         pipeline.DestinationType = DestinationType.MongoDb;
         pipeline.PostgreSqlDestination = null;
+        pipeline.MongoDbDestinationConnectionId = null;
+        pipeline.MongoDbDestinationConnectionRevision = null;
         pipeline.DestinationDatabase = model.DestinationDatabase ?? string.Empty;
         pipeline.DestinationCollection = model.DestinationCollection ?? string.Empty;
         pipeline.UpsertKeyField = model.UpsertKeyField ?? string.Empty;
@@ -1804,6 +1818,8 @@ public sealed class PipelinesController : Controller
             replacement.Description = model.Description;
             replacement.DestinationType = DestinationType.PostgreSql;
             replacement.PostgreSqlDestination = destination;
+            replacement.MongoDbDestinationConnectionId = null;
+            replacement.MongoDbDestinationConnectionRevision = null;
             replacement.DestinationDatabase = string.Empty;
             replacement.DestinationCollection = string.Empty;
             replacement.UpsertKeyField = upsertMapping.OutputField;

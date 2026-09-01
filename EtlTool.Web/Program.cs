@@ -1,3 +1,4 @@
+using EtlTool.Application.Connections;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Preview;
@@ -17,15 +18,28 @@ using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
+using EtlTool.Infrastructure.Connections;
 using EtlTool.Infrastructure.Reporting;
 using EtlTool.Infrastructure.Storage;
 using EtlTool.Infrastructure.Uploads;
 using EtlTool.Web.Services;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();
+
+var savedConnectionProtectionOptions = builder.Configuration
+    .GetSection(SavedConnectionProtectionOptions.SectionName)
+    .Get<SavedConnectionProtectionOptions>()
+    ?? new SavedConnectionProtectionOptions();
+var savedConnectionKeyRingPath = savedConnectionProtectionOptions.ResolveKeyRingPath(
+    builder.Environment.ContentRootPath);
+Directory.CreateDirectory(savedConnectionKeyRingPath);
+builder.Services.AddDataProtection()
+    .SetApplicationName("EtlTool.SavedDatabaseConnections.v1")
+    .PersistKeysToFileSystem(new DirectoryInfo(savedConnectionKeyRingPath));
 
 var mongoDbOptions = builder.Configuration
     .GetRequiredSection(MongoDbOptions.SectionName)
@@ -112,6 +126,18 @@ builder.Services.AddSingleton<IPostgreSqlDestinationAccessService>(provider =>
 builder.Services.AddSingleton<PostgreSqlSourceSchemaConverter>();
 builder.Services.AddSingleton<PostgreSqlDeterministicOrderingResolver>();
 builder.Services.AddSingleton<MongoMetadataDatabase>();
+builder.Services.AddSingleton<IConnectionConfigurationProtector,
+    DataProtectionConnectionConfigurationProtector>();
+builder.Services.AddSingleton<MongoSavedDatabaseConnectionRepository>();
+builder.Services.AddSingleton<ISavedDatabaseConnectionRepository>(provider =>
+    provider.GetRequiredService<MongoSavedDatabaseConnectionRepository>());
+builder.Services.AddSingleton<ISavedConnectionRuntimeResolver>(provider =>
+    provider.GetRequiredService<MongoSavedDatabaseConnectionRepository>());
+builder.Services.AddSingleton<ISavedConnectionConfigurationValidator,
+    SavedConnectionConfigurationValidator>();
+builder.Services.AddSingleton<ISavedConnectionReferenceChecker,
+    MongoSavedConnectionReferenceChecker>();
+builder.Services.AddSingleton<SavedConnectionProviderFactory>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
 builder.Services.AddSingleton<IMongoSourceMetadataDiscoveryService, MongoSourceMetadataDiscoveryService>();
 builder.Services.AddSingleton<IMongoSourceSchemaInferenceService, MongoSourceSchemaInferenceService>();
@@ -178,6 +204,11 @@ builder.Services.AddHostedService<SourceInspectionCleanupService>();
 builder.Services.AddHostedService<BackgroundJobWorker>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<IPipelineService, PipelineService>();
+builder.Services.AddScoped<SavedDatabaseConnectionService>();
+builder.Services.AddScoped<ISavedDatabaseConnectionService>(provider =>
+    provider.GetRequiredService<SavedDatabaseConnectionService>());
+builder.Services.AddScoped<ISavedConnectionRevisionResolver>(provider =>
+    provider.GetRequiredService<SavedDatabaseConnectionService>());
 builder.Services.AddScoped<IPipelineReadinessService, PipelineReadinessService>();
 builder.Services.AddScoped<IPreviewService, PreviewService>();
 builder.Services.AddScoped<IBatchOrchestrator, BatchOrchestrator>();

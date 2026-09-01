@@ -1,3 +1,4 @@
+using EtlTool.Application.Connections;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Sources;
@@ -9,6 +10,39 @@ namespace EtlTool.UnitTests.Application.Execution;
 
 public sealed class RunAdmissionServiceTests
 {
+    [Fact]
+    public async Task AdmitAsync_SavedConnectionFreezesCurrentRevisionForEachAdmission()
+    {
+        var pipeline = Pipeline();
+        var connectionId = Guid.NewGuid();
+        pipeline.DestinationType = DestinationType.MongoDb;
+        pipeline.MongoDbDestinationConnectionId = connectionId;
+        var resolver = new StubConnectionRevisionResolver { Revision = 3 };
+
+        var firstRepository = new RecordingRunRepository();
+        var first = await Service(
+                pipeline,
+                new RecordingSourceStore(pipeline.Id),
+                firstRepository,
+                new RecordingQueue(),
+                connectionRevisionResolver: resolver)
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+        resolver.Revision = 4;
+        var secondRepository = new RecordingRunRepository();
+        var second = await Service(
+                pipeline,
+                new RecordingSourceStore(pipeline.Id),
+                secondRepository,
+                new RecordingQueue(),
+                connectionRevisionResolver: resolver)
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.Admitted, first.Status);
+        Assert.Equal(RunAdmissionStatus.Admitted, second.Status);
+        Assert.Equal(3, Assert.Single(firstRepository.Runs).ExecutionConfiguration!.DestinationConnection!.Revision);
+        Assert.Equal(4, Assert.Single(secondRepository.Runs).ExecutionConfiguration!.DestinationConnection!.Revision);
+        Assert.Equal(connectionId, firstRepository.Runs[0].ExecutionConfiguration!.DestinationConnection!.ConnectionId);
+    }
     [Fact]
     public void Options_DefaultToFiveSecondsAndRejectOutOfRangeTimeouts()
     {
@@ -507,7 +541,8 @@ public sealed class RunAdmissionServiceTests
         IBackgroundJobQueue queue,
         PipelineReadinessResult? readiness = null,
         TimeProvider? timeProvider = null,
-        RunAdmissionOptions? options = null) =>
+        RunAdmissionOptions? options = null,
+        ISavedConnectionRevisionResolver? connectionRevisionResolver = null) =>
         new(
             new StubPipelineService(pipeline),
             new StubReadinessService(readiness ?? new PipelineReadinessResult([])),
@@ -515,7 +550,23 @@ public sealed class RunAdmissionServiceTests
             repository,
             queue,
             options ?? new RunAdmissionOptions(),
-            timeProvider ?? TimeProvider.System);
+            timeProvider ?? TimeProvider.System,
+            connectionRevisionResolver);
+
+    private sealed class StubConnectionRevisionResolver : ISavedConnectionRevisionResolver
+    {
+        public int Revision { get; set; }
+
+        public Task<SavedConnectionReference> ResolveCurrentAsync(
+            Guid connectionId,
+            DatabaseProviderType expectedProviderType,
+            CancellationToken cancellationToken) => Task.FromResult(new SavedConnectionReference
+        {
+            ConnectionId = connectionId,
+            ProviderType = expectedProviderType,
+            Revision = Revision
+        });
+    }
 
     private static PipelineDefinition Pipeline() => new()
     {

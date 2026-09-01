@@ -17,7 +17,14 @@ public static class PostgreSqlDestinationConfigurationValidator
             throw new InvalidOperationException("The PostgreSQL destination configuration is missing.");
         }
 
-        Require(destination.ConnectionProfile, "connection profile");
+        if (!destination.SavedConnectionId.HasValue)
+        {
+            Require(destination.ConnectionProfile, "connection profile");
+        }
+        else if (destination.SavedConnectionId == Guid.Empty)
+        {
+            throw new InvalidOperationException("The PostgreSQL saved connection identifier is invalid.");
+        }
         Require(destination.Database, "database");
         Require(destination.Schema, "schema");
         Require(destination.Table, "table");

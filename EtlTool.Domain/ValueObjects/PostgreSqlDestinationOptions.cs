@@ -6,6 +6,10 @@ namespace EtlTool.Domain.ValueObjects;
 /// </summary>
 public sealed class PostgreSqlDestinationOptions
 {
+    public Guid? SavedConnectionId { get; set; }
+
+    public int? SavedConnectionRevision { get; set; }
+
     public string ConnectionProfile { get; set; } = string.Empty;
 
     public string Database { get; set; } = string.Empty;

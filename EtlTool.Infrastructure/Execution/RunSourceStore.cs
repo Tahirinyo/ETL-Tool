@@ -1,4 +1,5 @@
 using EtlTool.Application.Execution;
+using EtlTool.Application.Connections;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.PostgreSql;
@@ -8,6 +9,7 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
+using EtlTool.Infrastructure.Connections;
 
 namespace EtlTool.Infrastructure.Execution;
 
@@ -25,6 +27,7 @@ public sealed class RunSourceStore : IRunSourceStore
     private readonly MongoMetadataDatabase _mongoMetadataDatabase;
     private readonly IMongoSourceSchemaInferenceService _mongoSchemaInferenceService;
     private readonly MongoDbOptions _mongoDbOptions;
+    private readonly SavedConnectionProviderFactory? _savedConnectionProviderFactory;
 
     public RunSourceStore(
         LocalRunSourceFileStore fileSourceStore,
@@ -35,7 +38,8 @@ public sealed class RunSourceStore : IRunSourceStore
         PostgreSqlDeterministicOrderingResolver postgreSqlOrderingResolver,
         MongoMetadataDatabase mongoMetadataDatabase,
         IMongoSourceSchemaInferenceService mongoSchemaInferenceService,
-        MongoDbOptions mongoDbOptions)
+        MongoDbOptions mongoDbOptions,
+        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
     {
         ArgumentNullException.ThrowIfNull(fileSourceStore);
         ArgumentNullException.ThrowIfNull(postgreSqlConnectionFactory);
@@ -56,6 +60,7 @@ public sealed class RunSourceStore : IRunSourceStore
         _mongoMetadataDatabase = mongoMetadataDatabase;
         _mongoSchemaInferenceService = mongoSchemaInferenceService;
         _mongoDbOptions = mongoDbOptions;
+        _savedConnectionProviderFactory = savedConnectionProviderFactory;
     }
 
     public async Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
@@ -87,10 +92,28 @@ public sealed class RunSourceStore : IRunSourceStore
             ?? throw new InvalidOperationException(
                 "The admitted MongoDB source configuration is unavailable.");
 
+        var metadataDatabase = _mongoMetadataDatabase;
+        var schemaInferenceService = _mongoSchemaInferenceService;
+        var mongoOptions = _mongoDbOptions;
+        if (sourceOptions.SavedConnectionId.HasValue)
+        {
+            var runtimeFactory = _savedConnectionProviderFactory
+                ?? throw new SavedConnectionResolutionException();
+            var context = await runtimeFactory.CreateMongoDbAsync(
+                    sourceOptions.SavedConnectionId.Value,
+                    sourceOptions.SavedConnectionRevision
+                        ?? throw new SavedConnectionResolutionException(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            metadataDatabase = context.MetadataDatabase;
+            schemaInferenceService = context.SchemaInference;
+            mongoOptions = context.Options;
+        }
+
         IReadOnlyList<SourceFieldDefinition> liveSchema;
         try
         {
-            liveSchema = await _mongoSchemaInferenceService
+            liveSchema = await schemaInferenceService
                 .InferAsync(sourceOptions, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -109,8 +132,8 @@ public sealed class RunSourceStore : IRunSourceStore
         }
 
         return new MongoDbEtlSource(
-            _mongoMetadataDatabase,
-            _mongoDbOptions,
+            metadataDatabase,
+            mongoOptions,
             sourceOptions,
             configuration.ExpectedSchema);
     }
@@ -122,8 +145,34 @@ public sealed class RunSourceStore : IRunSourceStore
         var sourceOptions = configuration.PostgreSqlSource
             ?? throw new InvalidOperationException(
                 "The admitted PostgreSQL source configuration is unavailable.");
-        var columns = await _postgreSqlMetadataDiscoveryService.DiscoverColumnsAsync(
-                sourceOptions.ConnectionProfile,
+        var connectionFactory = _postgreSqlConnectionFactory;
+        var metadataDiscoveryService = _postgreSqlMetadataDiscoveryService;
+        var effectiveSourceOptions = sourceOptions;
+        if (sourceOptions.SavedConnectionId.HasValue)
+        {
+            var runtimeFactory = _savedConnectionProviderFactory
+                ?? throw new SavedConnectionResolutionException();
+            var context = await runtimeFactory.CreatePostgreSqlAsync(
+                    sourceOptions.SavedConnectionId.Value,
+                    sourceOptions.SavedConnectionRevision
+                        ?? throw new SavedConnectionResolutionException(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            connectionFactory = context.ConnectionFactory;
+            metadataDiscoveryService = context.MetadataDiscovery;
+            effectiveSourceOptions = new PostgreSqlSourceOptions
+            {
+                SavedConnectionId = sourceOptions.SavedConnectionId,
+                SavedConnectionRevision = sourceOptions.SavedConnectionRevision,
+                ConnectionProfile = SavedConnectionProviderFactory.RuntimePostgreSqlProfile,
+                Database = sourceOptions.Database,
+                Schema = sourceOptions.Schema,
+                Table = sourceOptions.Table
+            };
+        }
+
+        var columns = await metadataDiscoveryService.DiscoverColumnsAsync(
+                effectiveSourceOptions.ConnectionProfile,
                 sourceOptions.Database,
                 sourceOptions.Schema,
                 sourceOptions.Table,
@@ -150,10 +199,10 @@ public sealed class RunSourceStore : IRunSourceStore
         }
 
         return new PostgreSqlEtlSource(
-            _postgreSqlConnectionFactory,
-            _postgreSqlMetadataDiscoveryService,
+            connectionFactory,
+            metadataDiscoveryService,
             _postgreSqlOrderingResolver,
-            sourceOptions);
+            effectiveSourceOptions);
     }
 
     public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken)
