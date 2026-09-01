@@ -1,3 +1,4 @@
+using System.Text;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
@@ -22,12 +23,94 @@ using EtlTool.Infrastructure.Uploads;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using static EtlTool.IntegrationTests.Extraction.OpenXmlWorkbookFixture;
 
 namespace EtlTool.IntegrationTests.MongoDB;
 
 [Collection(MongoDbTestCollection.CollectionName)]
 public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
 {
+    [Theory]
+    [InlineData(SourceType.Csv)]
+    [InlineData(SourceType.Xlsx)]
+    public async Task ExecuteAsync_FileSourceStreamsSharedProcessingIntoMongo(
+        SourceType sourceType)
+    {
+        await using var database = fixture.CreateDatabase();
+        var targetDatabaseName = $"db22_file_target_{Guid.NewGuid():N}";
+        var temporaryRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"EtlTool-DB22-{Guid.NewGuid():N}");
+        var uploadOptions = new UploadStorageOptions
+        {
+            RootPath = Path.Combine(temporaryRoot, "uploads")
+        };
+        var uploadStorage = new LocalUploadStorage(uploadOptions);
+        var errorReportStore = new LocalErrorReportStore(new ErrorReportStorageOptions
+        {
+            RootPath = Path.Combine(temporaryRoot, "error-reports")
+        });
+
+        try
+        {
+            await using var content = CreateFileContent(sourceType);
+            var storedUpload = await uploadStorage.StoreAsync(
+                content,
+                sourceType == SourceType.Csv ? "customers.csv" : "customers.xlsx",
+                CancellationToken.None);
+            var pipeline = FilePipeline(sourceType, targetDatabaseName);
+            await database.Repository.AddAsync(pipeline, CancellationToken.None);
+            var run = new EtlRun
+            {
+                Id = Guid.NewGuid(),
+                PipelineId = pipeline.Id,
+                PipelineName = pipeline.Name,
+                Status = EtlRunStatus.Queued,
+                OriginalFileName = storedUpload.OriginalFileName,
+                StoredFilePath = storedUpload.StoredFilePath,
+                ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(pipeline)
+            };
+            await database.EtlRunRepository.AddAsync(run, CancellationToken.None);
+
+            await CreateFileExecutor(database, temporaryRoot, errorReportStore)
+                .ExecuteAsync(new BackgroundJob(run.Id), CancellationToken.None);
+
+            var completed = Assert.IsType<EtlRun>(await database.EtlRunRepository.GetByIdAsync(
+                run.Id,
+                CancellationToken.None));
+            Assert.Equal(EtlRunStatus.Completed, completed.Status);
+            Assert.Equal((6L, 2L, 2L, 1L, 1L, 2L, 0L), Counters(completed));
+            Assert.Equal($"error-report-{run.Id:N}.csv", completed.ErrorReportPath);
+            Assert.False(File.Exists(storedUpload.StoredFilePath));
+
+            var target = database.Client
+                .GetDatabase(targetDatabaseName)
+                .GetCollection<BsonDocument>("customers");
+            var documents = await target
+                .Find(FilterDefinition<BsonDocument>.Empty)
+                .Sort(Builders<BsonDocument>.Sort.Ascending("logical_id"))
+                .ToListAsync();
+            Assert.Equal(["A", "B"], documents.Select(document => document["logical_id"].AsString));
+            Assert.Equal(["Ada", "Linus"], documents.Select(document => document["name"].AsString));
+            Assert.Equal([10L, 40L], documents.Select(document => document["amount"].AsInt64));
+
+            await using var report = errorReportStore.OpenRead(completed);
+            Assert.NotNull(report);
+            using var reader = new StreamReader(report!);
+            var csv = await reader.ReadToEndAsync();
+            Assert.Contains("Invalid first", csv, StringComparison.Ordinal);
+            Assert.Contains("not-a-number", csv, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await database.Client.DropDatabaseAsync(targetDatabaseName);
+            if (Directory.Exists(temporaryRoot))
+            {
+                Directory.Delete(temporaryRoot, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_AdmitsCapturedMongoSourceAndStreamsThroughExistingEngine()
     {
@@ -254,6 +337,45 @@ public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
             NullLogger<EtlRunBackgroundJobExecutor>.Instance);
     }
 
+    private static EtlRunBackgroundJobExecutor CreateFileExecutor(
+        MongoDbTestDatabase database,
+        string temporaryRoot,
+        IErrorReportStore errorReportStore)
+    {
+        var fieldMapping = new FieldMappingService();
+        var readiness = new PipelineReadinessService(
+            database.Repository,
+            fieldMapping,
+            database.TargetAccessService);
+        var processor = new PipelineRowProcessor(
+            fieldMapping,
+            new TransformationEngine(new TransformationHandlerRegistry(
+            [
+                new ConditionalFilterTransformationHandler(),
+                new TrimTransformationHandler(),
+                new ConvertToIntegerTransformationHandler(),
+                new DeduplicateTransformationHandler()
+            ])),
+            new ValidationEngine(new ValidationHandlerRegistry(
+            [
+                new NumericRangeValidationHandler()
+            ])));
+        var orchestrator = new BatchOrchestrator(
+            readiness,
+            processor,
+            new BatchExecutionOptions { BatchSize = 1 });
+
+        return new EtlRunBackgroundJobExecutor(
+            database.EtlRunRepository,
+            orchestrator,
+            new DataLoaderResolver([database.Loader]),
+            TimeProvider.System,
+            new CsvErrorReportWriter(),
+            CreateFileStore(temporaryRoot),
+            errorReportStore,
+            NullLogger<EtlRunBackgroundJobExecutor>.Instance);
+    }
+
     private static LocalRunSourceFileStore CreateFileStore(string temporaryRoot)
     {
         var options = new UploadStorageOptions
@@ -295,6 +417,117 @@ public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
         DestinationCollection = "loaded_customers",
         UpsertKeyField = "id"
     };
+
+    private static PipelineDefinition FilePipeline(
+        SourceType sourceType,
+        string targetDatabase) => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "DB.22 file to MongoDB execution",
+        SourceType = sourceType,
+        SourceOptions = new SourceOptions
+        {
+            Delimiter = CsvDelimiter.Comma,
+            FirstRowIsHeader = true,
+            WorksheetName = sourceType == SourceType.Xlsx ? "Data" : null
+        },
+        ExpectedSchema =
+        [
+            Field("Kind", SourceFieldType.String),
+            Field("Logical Id", SourceFieldType.String),
+            Field("Name", SourceFieldType.String),
+            Field("Amount", SourceFieldType.String)
+        ],
+        FieldMappings =
+        [
+            Mapping("Kind", "kind"),
+            Mapping("Logical Id", "logical_id"),
+            Mapping("Name", "name"),
+            Mapping("Amount", "amount")
+        ],
+        TransformationRules =
+        [
+            new TransformationRule
+            {
+                Id = Guid.NewGuid(),
+                Order = 1,
+                Type = TransformationType.FilterRow,
+                SourceField = "kind",
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Operator"] = FilterOperator.Equals.ToString(),
+                    ["Value"] = "filtered"
+                }
+            },
+            new TransformationRule
+            {
+                Id = Guid.NewGuid(),
+                Order = 2,
+                Type = TransformationType.Trim,
+                SourceField = "name"
+            },
+            new TransformationRule
+            {
+                Id = Guid.NewGuid(),
+                Order = 3,
+                Type = TransformationType.ConvertToInteger,
+                SourceField = "amount"
+            },
+            new TransformationRule
+            {
+                Id = Guid.NewGuid(),
+                Order = 4,
+                Type = TransformationType.Deduplicate,
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Fields"] = "[\"logical_id\"]"
+                }
+            }
+        ],
+        ValidationRules =
+        [
+            new ValidationRule
+            {
+                Id = Guid.NewGuid(),
+                Type = ValidationType.NumericRange,
+                Field = "amount",
+                Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["Minimum"] = "0"
+                }
+            }
+        ],
+        DestinationDatabase = targetDatabase,
+        DestinationCollection = "customers",
+        UpsertKeyField = "logical_id"
+    };
+
+    private static Stream CreateFileContent(SourceType sourceType)
+    {
+        const string csv = "Kind,Logical Id,Name,Amount\r\n" +
+                           "normal,A,Invalid first,-1\r\n" +
+                           "normal,A, Ada ,10\r\n" +
+                           "normal,A,Later duplicate,20\r\n" +
+                           "filtered,C,Hidden,30\r\n" +
+                           "normal,D,Broken,not-a-number\r\n" +
+                           "normal,B, Linus ,40\r\n";
+
+        if (sourceType == SourceType.Csv)
+        {
+            return new MemoryStream(Encoding.UTF8.GetBytes(csv));
+        }
+
+        return Create(
+            Sheet(
+                "Data",
+                Row(Text(1, "Kind"), Text(2, "Logical Id"), Text(3, "Name"), Text(4, "Amount")),
+                Row(Text(1, "normal"), Text(2, "A"), Text(3, "Invalid first"), Text(4, "-1")),
+                Row(Text(1, "normal"), Text(2, "A"), Text(3, " Ada "), Text(4, "10")),
+                Row(Text(1, "normal"), Text(2, "A"), Text(3, "Later duplicate"), Text(4, "20")),
+                Row(Text(1, "filtered"), Text(2, "C"), Text(3, "Hidden"), Text(4, "30")),
+                Row(Text(1, "normal"), Text(2, "D"), Text(3, "Broken"), Text(4, "not-a-number")),
+                Row(Text(1, "normal"), Text(2, "B"), Text(3, " Linus "), Text(4, "40"))));
+    }
 
     private static SourceFieldDefinition Field(string name, SourceFieldType type) => new()
     {
