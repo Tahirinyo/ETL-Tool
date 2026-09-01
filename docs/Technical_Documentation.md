@@ -19,14 +19,14 @@ EtlTool.IntegrationTests  -> Infrastructure, Web
 | --- | --- |
 | `EtlTool.Domain` | Pipeline, rule, run, source-schema, mapping, and enum contracts. It has no project references. |
 | `EtlTool.Application` | Use-case and ETL rules: mapping, transformation and validation engines, preview, batch orchestration, readiness checks, and contracts for persistence, extraction, loading, reporting, uploads, and queueing. It references Domain only. |
-| `EtlTool.Infrastructure` | CSV/XLSX extractors, PostgreSQL and MongoDB streaming sources, MongoDB repositories and loader, local upload/run-source/error-report storage, and the in-process queue implementation. It references Application. |
-| `EtlTool.Web` | MVC controllers, Razor views/view models, service composition in `Program.cs`, and hosted workers. It references Application and Infrastructure. Controllers coordinate HTTP only; they do not perform row processing or MongoDB loading. |
+| `EtlTool.Infrastructure` | CSV/XLSX extractors, PostgreSQL and MongoDB streaming sources, MongoDB repositories, MongoDB and PostgreSQL loaders, local upload/run-source/error-report storage, and the in-process queue implementation. It references Application. |
+| `EtlTool.Web` | MVC controllers, Razor views/view models, service composition in `Program.cs`, and hosted workers. It references Application and Infrastructure. Controllers coordinate HTTP only; they do not perform row processing or destination loading. |
 | `EtlTool.UnitTests` | Isolated coverage of domain/application behavior and MVC coordination/view models. |
 | `EtlTool.IntegrationTests` | Extractor, MongoDB, reporting/storage, worker/queue, and selected MVC integration coverage. |
 
-`PipelineDefinition` is the persisted definition of a pipeline: source options and expected schema, field mappings, transformation and validation rules, destination database/collection, and the output-field upsert key. `EtlRun` persists a run snapshot, state, counters, timestamps, safe source metadata, system error summary, and an optional error-report reference.
+`PipelineDefinition` is the persisted definition of a pipeline: source options and expected schema, field mappings, transformation and validation rules, destination configuration, and the output-field upsert key. `EtlRun` persists a run snapshot, state, counters, timestamps, safe source metadata, system error summary, and an optional error-report reference. PostgreSQL profile names and MongoDB/PostgreSQL object identities may be persisted; connection strings are configuration-only and are never pipeline data.
 
-At composition time, `Program.cs` registers the concrete CSV and XLSX extractors, logical-source metadata services, MongoDB repositories and `MongoBulkUpsertLoader`, local report storage, handler registries, ETL services, and hosted background services. The principal runtime boundaries include `IEtlSource`, `IRunSourceStore`, `IFileExtractorResolver`, `IPipelineDefinitionRepository`, `IEtlRunRepository`, `IDataLoader`, `IErrorReportWriter`, `IErrorReportStore`, and `IBackgroundJobQueue`.
+At composition time, `Program.cs` registers the concrete CSV and XLSX extractors, logical-source metadata services, MongoDB repositories, `MongoBulkUpsertLoader`, `PostgreSqlBatchUpsertLoader`, local report storage, handler registries, ETL services, and hosted background services. The principal runtime boundaries include `IEtlSource`, `IRunSourceStore`, `IFileExtractorResolver`, `IPipelineDefinitionRepository`, `IEtlRunRepository`, `IDataLoader`, `IErrorReportWriter`, `IErrorReportStore`, and `IBackgroundJobQueue`.
 
 ## ETL processing
 
@@ -65,7 +65,7 @@ Transformation results may short-circuit as `Filtered` or `Duplicate`; neither i
 
 Invalid rows are passed to the error-report callback; filtered and duplicate rows are excluded. `BatchExecutionProgress` and the final `BatchExecutionResult` track processed, valid, invalid, filtered, deduplicated, inserted, and updated rows. A readiness failure, target-access failure, unreadable source, cancellation, report failure, or batch-load failure is not treated as a successful row outcome.
 
-`PipelineReadinessService` gates preview and execution. It checks supported/configured source options and schema, mappings, rule references/configuration, destination safety, and that the upsert key is an included mapped output field. MongoDB sources can be admitted for full execution; Preview remains explicitly unavailable for MongoDB until its separate UI/Preview integration task. Schema inspection/comparison occurs before a source is committed for preview or run admission, and logical sources are checked again against the admitted snapshot when execution opens them.
+`PipelineReadinessService` gates preview and execution. It checks supported/configured source options and schema, mappings, rule references/configuration, destination safety, and that the upsert key is an included mapped output field. PostgreSQL and MongoDB sources are both available for Preview and full execution. Schema inspection/comparison occurs before a source is committed for preview or run admission, and logical sources are checked again against the admitted snapshot when execution opens them.
 
 ## Preview and full execution
 
@@ -85,15 +85,32 @@ The worker links host shutdown and the per-run token from `ExecutionCancellation
 
 For a normal system failure, the executor uses `Failed` if no target writes were confirmed, or `PartiallyCompleted` if prior inserts or updates were confirmed. `Completed`, `PartiallyCompleted`, `Failed`, and `Interrupted` are terminal; `Queued` and `Running` are non-terminal. A report produced before a later failure can be retained with that terminal run when finalization succeeds.
 
-## MongoDB loading
+## Destination loading
 
-`IDataLoader` currently has one registration: Infrastructure's `MongoBulkUpsertLoader`. The orchestrator validates the `MongoTarget` and checks access through `IMongoTargetAccessService` before extraction begins. `MongoTargetAccessService` rejects system databases and the configured metadata database, invalid database/collection names, and inaccessible targets.
+The accepted product support matrix is intentionally narrower than the type abstractions might suggest:
+
+| Source | MongoDB destination | PostgreSQL destination |
+| --- | --- | --- |
+| CSV | Supported | Not advertised as supported |
+| XLSX | Supported | Not advertised as supported |
+| PostgreSQL | Supported | Not advertised as supported |
+| MongoDB | Not advertised as supported | Supported |
+
+`DataLoaderResolver` selects the destination-specific loader from the immutable admitted run configuration. The batch orchestrator retains only confirmed inserted/updated results; a later system failure is `PartiallyCompleted` only when earlier writes were confirmed.
+
+### MongoDB
+
+The orchestrator validates the `MongoTarget` and checks access through `IMongoTargetAccessService` before extraction begins. `MongoTargetAccessService` rejects system databases and the configured metadata database, invalid database/collection names, and inaccessible targets.
 
 For each valid batch, `MongoBulkUpsertLoader` builds `ReplaceOneModel<BsonDocument>` requests with `IsUpsert = true` and simple collation. The configured output upsert field is both the match field and the document key. Empty keys are rejected earlier by row processing; unsafe key field names (`.` or leading `$`) and incompatible mapped `_id` use are rejected by the loader. Repeating the same logical key therefore replaces the existing target document rather than inserting another one. The loader returns separate inserted and updated counts from the confirmed `BulkWrite` result.
 
 Retries are deliberately narrow: `MongoDb:BulkWriteMaximumAttempts` and `MongoDb:BulkWriteRetryDelayMilliseconds` control retries only for MongoDB failures marked both `NoWritesPerformed` and `RetryableWriteError`. Cancellation is never retried. Other MongoDB or timeout failures become `BatchLoadException` with no confirmed result; the orchestrator carries confirmed counts into the failure progress, allowing the executor to distinguish `Failed` from `PartiallyCompleted`.
 
 The MongoDB connection string is validated from the `MongoDb` configuration section at startup and is expected through an environment variable, user secrets, or another secret configuration provider. It is not stored in a pipeline or documented here.
+
+### PostgreSQL
+
+PostgreSQL uses configured, named profiles under `PostgreSql:Profiles`; only the selected profile name, database, schema, table, output-to-column mappings, and upsert-key column are retained in a pipeline. Destination configuration discovers databases, schemas, tables, columns, and eligible unique/primary-key constraints before saving. The batch loader uses transactional `INSERT ... ON CONFLICT ... DO UPDATE` operations against the selected key column and reports confirmed inserts and updates separately. A rerun using the same selected key updates existing rows rather than creating duplicates. PostgreSQL batch retries are limited by `PostgreSql:BatchWriteMaximumAttempts` and `PostgreSql:BatchWriteRetryDelayMilliseconds`; cancellation is not retried.
 
 ## Error reports and file lifecycle
 
@@ -121,17 +138,15 @@ Also extend the places that define the supported configuration: `PipelineReadine
 
 ### Add a loader
 
-The current `IDataLoader` seam is narrow and MongoDB-shaped: `UpsertBatchAsync` accepts `MongoTarget`, an upsert-key field, and rows. To alter MongoDB load behavior, implement `IDataLoader` in Infrastructure and replace the single registration in `Program.cs`; preserve batch result and cancellation/error semantics, then cover it with loader and batch-orchestration tests.
-
-Adding a different target type is **not** a supported plug-in path. It would require a broader redesign of `IDataLoader`, target configuration/access validation, pipeline/readiness contracts, DI composition, and UI behavior. This documentation does not treat that unimplemented redesign as an available feature; the MVP target is MongoDB only.
+`IDataLoader` is selected by `DestinationType`; the current registrations are `MongoBulkUpsertLoader` and `PostgreSqlBatchUpsertLoader`. A change to either loader must preserve batch result, cancellation, upsert-key, and confirmed-counter semantics and include focused loader and batch-orchestration tests. Adding another target type is not a plug-in-only change: it requires destination configuration/access validation, pipeline/readiness contracts, DI composition, UI behavior, and acceptance evidence. This documentation does not advertise additional target support.
 
 ## Evidence, scope, and known limitations
 
-The behaviors summarized above were checked against the concrete services and registrations named in this document, plus focused tests such as `PreviewServiceTests`, `PipelineRowProcessorTests`, `BatchOrchestratorTests`, `MongoBulkUpsertLoaderTests`, `MongoBulkUpsertLoaderRetryTests`, `EtlRunBackgroundJobExecutorTests`, `BackgroundJobWorkerTests`, `CsvErrorReportWriterTests`, `LocalErrorReportStoreTests`, the run/preview MVC tests, and the fixture-backed `DemoGuideAcceptanceTests`. Final acceptance also completed solution restore/build, the full unit suite, broad application/integration/MVC coverage, the 100K acceptance run, and Docker Compose build/start, MongoDB health, and `/Pipelines` connectivity checks.
+The behaviors summarized above were checked against the concrete services and registrations named in this document, plus focused tests such as `PreviewServiceTests`, `PipelineRowProcessorTests`, `BatchOrchestratorTests`, `MongoBulkUpsertLoaderTests`, `PostgreSqlBatchUpsertLoaderTests`, `EtlRunBackgroundJobExecutorTests`, `BackgroundJobWorkerTests`, `CsvErrorReportWriterTests`, `LocalErrorReportStoreTests`, the run/preview MVC tests, and the PostgreSQL-to-MongoDB and MongoDB-to-PostgreSQL integration tests. DB.21 and DB.22 acceptance also exercised the accepted cross-database paths with real providers.
 
 ### Intentional MVP limits
 
-The product supports CSV and modern XLSX sources and a MongoDB destination only. It deliberately excludes legacy XLS, other source/target types, multiple MongoDB profiles, authentication/multi-tenancy, scheduled or distributed jobs, AI/fuzzy matching, custom code or regex validation, full-file dry runs, and cloud/production-SLA infrastructure. Background work is an in-process, single-reader queue; there is no user-facing run-cancellation endpoint.
+The product supports CSV, modern XLSX, PostgreSQL, and MongoDB sources, and MongoDB/PostgreSQL destinations only for the accepted matrix above. It deliberately excludes legacy XLS, other database providers, unaccepted source/destination combinations, multiple MongoDB connection profiles, authentication/multi-tenancy, scheduled or distributed jobs, AI/fuzzy matching, custom code or regex validation, full-file dry runs, and cloud/production-SLA infrastructure. MongoDB supports one configured application connection; PostgreSQL uses explicitly configured profiles. Background work is an in-process, single-reader queue; there is no user-facing run-cancellation endpoint.
 
 ### Non-blocking verification limitations
 
