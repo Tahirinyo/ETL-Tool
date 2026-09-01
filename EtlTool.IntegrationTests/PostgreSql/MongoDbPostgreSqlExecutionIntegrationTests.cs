@@ -95,6 +95,7 @@ public sealed class MongoDbPostgreSqlExecutionIntegrationTests(
                 new LogicalSourceStore(),
                 factory,
                 new PostgreSqlMetadataDiscoveryService(factory),
+                new PostgreSqlSourceSchemaConverter(),
                 new PostgreSqlDeterministicOrderingResolver(),
                 mongoMetadata,
                 mongoOptions,

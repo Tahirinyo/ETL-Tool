@@ -35,10 +35,11 @@ public sealed class PreviewSourceFactoryTests
     }
 
     [Fact]
-    public async Task AcquireAsync_PostgreSqlCreatesTheExistingPostgreSqlEtlSourceWithoutFileAcquisition()
+    public async Task AcquireAsync_PostgreSqlMatchingLiveSchemaCreatesSourceWithoutFileAcquisition()
     {
         var store = new RecordingWizardSourceStore();
-        var factory = CreateFactory(store);
+        var metadata = new RecordingPostgreSqlMetadataDiscoveryService();
+        var factory = CreateFactory(store, postgreSqlMetadata: metadata);
         var pipeline = Pipeline(SourceType.PostgreSql);
         pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
         {
@@ -47,12 +48,45 @@ public sealed class PreviewSourceFactoryTests
             Schema = "public",
             Table = "customers"
         };
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }
+        ];
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true }
+        ];
 
         await using var source = await factory.AcquireAsync(pipeline, CancellationToken.None);
 
         Assert.IsType<PostgreSqlEtlSource>(source);
         Assert.Equal(0, store.AcquireCallCount);
+        Assert.Equal(1, metadata.DiscoverColumnsCallCount);
     }
+
+    [Fact]
+    public Task AcquireAsync_PostgreSqlAddedColumnRequiresRemappingBeforePreview() =>
+        AssertPostgreSqlSchemaChangedAsync(
+            [Field("Id", SourceFieldType.Integer)],
+            [Column("Id", "integer", 1), Column("Name", "text", 2)]);
+
+    [Fact]
+    public Task AcquireAsync_PostgreSqlRemovedColumnRequiresRemappingBeforePreview() =>
+        AssertPostgreSqlSchemaChangedAsync(
+            [Field("Id", SourceFieldType.Integer), Field("Name", SourceFieldType.String)],
+            [Column("Id", "integer", 1)]);
+
+    [Fact]
+    public Task AcquireAsync_PostgreSqlTypeChangeRequiresRemappingBeforePreview() =>
+        AssertPostgreSqlSchemaChangedAsync(
+            [Field("Id", SourceFieldType.Integer)],
+            [Column("Id", "text", 1)]);
+
+    [Fact]
+    public Task AcquireAsync_PostgreSqlUnsupportedLiveTypeUsesSafeSchemaChangedFailure() =>
+        AssertPostgreSqlSchemaChangedAsync(
+            [Field("Id", SourceFieldType.Integer)],
+            [Column("Id", "jsonb", 1)]);
 
     [Fact]
     public async Task AcquireAsync_MongoDbCreatesTheExistingMongoDbEtlSourceWithoutFileAcquisition()
@@ -139,15 +173,59 @@ public sealed class PreviewSourceFactoryTests
 
     private static PreviewSourceFactory CreateFactory(
         RecordingWizardSourceStore store,
-        IMongoSourceSchemaInferenceService? mongoInference = null) => new(
+        IMongoSourceSchemaInferenceService? mongoInference = null,
+        IPostgreSqlMetadataDiscoveryService? postgreSqlMetadata = null) => new(
         store,
         new ThrowingConnectionFactory(),
-        new ThrowingMetadataDiscoveryService(),
+        postgreSqlMetadata ?? new RecordingPostgreSqlMetadataDiscoveryService(),
+        new PostgreSqlSourceSchemaConverter(),
         new PostgreSqlDeterministicOrderingResolver(),
         new MongoMetadataDatabase(MongoOptions()),
         MongoOptions(),
         mongoInference ?? new RecordingMongoSchemaInferenceService(),
         new SourceSchemaComparisonService());
+
+    private static async Task AssertPostgreSqlSchemaChangedAsync(
+        IReadOnlyList<SourceFieldDefinition> expectedSchema,
+        IReadOnlyList<PostgreSqlColumnMetadata> liveColumns)
+    {
+        var store = new RecordingWizardSourceStore();
+        var metadata = new RecordingPostgreSqlMetadataDiscoveryService { Columns = liveColumns };
+        var factory = CreateFactory(store, postgreSqlMetadata: metadata);
+        var pipeline = Pipeline(SourceType.PostgreSql);
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb",
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        };
+        pipeline.ExpectedSchema = expectedSchema.ToList();
+        pipeline.FieldMappings = expectedSchema
+            .Select(field => new FieldMapping
+            {
+                SourceField = field.Name,
+                TargetField = field.Name.ToLowerInvariant(),
+                IsIncluded = true
+            })
+            .ToList();
+
+        var exception = await Assert.ThrowsAsync<PostgreSqlSourceSchemaChangedException>(() =>
+            factory.AcquireAsync(pipeline, CancellationToken.None));
+
+        Assert.Equal(PostgreSqlSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.Equal(1, metadata.DiscoverColumnsCallCount);
+        Assert.Equal(0, store.AcquireCallCount);
+    }
+
+    private static SourceFieldDefinition Field(string name, SourceFieldType dataType) => new()
+    {
+        Name = name,
+        DataType = dataType
+    };
+
+    private static PostgreSqlColumnMetadata Column(string name, string nativeType, int ordinal) =>
+        new(name, nativeType, true, ordinal);
 
     private static MongoDbOptions MongoOptions() => new()
     {
@@ -219,8 +297,13 @@ public sealed class PreviewSourceFactoryTests
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class ThrowingMetadataDiscoveryService : IPostgreSqlMetadataDiscoveryService
+    private sealed class RecordingPostgreSqlMetadataDiscoveryService : IPostgreSqlMetadataDiscoveryService
     {
+        public IReadOnlyList<PostgreSqlColumnMetadata> Columns { get; init; } =
+            [new PostgreSqlColumnMetadata("Id", "integer", false, 1)];
+
+        public int DiscoverColumnsCallCount { get; private set; }
+
         public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(string connectionProfile, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
@@ -230,8 +313,11 @@ public sealed class PreviewSourceFactoryTests
         public Task<IReadOnlyList<PostgreSqlTableMetadata>> DiscoverTablesAsync(string connectionProfile, string database, string schema, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverColumnsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+        public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverColumnsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken)
+        {
+            DiscoverColumnsCallCount++;
+            return Task.FromResult(Columns);
+        }
 
         public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

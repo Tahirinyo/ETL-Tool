@@ -16,6 +16,7 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
     private readonly IWizardSourceStore _wizardSourceStore;
     private readonly IPostgreSqlConnectionFactory _postgreSqlConnectionFactory;
     private readonly IPostgreSqlMetadataDiscoveryService _postgreSqlMetadataDiscoveryService;
+    private readonly PostgreSqlSourceSchemaConverter _postgreSqlSchemaConverter;
     private readonly PostgreSqlDeterministicOrderingResolver _postgreSqlOrderingResolver;
     private readonly MongoMetadataDatabase _mongoMetadataDatabase;
     private readonly MongoDbOptions _mongoDbOptions;
@@ -26,6 +27,7 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         IWizardSourceStore wizardSourceStore,
         IPostgreSqlConnectionFactory postgreSqlConnectionFactory,
         IPostgreSqlMetadataDiscoveryService postgreSqlMetadataDiscoveryService,
+        PostgreSqlSourceSchemaConverter postgreSqlSchemaConverter,
         PostgreSqlDeterministicOrderingResolver postgreSqlOrderingResolver,
         MongoMetadataDatabase mongoMetadataDatabase,
         MongoDbOptions mongoDbOptions,
@@ -35,6 +37,7 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         ArgumentNullException.ThrowIfNull(wizardSourceStore);
         ArgumentNullException.ThrowIfNull(postgreSqlConnectionFactory);
         ArgumentNullException.ThrowIfNull(postgreSqlMetadataDiscoveryService);
+        ArgumentNullException.ThrowIfNull(postgreSqlSchemaConverter);
         ArgumentNullException.ThrowIfNull(postgreSqlOrderingResolver);
         ArgumentNullException.ThrowIfNull(mongoMetadataDatabase);
         ArgumentNullException.ThrowIfNull(mongoDbOptions);
@@ -44,6 +47,7 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         _wizardSourceStore = wizardSourceStore;
         _postgreSqlConnectionFactory = postgreSqlConnectionFactory;
         _postgreSqlMetadataDiscoveryService = postgreSqlMetadataDiscoveryService;
+        _postgreSqlSchemaConverter = postgreSqlSchemaConverter;
         _postgreSqlOrderingResolver = postgreSqlOrderingResolver;
         _mongoMetadataDatabase = mongoMetadataDatabase;
         _mongoDbOptions = mongoDbOptions;
@@ -61,7 +65,7 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         return pipeline.SourceType switch
         {
             SourceType.Csv or SourceType.Xlsx => await AcquireFileSourceAsync(pipeline, cancellationToken).ConfigureAwait(false),
-            SourceType.PostgreSql => CreatePostgreSqlSource(pipeline),
+            SourceType.PostgreSql => await CreatePostgreSqlSourceAsync(pipeline, cancellationToken).ConfigureAwait(false),
             SourceType.MongoDb => await CreateMongoDbSourceAsync(pipeline, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException(
                 $"The pipeline source type '{pipeline.SourceType}' is not supported for preview.")
@@ -78,12 +82,45 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
                 cancellationToken)
             .ConfigureAwait(false);
 
-    private PostgreSqlEtlSource CreatePostgreSqlSource(PipelineDefinition pipeline) => new(
-        _postgreSqlConnectionFactory,
-        _postgreSqlMetadataDiscoveryService,
-        _postgreSqlOrderingResolver,
-        pipeline.PostgreSqlSource
-            ?? throw new InvalidOperationException("The PostgreSQL source configuration is missing."));
+    private async Task<PostgreSqlEtlSource> CreatePostgreSqlSourceAsync(
+        PipelineDefinition pipeline,
+        CancellationToken cancellationToken)
+    {
+        var source = pipeline.PostgreSqlSource
+            ?? throw new InvalidOperationException("The PostgreSQL source configuration is missing.");
+        var columns = await _postgreSqlMetadataDiscoveryService.DiscoverColumnsAsync(
+                source.ConnectionProfile,
+                source.Database,
+                source.Schema,
+                source.Table,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        IReadOnlyList<SourceFieldDefinition> liveSchema;
+        try
+        {
+            liveSchema = _postgreSqlSchemaConverter.Convert(columns);
+        }
+        catch (PostgreSqlUnsupportedColumnTypeException exception)
+        {
+            throw new PostgreSqlSourceSchemaChangedException(exception);
+        }
+
+        var comparison = _schemaComparisonService.Compare(
+            pipeline.ExpectedSchema,
+            liveSchema,
+            pipeline.FieldMappings);
+        if (comparison.HasDifferences || comparison.HasUnresolvedMappings)
+        {
+            throw new PostgreSqlSourceSchemaChangedException();
+        }
+
+        return new PostgreSqlEtlSource(
+            _postgreSqlConnectionFactory,
+            _postgreSqlMetadataDiscoveryService,
+            _postgreSqlOrderingResolver,
+            source);
+    }
 
     private async Task<MongoDbEtlSource> CreateMongoDbSourceAsync(
         PipelineDefinition pipeline,

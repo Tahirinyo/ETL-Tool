@@ -2,12 +2,15 @@ using System.Runtime.CompilerServices;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
+using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Processing;
 using EtlTool.Application.Reporting;
 using EtlTool.Application.Sources;
+using EtlTool.Application.Transformations;
+using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
@@ -477,6 +480,92 @@ public sealed class EtlRunBackgroundJobExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_SourceFailurePersistsUnpublishedCountersAndCommittedWrites()
+    {
+        var pipeline = new PipelineDefinition
+        {
+            Id = Guid.NewGuid(),
+            SourceType = SourceType.Csv,
+            SourceOptions = new SourceOptions
+            {
+                CultureName = "en-US",
+                Delimiter = CsvDelimiter.Comma,
+                FirstRowIsHeader = true
+            },
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "Id" },
+                new SourceFieldDefinition { Name = "Kind" }
+            ],
+            FieldMappings =
+            [
+                new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true },
+                new FieldMapping { SourceField = "Kind", TargetField = "kind", IsIncluded = true }
+            ],
+            TransformationRules =
+            [
+                new TransformationRule
+                {
+                    Id = Guid.NewGuid(),
+                    Type = TransformationType.FilterRow,
+                    Order = 1,
+                    SourceField = "kind",
+                    Configuration = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["Operator"] = FilterOperator.Equals.ToString(),
+                        ["Value"] = "skip"
+                    }
+                }
+            ],
+            DestinationDatabase = "demo",
+            DestinationCollection = "rows",
+            UpsertKeyField = "id"
+        };
+        var harness = Harness(pipeline: pipeline);
+        harness.Loader.Result = new BatchLoadResult(3, 0);
+        harness.SourceFiles.Rows =
+        [
+            SourceRow(2, "A", "keep"),
+            SourceRow(3, "B", "keep"),
+            SourceRow(4, "C", "keep"),
+            SourceRow(5, null, "keep"),
+            SourceRow(6, "D", "skip"),
+            SourceRow(7, "A", "keep")
+        ];
+        harness.SourceFiles.TerminalFailure = new IOException("The source cursor failed.");
+        var orchestrator = new BatchOrchestrator(
+            new ReadyReadinessService(),
+            new PipelineRowProcessor(
+                new FieldMappingService(),
+                new TransformationEngine(new TransformationHandlerRegistry(
+                    [new ConditionalFilterTransformationHandler()])),
+                new ValidationEngine(new ValidationHandlerRegistry([]))),
+            new BatchExecutionOptions { BatchSize = 3 });
+        var executor = new EtlRunBackgroundJobExecutor(
+            harness.Runs,
+            orchestrator,
+            new DataLoaderResolver([harness.Loader]),
+            new FixedTimeProvider(),
+            harness.SourceFiles,
+            new CsvErrorReportWriter(),
+            harness.Output,
+            NullLogger<EtlRunBackgroundJobExecutor>.Instance);
+
+        await Assert.ThrowsAsync<BatchExecutionException>(() => executor.ExecuteAsync(
+            new BackgroundJob(harness.Run.Id),
+            CancellationToken.None));
+
+        Assert.Equal(EtlRunStatus.PartiallyCompleted, harness.Runs.TerminalStatus);
+        Assert.Equal((6L, 3L, 1L, 1L, 1L, 3L, 0L), Counters(harness.Run));
+        Assert.Equal(3, harness.Runs.TerminalProgress!.InsertedRows);
+        Assert.Equal(0, harness.Runs.TerminalProgress.UpdatedRows);
+        Assert.Equal("The ETL source file could not be read.", harness.Runs.SystemError);
+        Assert.Equal($"error-report-{harness.Run.Id:N}.csv", harness.Run.ErrorReportPath);
+        var csv = System.Text.Encoding.UTF8.GetString(harness.Output.LastStream!.ToArray());
+        Assert.Contains("Upsert key field 'id' is required.", csv);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ProgressPersistenceFailureRetainsAcknowledgedCountersForTerminalUpdate()
     {
         var harness = Harness();
@@ -811,6 +900,14 @@ public sealed class EtlRunBackgroundJobExecutorTests
     {
         var row = new DataRow { SourceRowNumber = 2 };
         row.Values.Add("id", "A");
+        return row;
+    }
+
+    private static DataRow SourceRow(long sourceRowNumber, string? id, string kind)
+    {
+        var row = new DataRow { SourceRowNumber = sourceRowNumber };
+        row.Values.Add("Id", id);
+        row.Values.Add("Kind", kind);
         return row;
     }
 
@@ -1313,6 +1410,10 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
         public Exception? OpenException { get; set; }
 
+        public IReadOnlyList<DataRow> Rows { get; set; } = [];
+
+        public Exception? TerminalFailure { get; set; }
+
         private MemoryStream? LastStream { get; set; }
 
         public Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
@@ -1324,7 +1425,10 @@ public sealed class EtlRunBackgroundJobExecutorTests
             }
 
             LastStream = new MemoryStream([1]);
-            return Task.FromResult<IEtlSource>(new MemoryEtlSource(LastStream));
+            return Task.FromResult<IEtlSource>(new MemoryEtlSource(
+                LastStream,
+                Rows,
+                TerminalFailure));
         }
 
         public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken)
@@ -1338,14 +1442,25 @@ public sealed class EtlRunBackgroundJobExecutorTests
             return Task.CompletedTask;
         }
 
-        private sealed class MemoryEtlSource(MemoryStream stream) : IEtlSource
+        private sealed class MemoryEtlSource(
+            MemoryStream stream,
+            IReadOnlyList<DataRow> rows,
+            Exception? terminalFailure) : IEtlSource
         {
             public async IAsyncEnumerable<DataRow> ReadAsync(
                 [EnumeratorCancellation] CancellationToken cancellationToken)
             {
-                await Task.CompletedTask;
-                cancellationToken.ThrowIfCancellationRequested();
-                yield break;
+                await Task.Yield();
+                foreach (var row in rows)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return row;
+                }
+
+                if (terminalFailure is not null)
+                {
+                    throw terminalFailure;
+                }
             }
 
             public ValueTask DisposeAsync() => stream.DisposeAsync();

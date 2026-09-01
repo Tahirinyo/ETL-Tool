@@ -377,7 +377,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
     private static string SafeError(Exception exception) => exception switch
     {
-        BatchExecutionException => "Destination batch loading failed.",
+        BatchExecutionException batchFailure => SafeError(batchFailure.ExecutionFailure),
         BatchLoadException => "Destination batch loading failed.",
         MongoTargetAccessException => "The MongoDB target is not accessible.",
         MongoSourceAccessException => "The configured MongoDB source could not be accessed.",

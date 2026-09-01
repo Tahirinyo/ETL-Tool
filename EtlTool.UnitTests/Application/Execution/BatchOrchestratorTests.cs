@@ -775,9 +775,53 @@ public sealed class BatchOrchestratorTests
         Assert.False(execution.IsCompleted);
         releaseCallback.SetResult(true);
 
-        var actual = await Assert.ThrowsAsync<IOException>(() => execution);
-        Assert.Same(failure, actual);
+        var actual = await Assert.ThrowsAsync<BatchExecutionException>(() => execution);
+        Assert.Same(failure, actual.InnerException);
+        Assert.Equal(1, actual.ConfirmedProgress.ProcessedRows);
+        Assert.Equal(0, actual.ConfirmedProgress.ValidRows);
+        Assert.Equal(1, actual.ConfirmedProgress.InvalidRows);
+        Assert.Equal(0, actual.ConfirmedProgress.InsertedRows);
+        Assert.Equal(0, actual.ConfirmedProgress.UpdatedRows);
         Assert.Equal(1, extractor.YieldedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_SourceFailureCarriesUnpublishedCurrentProgress()
+    {
+        var pipeline = ReadyPipeline("Id");
+        pipeline.FieldMappings = [Mapping("Id", "id")];
+        pipeline.UpsertKeyField = "id";
+        var sourceFailure = new IOException("The source cursor failed.");
+        var extractor = new SequenceExtractor(
+        [
+            Row(2, ("Id", "A")),
+            Row(3, ("Id", null))
+        ], sourceFailure);
+        var invalidRows = new List<RowProcessingResult>();
+        await using var source = new MemoryStream([1]);
+
+        var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
+            Orchestrator(extractor, batchSize: 10).ExecuteWithLoadResultAsync(
+                source,
+                pipeline,
+                (_, _) => Task.FromResult(BatchLoadResult.Empty),
+                (invalid, _) =>
+                {
+                    invalidRows.Add(invalid);
+                    return Task.CompletedTask;
+                },
+                IgnoreProgress,
+                CancellationToken.None));
+
+        Assert.Same(sourceFailure, failure.InnerException);
+        Assert.Equal(2, failure.ConfirmedProgress.ProcessedRows);
+        Assert.Equal(1, failure.ConfirmedProgress.ValidRows);
+        Assert.Equal(1, failure.ConfirmedProgress.InvalidRows);
+        Assert.Equal(0, failure.ConfirmedProgress.FilteredRows);
+        Assert.Equal(0, failure.ConfirmedProgress.DeduplicatedRows);
+        Assert.Equal(0, failure.ConfirmedProgress.InsertedRows);
+        Assert.Equal(0, failure.ConfirmedProgress.UpdatedRows);
+        Assert.Single(invalidRows);
     }
 
     [Fact]
@@ -1026,7 +1070,7 @@ public sealed class BatchOrchestratorTests
         var progressFailure = new ApplicationException("Progress update failed.");
         await using var failingSource = new MemoryStream([1]);
 
-        var actualFailure = await Assert.ThrowsAsync<ApplicationException>(() =>
+        var executionFailure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
             Orchestrator(failingExtractor, batchSize: 1).ExecuteAsync(
                 failingSource,
                 ReadyPipeline(),
@@ -1034,7 +1078,9 @@ public sealed class BatchOrchestratorTests
                 (_, _) => Task.FromException(progressFailure),
                 CancellationToken.None));
 
-        Assert.Same(progressFailure, actualFailure);
+        Assert.Same(progressFailure, executionFailure.ExecutionFailure);
+        Assert.Equal(1, executionFailure.ConfirmedProgress.ProcessedRows);
+        Assert.Equal(1, executionFailure.ConfirmedProgress.ValidRows);
         Assert.Equal(1, failingExtractor.YieldedRows);
     }
 
@@ -1121,7 +1167,7 @@ public sealed class BatchOrchestratorTests
         var extractionCallbackInvocations = 0;
         await using var firstSource = new MemoryStream([1]);
 
-        var actualExtractionFailure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+        var actualExtractionFailure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
             Orchestrator(failingExtractor, batchSize: 2).ExecuteAsync(
                 firstSource,
                 ReadyPipeline(),
@@ -1133,7 +1179,10 @@ public sealed class BatchOrchestratorTests
                 IgnoreProgress,
                 CancellationToken.None));
 
-        Assert.Same(extractionFailure, actualExtractionFailure);
+        Assert.Same(extractionFailure, actualExtractionFailure.ExecutionFailure);
+        Assert.Equal(1, actualExtractionFailure.ConfirmedProgress.ProcessedRows);
+        Assert.Equal(1, actualExtractionFailure.ConfirmedProgress.ValidRows);
+        Assert.Equal(0, actualExtractionFailure.ConfirmedProgress.InsertedRows);
         Assert.Equal(1, failingExtractor.YieldedRows);
         Assert.Equal(0, extractionCallbackInvocations);
 
@@ -1146,7 +1195,7 @@ public sealed class BatchOrchestratorTests
         var progressCallbackInvocations = 0;
         await using var secondSource = new MemoryStream([1]);
 
-        var actualCallbackFailure = await Assert.ThrowsAsync<ApplicationException>(() =>
+        var actualCallbackFailure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
             Orchestrator(callbackExtractor, batchSize: 2).ExecuteAsync(
                 secondSource,
                 ReadyPipeline(),
@@ -1162,7 +1211,10 @@ public sealed class BatchOrchestratorTests
                 },
                 CancellationToken.None));
 
-        Assert.Same(callbackFailure, actualCallbackFailure);
+        Assert.Same(callbackFailure, actualCallbackFailure.ExecutionFailure);
+        Assert.Equal(2, actualCallbackFailure.ConfirmedProgress.ProcessedRows);
+        Assert.Equal(2, actualCallbackFailure.ConfirmedProgress.ValidRows);
+        Assert.Equal(0, actualCallbackFailure.ConfirmedProgress.InsertedRows);
         Assert.Equal(2, callbackExtractor.YieldedRows);
         Assert.Equal(1, callbackInvocations);
         Assert.Equal(0, progressCallbackInvocations);
@@ -1180,7 +1232,7 @@ public sealed class BatchOrchestratorTests
         var callbackInvocations = 0;
         await using var source = new MemoryStream([1]);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
             Orchestrator(extractor).ExecuteAsync(
                 source,
                 ReadyPipeline(),
@@ -1192,6 +1244,8 @@ public sealed class BatchOrchestratorTests
                 IgnoreProgress,
                 CancellationToken.None));
 
+        Assert.IsType<InvalidOperationException>(failure.ExecutionFailure);
+        Assert.Equal(0, failure.ConfirmedProgress.ProcessedRows);
         Assert.Equal(0, callbackInvocations);
         Assert.Equal(1, extractor.YieldedRows);
     }

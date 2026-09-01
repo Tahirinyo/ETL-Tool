@@ -219,6 +219,23 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
                 updatedRows);
             throw new BatchExecutionCanceledException(progress, exception, cancellationToken);
         }
+        catch (BatchExecutionException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var progress = new BatchExecutionProgress(
+                processedRows,
+                validRows,
+                invalidRows,
+                filteredRows,
+                deduplicatedRows,
+                isCompleted: false,
+                insertedRows,
+                updatedRows);
+            throw new BatchExecutionException(progress, exception);
+        }
     }
 
     private static async Task<BatchLoadResult> LoadBatchAsync(

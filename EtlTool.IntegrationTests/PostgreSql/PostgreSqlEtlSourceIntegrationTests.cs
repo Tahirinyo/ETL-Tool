@@ -238,10 +238,10 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
                 SourceOptions = new SourceOptions { CultureName = "en-US" },
                 ExpectedSchema =
                 [
-                    new SourceFieldDefinition { Name = "Source Id" },
-                    new SourceFieldDefinition { Name = "Kind" },
-                    new SourceFieldDefinition { Name = "Logical Id" },
-                    new SourceFieldDefinition { Name = "Value" }
+                    new SourceFieldDefinition { Name = "Source Id", DataType = SourceFieldType.Integer },
+                    new SourceFieldDefinition { Name = "Kind", DataType = SourceFieldType.String },
+                    new SourceFieldDefinition { Name = "Logical Id", DataType = SourceFieldType.String },
+                    new SourceFieldDefinition { Name = "Value", DataType = SourceFieldType.String }
                 ],
                 FieldMappings =
                 [
@@ -277,6 +277,8 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
                 Id = Guid.NewGuid(),
                 SourceType = SourceType.PostgreSql,
                 SourceOptions = pipeline.SourceOptions,
+                ExpectedSchema = pipeline.ExpectedSchema,
+                FieldMappings = pipeline.FieldMappings,
                 PostgreSqlSource = new PostgreSqlSourceOptions
                 {
                     ConnectionProfile = "ReportingDb",
@@ -289,6 +291,7 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
                 new UnexpectedWizardSourceStore(),
                 factory,
                 new PostgreSqlMetadataDiscoveryService(factory),
+                new PostgreSqlSourceSchemaConverter(),
                 new PostgreSqlDeterministicOrderingResolver(),
                 new MongoMetadataDatabase(MongoOptions()),
                 MongoOptions(),
@@ -327,6 +330,65 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
         finally
         {
             await ExecuteAsync(setupConnection, "DROP SCHEMA IF EXISTS \"DB10 Preview\" CASCADE;");
+        }
+    }
+
+    [Fact]
+    public async Task PreviewSourceFactory_RejectsLiveSchemaDriftBeforeRowEnumeration()
+    {
+        const string schema = "DB23 Preview Drift";
+        const string table = "Customers";
+        var factory = CreateFactory();
+        await using var setupConnection = await factory.OpenAsync("ReportingDb", CancellationToken.None);
+        try
+        {
+            await ExecuteAsync(
+                setupConnection,
+                "CREATE SCHEMA \"DB23 Preview Drift\"; " +
+                "CREATE TABLE \"DB23 Preview Drift\".\"Customers\" (\"Id\" integer PRIMARY KEY);");
+            var pipeline = new PipelineDefinition
+            {
+                Id = Guid.NewGuid(),
+                SourceType = SourceType.PostgreSql,
+                SourceOptions = new SourceOptions { CultureName = "en-US" },
+                ExpectedSchema =
+                [
+                    new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }
+                ],
+                FieldMappings =
+                [
+                    new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true }
+                ],
+                PostgreSqlSource = new PostgreSqlSourceOptions
+                {
+                    ConnectionProfile = "ReportingDb",
+                    Database = GetDatabaseName(),
+                    Schema = schema,
+                    Table = table
+                }
+            };
+            await ExecuteAsync(
+                setupConnection,
+                "ALTER TABLE \"DB23 Preview Drift\".\"Customers\" ADD COLUMN \"Name\" text;");
+            var previewSourceFactory = new PreviewSourceFactory(
+                new UnexpectedWizardSourceStore(),
+                factory,
+                new PostgreSqlMetadataDiscoveryService(factory),
+                new PostgreSqlSourceSchemaConverter(),
+                new PostgreSqlDeterministicOrderingResolver(),
+                new MongoMetadataDatabase(MongoOptions()),
+                MongoOptions(),
+                new UnexpectedMongoSchemaInferenceService(),
+                new SourceSchemaComparisonService());
+
+            var exception = await Assert.ThrowsAsync<PostgreSqlSourceSchemaChangedException>(() =>
+                previewSourceFactory.AcquireAsync(pipeline, CancellationToken.None));
+
+            Assert.Equal(PostgreSqlSourceSchemaChangedException.SafeMessage, exception.Message);
+        }
+        finally
+        {
+            await ExecuteAsync(setupConnection, "DROP SCHEMA IF EXISTS \"DB23 Preview Drift\" CASCADE;");
         }
     }
 
