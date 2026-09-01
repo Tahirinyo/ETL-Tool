@@ -119,7 +119,7 @@ public sealed class RunAdmissionService : IRunAdmissionService
             ?? throw new InvalidOperationException("The ready run-source snapshot has no pipeline.");
         var source = snapshot.Source;
 
-        if (pipeline.SourceType == SourceType.PostgreSql)
+        if (pipeline.SourceType is SourceType.PostgreSql or SourceType.MongoDb)
         {
             var existingRuns = await _runRepository
                 .ListByPipelineIdAsync(pipeline.Id, CancellationToken.None)

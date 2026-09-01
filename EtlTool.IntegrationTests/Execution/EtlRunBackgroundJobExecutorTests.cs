@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Processing;
@@ -146,6 +147,26 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal((0L, 0L, 0L, 0L, 0L, 0L, 0L), Counters(harness.Run));
         Assert.Equal(0, harness.Run.TotalRows);
         Assert.Null(harness.Run.ErrorReportPath);
+        Assert.Equal(0, harness.Orchestrator.ExecutionCount);
+        Assert.Equal(0, harness.Loader.CallCount);
+        Assert.Equal(0, harness.Output.OpenCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MongoDbSchemaDriftFailsSafelyWithoutRowsLoadsOrErrorReport()
+    {
+        var harness = Harness();
+        harness.SourceFiles.OpenException = new MongoSourceSchemaChangedException();
+
+        var exception = await Assert.ThrowsAsync<MongoSourceSchemaChangedException>(() =>
+            harness.Executor.ExecuteAsync(
+                new BackgroundJob(harness.Run.Id),
+                CancellationToken.None));
+
+        Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.Equal(EtlRunStatus.Failed, harness.Run.Status);
+        Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, harness.Run.SystemError);
+        Assert.Equal((0L, 0L, 0L, 0L, 0L, 0L, 0L), Counters(harness.Run));
         Assert.Equal(0, harness.Orchestrator.ExecutionCount);
         Assert.Equal(0, harness.Loader.CallCount);
         Assert.Equal(0, harness.Output.OpenCount);

@@ -208,31 +208,56 @@ public sealed class RunAdmissionServiceTests
     }
 
     [Fact]
-    public async Task AdmitAsync_MongoDbExecutionUnavailableReadinessProblemPreventsSourceCapture()
+    public async Task AdmitAsync_MongoDbPersistsImmutableLogicalSourceWithoutFileReservationOrSecrets()
     {
         var pipeline = MongoDbPipeline();
         var store = new RecordingSourceStore(pipeline.Id);
         var repository = new RecordingRunRepository();
         var queue = new RecordingQueue();
-        PipelineReadinessProblem[] problems =
-        [
-            new("Source", "MongoDB source execution is not available.")
-        ];
-        var service = Service(
-            pipeline,
-            store,
-            repository,
-            queue,
-            new PipelineReadinessResult(problems));
+        var service = Service(pipeline, store, repository, queue);
 
         var result = await service.AdmitAsync(pipeline.Id, CancellationToken.None);
 
-        Assert.Equal(RunAdmissionStatus.PipelineNotReady, result.Status);
-        Assert.Equal(problems, result.ReadinessProblems);
-        Assert.Empty(repository.Runs);
-        Assert.Empty(queue.Jobs);
+        Assert.Equal(RunAdmissionStatus.Admitted, result.Status);
+        var run = Assert.Single(repository.Runs);
+        Assert.Equal(string.Empty, run.OriginalFileName);
+        Assert.Equal(string.Empty, run.StoredFilePath);
         Assert.Equal(0, store.ReservationCount);
         Assert.True(store.HasActiveSource);
+        Assert.Equal(run.Id, Assert.Single(queue.Jobs).RunId);
+        var source = Assert.IsType<MongoDbSourceOptions>(run.ExecutionConfiguration!.MongoDbSource);
+        Assert.Equal("reporting", source.Database);
+        Assert.Equal("customers", source.Collection);
+        Assert.DoesNotContain(
+            run.ExecutionConfiguration.GetType().GetProperties(),
+            property => property.Name.Contains("Password", StringComparison.OrdinalIgnoreCase)
+                || property.Name.Contains("ConnectionString", StringComparison.OrdinalIgnoreCase));
+
+        pipeline.MongoDbSource!.Collection = "edited_after_admission";
+        Assert.Equal("customers", source.Collection);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_MongoDbRejectsSecondActiveRunWithoutFileReservation()
+    {
+        var pipeline = MongoDbPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        repository.Runs.Add(new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            PipelineId = pipeline.Id,
+            Status = EtlRunStatus.Queued
+        });
+        var queue = new RecordingQueue();
+
+        var result = await Service(pipeline, store, repository, queue)
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.RunAlreadyActive, result.Status);
+        Assert.Single(repository.Runs);
+        Assert.Empty(queue.Jobs);
+        Assert.Equal(0, store.ReservationCount);
     }
 
     [Fact]

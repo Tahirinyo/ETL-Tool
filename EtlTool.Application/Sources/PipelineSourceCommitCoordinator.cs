@@ -286,7 +286,7 @@ public sealed class PipelineSourceCommitCoordinator
                     return PipelineRunSourceSnapshot.SourceUnavailable(pipeline, readiness);
                 }
             }
-            else if (pipeline.SourceType != SourceType.PostgreSql)
+            else if (pipeline.SourceType is not SourceType.PostgreSql and not SourceType.MongoDb)
             {
                 throw new InvalidOperationException(
                     $"The pipeline source type '{pipeline.SourceType}' is not supported for execution.");
@@ -597,7 +597,7 @@ public sealed class PipelineRunSourceSnapshot : IAsyncDisposable
             return;
         }
 
-        if (Pipeline?.SourceType != SourceType.PostgreSql)
+        if (Pipeline?.SourceType is not SourceType.PostgreSql and not SourceType.MongoDb)
         {
             throw new InvalidOperationException("The run source reservation is no longer available.");
         }

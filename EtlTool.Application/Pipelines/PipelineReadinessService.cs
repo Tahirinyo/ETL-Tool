@@ -58,7 +58,21 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         => EvaluateCore(pipeline);
 
     public PipelineReadinessResult EvaluateForPreview(PipelineDefinition pipeline)
-        => Evaluate(pipeline);
+    {
+        var readiness = Evaluate(pipeline);
+        if (pipeline.SourceType != SourceType.MongoDb)
+        {
+            return readiness;
+        }
+
+        return new PipelineReadinessResult(
+        [
+            .. readiness.Problems,
+            new PipelineReadinessProblem(
+                SourceComponent,
+                "MongoDB source preview is not available.")
+        ]);
+    }
 
     private PipelineReadinessResult EvaluateCore(PipelineDefinition pipeline)
     {
@@ -146,7 +160,6 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         if (isMongoDb)
         {
             EvaluateMongoDbSource(pipeline.MongoDbSource, problems);
-            AddProblem(problems, SourceComponent, "MongoDB source execution is not available.");
         }
 
         var hasUsableSchema = true;

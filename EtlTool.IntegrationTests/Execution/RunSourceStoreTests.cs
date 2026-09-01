@@ -1,5 +1,6 @@
 using System.Data.Common;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -7,6 +8,7 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.Uploads;
 
@@ -187,6 +189,71 @@ public sealed class RunSourceStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenAsync_MongoDbUsesCapturedIdentityAndExpectedSchemaAfterPipelineChanges()
+    {
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.MongoDb,
+            ExpectedSchema = [Field("Id", SourceFieldType.Integer)],
+            FieldMappings = [Mapping("Id", "id")],
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "reporting",
+                Collection = "customers"
+            }
+        };
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(pipeline)
+        };
+        pipeline.MongoDbSource.Collection = "edited_after_admission";
+        pipeline.ExpectedSchema[0].DataType = SourceFieldType.String;
+        var inference = new RecordingMongoSchemaInferenceService
+        {
+            Schema = [Field("Id", SourceFieldType.Integer)]
+        };
+
+        await using var source = await CreateStore(mongoInferenceService: inference)
+            .OpenAsync(run, CancellationToken.None);
+
+        Assert.IsType<MongoDbEtlSource>(source);
+        Assert.Equal(("reporting", "customers"), inference.LastRequest);
+        Assert.Equal(SourceFieldType.Integer, run.ExecutionConfiguration.ExpectedSchema[0].DataType);
+    }
+
+    [Fact]
+    public async Task OpenAsync_MongoDbSchemaDifferenceRequiresRemappingBeforeEnumeration()
+    {
+        var run = MongoDbRun([Field("Id", SourceFieldType.Integer)]);
+        var inference = new RecordingMongoSchemaInferenceService
+        {
+            Schema = [Field("Id", SourceFieldType.String)]
+        };
+
+        var exception = await Assert.ThrowsAsync<MongoSourceSchemaChangedException>(() =>
+            CreateStore(mongoInferenceService: inference)
+                .OpenAsync(run, CancellationToken.None));
+
+        Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.Equal(("reporting", "customers"), inference.LastRequest);
+    }
+
+    [Fact]
+    public async Task ReleaseAsync_MongoDbRunDoesNotDeletePhysicalPath()
+    {
+        Directory.CreateDirectory(_rootPath);
+        var path = Path.Combine(_rootPath, $"{Guid.NewGuid():N}.sentinel");
+        await File.WriteAllTextAsync(path, "logical source");
+        var run = MongoDbRun([Field("Id", SourceFieldType.Integer)]);
+        run.StoredFilePath = path;
+
+        await CreateStore().ReleaseAsync(run, CancellationToken.None);
+
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
     public async Task ReleaseAsync_LegacyRunWithoutSnapshotRetainsFileCleanupBehavior()
     {
         Directory.CreateDirectory(_rootPath);
@@ -214,21 +281,40 @@ public sealed class RunSourceStoreTests : IDisposable
 
     private RunSourceStore CreateStore(
         IPostgreSqlConnectionFactory? connectionFactory = null,
-        IPostgreSqlMetadataDiscoveryService? metadataDiscoveryService = null)
+        IPostgreSqlMetadataDiscoveryService? metadataDiscoveryService = null,
+        IMongoSourceSchemaInferenceService? mongoInferenceService = null)
     {
         var uploadOptions = new UploadStorageOptions { RootPath = _rootPath };
         var fileStore = new LocalRunSourceFileStore(
             uploadOptions,
             new LocalUploadStorage(uploadOptions),
             new FileExtractorResolver([new CsvFileExtractor(), new XlsxFileExtractor()]));
+        var mongoOptions = MongoOptions();
+        var mongoMetadata = new MongoMetadataDatabase(mongoOptions);
+        var mongoTargetAccess = new MongoTargetAccessService(mongoMetadata, mongoOptions);
+        var mongoDiscovery = new MongoSourceMetadataDiscoveryService(
+            mongoMetadata,
+            mongoTargetAccess);
         return new RunSourceStore(
             fileStore,
             connectionFactory ?? new RecordingConnectionFactory(),
             metadataDiscoveryService ?? new RecordingMetadataDiscoveryService(),
             new PostgreSqlSourceSchemaConverter(),
             new SourceSchemaComparisonService(),
-            new PostgreSqlDeterministicOrderingResolver());
+            new PostgreSqlDeterministicOrderingResolver(),
+            mongoMetadata,
+            mongoInferenceService ?? new MongoSourceSchemaInferenceService(
+                mongoMetadata,
+                mongoDiscovery,
+                mongoOptions),
+            mongoOptions);
     }
+
+    private static MongoDbOptions MongoOptions() => new()
+    {
+        ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+        MetadataDatabaseName = "etl_tool_run_source_store_tests"
+    };
 
     private static EtlRun PostgreSqlRun(IReadOnlyList<SourceFieldDefinition> expectedSchema) => new()
     {
@@ -239,6 +325,22 @@ public sealed class RunSourceStoreTests : IDisposable
             ExpectedSchema = expectedSchema.ToList(),
             FieldMappings = expectedSchema.Select(field => Mapping(field.Name, field.Name)).ToList(),
             PostgreSqlSource = PostgreSqlOptions()
+        }
+    };
+
+    private static EtlRun MongoDbRun(IReadOnlyList<SourceFieldDefinition> expectedSchema) => new()
+    {
+        Id = Guid.NewGuid(),
+        ExecutionConfiguration = new EtlRunExecutionConfiguration
+        {
+            SourceType = SourceType.MongoDb,
+            ExpectedSchema = expectedSchema.ToList(),
+            FieldMappings = expectedSchema.Select(field => Mapping(field.Name, field.Name)).ToList(),
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "reporting",
+                Collection = "customers"
+            }
         }
     };
 
@@ -339,6 +441,23 @@ public sealed class RunSourceStoreTests : IDisposable
         public TestConnectionException()
             : base("The test connection factory was reached.")
         {
+        }
+    }
+
+    private sealed class RecordingMongoSchemaInferenceService : IMongoSourceSchemaInferenceService
+    {
+        public (string Database, string Collection)? LastRequest { get; private set; }
+
+        public IReadOnlyList<SourceFieldDefinition> Schema { get; init; } =
+            [Field("Id", SourceFieldType.Integer)];
+
+        public Task<IReadOnlyList<SourceFieldDefinition>> InferAsync(
+            MongoDbSourceOptions source,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastRequest = (source.Database, source.Collection);
+            return Task.FromResult(Schema);
         }
     }
 }

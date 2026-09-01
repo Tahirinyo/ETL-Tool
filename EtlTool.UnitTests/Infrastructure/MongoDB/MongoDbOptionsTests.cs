@@ -12,6 +12,7 @@ public sealed class MongoDbOptionsTests
         options.Validate();
 
         Assert.Equal(100, options.SourceSchemaSampleDocumentLimit);
+        Assert.Equal(1_000, options.SourceExecutionFetchSize);
     }
 
     [Theory]
@@ -38,6 +39,33 @@ public sealed class MongoDbOptionsTests
         var exception = Assert.Throws<InvalidOperationException>(options.Validate);
 
         Assert.Contains(nameof(MongoDbOptions.SourceSchemaSampleDocumentLimit), exception.Message);
+        Assert.DoesNotContain(options.ConnectionString, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(1000)]
+    [InlineData(10000)]
+    public void Validate_AcceptsSupportedSourceExecutionFetchSize(int fetchSize)
+    {
+        var options = ValidOptions();
+        options.SourceExecutionFetchSize = fetchSize;
+
+        options.Validate();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(10001)]
+    public void Validate_RejectsUnsupportedSourceExecutionFetchSize(int fetchSize)
+    {
+        var options = ValidOptions();
+        options.SourceExecutionFetchSize = fetchSize;
+
+        var exception = Assert.Throws<InvalidOperationException>(options.Validate);
+
+        Assert.Contains(nameof(MongoDbOptions.SourceExecutionFetchSize), exception.Message);
         Assert.DoesNotContain(options.ConnectionString, exception.Message, StringComparison.Ordinal);
     }
 

@@ -14,6 +14,8 @@ public sealed class MongoDbOptions
 
     public int SourceSchemaSampleDocumentLimit { get; set; } = 100;
 
+    public int SourceExecutionFetchSize { get; set; } = 1_000;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ConnectionString))
@@ -45,6 +47,12 @@ public sealed class MongoDbOptions
         {
             throw new InvalidOperationException(
                 $"Configuration value '{SectionName}:SourceSchemaSampleDocumentLimit' must be between 1 and 1000.");
+        }
+
+        if (SourceExecutionFetchSize is < 1 or > 10_000)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value '{SectionName}:SourceExecutionFetchSize' must be between 1 and 10000.");
         }
     }
 }

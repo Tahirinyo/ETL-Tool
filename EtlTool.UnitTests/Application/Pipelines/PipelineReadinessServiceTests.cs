@@ -12,7 +12,7 @@ namespace EtlTool.UnitTests.Application.Pipelines;
 public sealed class PipelineReadinessServiceTests
 {
     [Fact]
-    public async Task EvaluateAsync_ReportsMongoDbExecutionUnavailableForConfiguredSourceWithSchema()
+    public async Task EvaluateAsync_ConfiguredMongoDbSourceIsReadyForExecution()
     {
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.MongoDb;
@@ -24,18 +24,12 @@ public sealed class PipelineReadinessServiceTests
 
         var result = await EvaluateAsync(pipeline);
 
-        Assert.False(result!.IsReady);
-        Assert.Contains(
-            new PipelineReadinessProblem("Source", "MongoDB source execution is not available."),
-            result.Problems);
-        Assert.DoesNotContain(result.Problems, problem =>
-            problem.Message.Contains("configuration is missing", StringComparison.Ordinal)
-            || problem.Message.Contains("database is required", StringComparison.Ordinal)
-            || problem.Message.Contains("collection is required", StringComparison.Ordinal));
+        Assert.True(result!.IsReady);
+        Assert.Empty(result.Problems);
     }
 
     [Fact]
-    public void EvaluateForPreview_ReportsMongoDbExecutionUnavailableAndRetainsRuleValidation()
+    public void EvaluateForPreview_ReportsMongoDbPreviewUnavailableAndRetainsRuleValidation()
     {
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.MongoDb;
@@ -57,7 +51,7 @@ public sealed class PipelineReadinessServiceTests
 
         Assert.False(result.IsReady);
         Assert.Contains(
-            new PipelineReadinessProblem("Source", "MongoDB source execution is not available."),
+            new PipelineReadinessProblem("Source", "MongoDB source preview is not available."),
             result.Problems);
         Assert.Contains(result.Problems, problem =>
             problem.Component == "Transformation"

@@ -19,21 +19,21 @@ EtlTool.IntegrationTests  -> Infrastructure, Web
 | --- | --- |
 | `EtlTool.Domain` | Pipeline, rule, run, source-schema, mapping, and enum contracts. It has no project references. |
 | `EtlTool.Application` | Use-case and ETL rules: mapping, transformation and validation engines, preview, batch orchestration, readiness checks, and contracts for persistence, extraction, loading, reporting, uploads, and queueing. It references Domain only. |
-| `EtlTool.Infrastructure` | CSV/XLSX extractors, MongoDB repositories and loader, local upload/run-source/error-report storage, and the in-process queue implementation. It references Application. |
+| `EtlTool.Infrastructure` | CSV/XLSX extractors, PostgreSQL and MongoDB streaming sources, MongoDB repositories and loader, local upload/run-source/error-report storage, and the in-process queue implementation. It references Application. |
 | `EtlTool.Web` | MVC controllers, Razor views/view models, service composition in `Program.cs`, and hosted workers. It references Application and Infrastructure. Controllers coordinate HTTP only; they do not perform row processing or MongoDB loading. |
 | `EtlTool.UnitTests` | Isolated coverage of domain/application behavior and MVC coordination/view models. |
 | `EtlTool.IntegrationTests` | Extractor, MongoDB, reporting/storage, worker/queue, and selected MVC integration coverage. |
 
 `PipelineDefinition` is the persisted definition of a pipeline: source options and expected schema, field mappings, transformation and validation rules, destination database/collection, and the output-field upsert key. `EtlRun` persists a run snapshot, state, counters, timestamps, safe source metadata, system error summary, and an optional error-report reference.
 
-At composition time, `Program.cs` registers the concrete CSV and XLSX extractors, MongoDB repositories and `MongoBulkUpsertLoader`, local report storage, handler registries, ETL services, and hosted background services. The principal runtime boundaries are `IFileExtractorResolver`, `IPipelineDefinitionRepository`, `IEtlRunRepository`, `IDataLoader`, `IErrorReportWriter`, `IErrorReportStore`, and `IBackgroundJobQueue`.
+At composition time, `Program.cs` registers the concrete CSV and XLSX extractors, logical-source metadata services, MongoDB repositories and `MongoBulkUpsertLoader`, local report storage, handler registries, ETL services, and hosted background services. The principal runtime boundaries include `IEtlSource`, `IRunSourceStore`, `IFileExtractorResolver`, `IPipelineDefinitionRepository`, `IEtlRunRepository`, `IDataLoader`, `IErrorReportWriter`, `IErrorReportStore`, and `IBackgroundJobQueue`.
 
 ## ETL processing
 
 Both preview and execution use `PipelineRowProcessor` to create an execution-scoped `PipelineRowProcessingSession`. A session prepares field mappings once, creates ordered transformation execution state once, and processes rows sequentially. Its processing order is fixed:
 
 ```text
-IFileExtractor.ReadAsync
+IEtlSource.ReadAsync
   -> FieldMappingService.Apply
   -> TransformationExecution (ascending TransformationRule.Order)
   -> ValidationEngine.Validate
@@ -43,7 +43,11 @@ IFileExtractor.ReadAsync
 
 ### Extract
 
-`CsvFileExtractor` and `XlsxFileExtractor` implement `IFileExtractor` and yield `DataRow` values through `IAsyncEnumerable<DataRow>`. `FileExtractorResolver` chooses one from `SourceType`. The extractor contract makes the caller responsible for the input stream and requires implementations to observe cancellation. Current supported source types are only `Csv` and `Xlsx`; `.xls` is not supported.
+All admitted runs are opened as an `IEtlSource` by `RunSourceStore` and yield `DataRow` values through `IAsyncEnumerable<DataRow>`. File-backed runs use `CsvFileExtractor` or `XlsxFileExtractor`; their extractor contract makes the caller responsible for the input stream. Legacy `.xls` remains unsupported.
+
+PostgreSQL and MongoDB are logical sources: admission captures an immutable database/schema/table or database/collection identity and expected-schema snapshot rather than a local source file. Before returning a logical source, `RunSourceStore` compares the live schema with the admitted snapshot and requires remapping if it changed.
+
+`MongoDbEtlSource` uses a deferred MongoDB cursor with an empty filter, deterministic ascending `_id` order, and configurable `MongoDb:SourceExecutionFetchSize` (default `1000`, valid range `1`-`10000`). It shapes each top-level document in expected-schema order, treating missing fields and BSON null as null. Supported conversions are string and ObjectId to string, Int32/Int64 to integer, exact numeric values to decimal, Boolean to Boolean, and BSON DateTime to UTC `DateTime`. Extra fields, incompatible or unsupported BSON types, and numeric values that cannot be represented exactly are run-level schema-change failures. Cancellation, early enumeration termination, and failures dispose the cursor; the shared MongoDB client is not disposed by the source.
 
 ### Map, transform, and validate
 
@@ -61,7 +65,7 @@ Transformation results may short-circuit as `Filtered` or `Duplicate`; neither i
 
 Invalid rows are passed to the error-report callback; filtered and duplicate rows are excluded. `BatchExecutionProgress` and the final `BatchExecutionResult` track processed, valid, invalid, filtered, deduplicated, inserted, and updated rows. A readiness failure, target-access failure, unreadable source, cancellation, report failure, or batch-load failure is not treated as a successful row outcome.
 
-`PipelineReadinessService` gates preview and execution. It checks supported/configured source options and schema, mappings, rule references/configuration, destination safety, and that the upsert key is an included mapped output field. Schema inspection/comparison occurs before a source is committed for preview or run admission, so an incompatible source must be inspected and remapped before either operation can proceed.
+`PipelineReadinessService` gates preview and execution. It checks supported/configured source options and schema, mappings, rule references/configuration, destination safety, and that the upsert key is an included mapped output field. MongoDB sources can be admitted for full execution; Preview remains explicitly unavailable for MongoDB until its separate UI/Preview integration task. Schema inspection/comparison occurs before a source is committed for preview or run admission, and logical sources are checked again against the admitted snapshot when execution opens them.
 
 ## Preview and full execution
 
@@ -73,7 +77,7 @@ Full execution processes the complete admitted source incrementally, checks targ
 
 ## Background runs and run history
 
-The execute action calls `RunAdmissionService`; it does not run ETL in the HTTP request. Admission captures a ready pipeline/source snapshot, creates a `Queued` `EtlRun` containing `EtlRunExecutionConfiguration`, persists it through `IEtlRunRepository`, and enqueues `BackgroundJob(runId)`. The bounded in-process queue uses `BackgroundJobQueue:Capacity` (checked-in default `100`); admission waits only up to `RunAdmission:QueueAdmissionTimeoutMilliseconds` (default `5000`). If queue admission fails, the persisted run is marked `Interrupted`.
+The execute action calls `RunAdmissionService`; it does not run ETL in the HTTP request. Admission captures a ready pipeline/source snapshot, creates a `Queued` `EtlRun` containing `EtlRunExecutionConfiguration`, persists it through `IEtlRunRepository`, and enqueues `BackgroundJob(runId)`. CSV/XLSX admission transfers a reserved run-owned file, while PostgreSQL and MongoDB admission records only immutable logical-source metadata and creates no source path. The bounded in-process queue uses `BackgroundJobQueue:Capacity` (checked-in default `100`); admission waits only up to `RunAdmission:QueueAdmissionTimeoutMilliseconds` (default `5000`). If queue admission fails, the persisted run is marked `Interrupted`.
 
 `BackgroundJobWorker` is a hosted service with a single queue reader. It creates a scoped `IBackgroundJobExecutor` for each job; the registered executor is `EtlRunBackgroundJobExecutor`. The executor transitions an owned queued run to `Running`, opens the run-owned source, builds an error-report session, invokes `BatchOrchestrator`, persists monotonic progress through `MongoEtlRunRepository`, finalizes the report when applicable, and marks the run terminal. `RunsController` exposes a polling-friendly `GET /Runs/{runId}/Status` endpoint and run history/detail pages.
 
@@ -97,7 +101,7 @@ Only `Invalid` `RowProcessingResult` values enter `InvalidRowReportSession`; fil
 
 `LocalErrorReportStore` writes to a generated partial file under `ErrorReportStorage:RootPath` (checked-in default `App_Data/error-reports`), then publishes it as the run-owned leaf filename `error-report-{runId}.csv`. The report reference persisted on `EtlRun` is verified against the requesting run before `RunsController` opens it for download. A missing, malformed, non-owned, or unavailable report returns not found; no user-supplied filesystem path is used.
 
-No report is published when no invalid rows occur. Writer/cancellation failures abort the partial output. If terminal-run persistence fails after a report was published, the executor attempts to remove the report. After an executor-owned run has started, its source stream is disposed and its run source is deleted on both successful and failed execution; a source-cleanup failure is logged. Published reports remain available through run history until application-data retention/cleanup outside this runtime path removes them.
+No report is published when no invalid rows occur. Writer/cancellation failures abort the partial output. If terminal-run persistence fails after a report was published, the executor attempts to remove the report. After an executor-owned run has started, its `IEtlSource` is disposed on successful and failed execution. File-backed run sources are then deleted; logical PostgreSQL and MongoDB releases are no-ops because they own no run-local file. A source-cleanup failure is logged. Published reports remain available through run history until application-data retention/cleanup outside this runtime path removes them.
 
 ## Developer extension guide
 
@@ -105,9 +109,9 @@ These are internal code extension paths, not claims that the product currently s
 
 ### Add an extractor
 
-The extractor contract is `IFileExtractor` in Application. An implementation belongs in `EtlTool.Infrastructure/Extraction`, provides its `SourceType`, implements deferred `ReadAsync` and `ReadHeadersAsync`, leaves the caller-owned input stream open, and observes cancellation. Register it as `IFileExtractor` in `EtlTool.Web/Program.cs`; `FileExtractorResolver` rejects duplicate registrations.
+The file-extractor contract is `IFileExtractor` in Application. An implementation belongs in `EtlTool.Infrastructure/Extraction`, provides its `SourceType`, implements deferred `ReadAsync` and `ReadHeadersAsync`, leaves the caller-owned input stream open, and observes cancellation. Register it as `IFileExtractor` in `EtlTool.Web/Program.cs`; `FileExtractorResolver` rejects duplicate registrations.
 
-The existing resolver and `SourceType` enum explicitly accept only `Csv` and `Xlsx`. Adding a genuinely new source type would consequently require coordinated changes to the enum, resolver constraints, upload/source inspection and validation, readiness checks, MVC configuration/binding, and test coverage. It is not an add-a-class-only plug-in mechanism. Follow the existing `CsvFileExtractorTests` and `XlsxFileExtractorTests` patterns for streaming, headers, row numbering, cancellation, and caller stream ownership.
+The file resolver accepts `Csv` and `Xlsx`; logical PostgreSQL and MongoDB sources are opened separately through `RunSourceStore`. Adding a genuinely new source type consequently requires coordinated changes to source options and snapshots, inspection and validation, readiness, admission and run-source opening, MVC configuration/binding, and test coverage. It is not an add-a-class-only plug-in mechanism. Follow the existing extractor/source tests for streaming, ordering, row numbering, cancellation, resource ownership, and schema-drift behavior.
 
 ### Add a transformation
 

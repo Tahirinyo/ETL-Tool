@@ -1,10 +1,12 @@
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
+using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
 
 namespace EtlTool.Infrastructure.Execution;
@@ -20,6 +22,9 @@ public sealed class RunSourceStore : IRunSourceStore
     private readonly PostgreSqlSourceSchemaConverter _postgreSqlSchemaConverter;
     private readonly SourceSchemaComparisonService _schemaComparisonService;
     private readonly PostgreSqlDeterministicOrderingResolver _postgreSqlOrderingResolver;
+    private readonly MongoMetadataDatabase _mongoMetadataDatabase;
+    private readonly IMongoSourceSchemaInferenceService _mongoSchemaInferenceService;
+    private readonly MongoDbOptions _mongoDbOptions;
 
     public RunSourceStore(
         LocalRunSourceFileStore fileSourceStore,
@@ -27,7 +32,10 @@ public sealed class RunSourceStore : IRunSourceStore
         IPostgreSqlMetadataDiscoveryService postgreSqlMetadataDiscoveryService,
         PostgreSqlSourceSchemaConverter postgreSqlSchemaConverter,
         SourceSchemaComparisonService schemaComparisonService,
-        PostgreSqlDeterministicOrderingResolver postgreSqlOrderingResolver)
+        PostgreSqlDeterministicOrderingResolver postgreSqlOrderingResolver,
+        MongoMetadataDatabase mongoMetadataDatabase,
+        IMongoSourceSchemaInferenceService mongoSchemaInferenceService,
+        MongoDbOptions mongoDbOptions)
     {
         ArgumentNullException.ThrowIfNull(fileSourceStore);
         ArgumentNullException.ThrowIfNull(postgreSqlConnectionFactory);
@@ -35,6 +43,9 @@ public sealed class RunSourceStore : IRunSourceStore
         ArgumentNullException.ThrowIfNull(postgreSqlSchemaConverter);
         ArgumentNullException.ThrowIfNull(schemaComparisonService);
         ArgumentNullException.ThrowIfNull(postgreSqlOrderingResolver);
+        ArgumentNullException.ThrowIfNull(mongoMetadataDatabase);
+        ArgumentNullException.ThrowIfNull(mongoSchemaInferenceService);
+        ArgumentNullException.ThrowIfNull(mongoDbOptions);
 
         _fileSourceStore = fileSourceStore;
         _postgreSqlConnectionFactory = postgreSqlConnectionFactory;
@@ -42,6 +53,9 @@ public sealed class RunSourceStore : IRunSourceStore
         _postgreSqlSchemaConverter = postgreSqlSchemaConverter;
         _schemaComparisonService = schemaComparisonService;
         _postgreSqlOrderingResolver = postgreSqlOrderingResolver;
+        _mongoMetadataDatabase = mongoMetadataDatabase;
+        _mongoSchemaInferenceService = mongoSchemaInferenceService;
+        _mongoDbOptions = mongoDbOptions;
     }
 
     public async Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
@@ -58,9 +72,47 @@ public sealed class RunSourceStore : IRunSourceStore
                 await _fileSourceStore.OpenAsync(run, cancellationToken).ConfigureAwait(false),
             SourceType.PostgreSql =>
                 await OpenPostgreSqlAsync(configuration, cancellationToken).ConfigureAwait(false),
+            SourceType.MongoDb =>
+                await OpenMongoDbAsync(configuration, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException(
                 $"The admitted source type '{configuration.SourceType}' is not supported for execution.")
         };
+    }
+
+    private async Task<IEtlSource> OpenMongoDbAsync(
+        EtlRunExecutionConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var sourceOptions = configuration.MongoDbSource
+            ?? throw new InvalidOperationException(
+                "The admitted MongoDB source configuration is unavailable.");
+
+        IReadOnlyList<SourceFieldDefinition> liveSchema;
+        try
+        {
+            liveSchema = await _mongoSchemaInferenceService
+                .InferAsync(sourceOptions, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (MongoSourceSchemaInferenceException exception)
+        {
+            throw new MongoSourceSchemaChangedException(exception);
+        }
+
+        var comparison = _schemaComparisonService.Compare(
+            configuration.ExpectedSchema,
+            liveSchema,
+            configuration.FieldMappings);
+        if (comparison.HasDifferences || comparison.HasUnresolvedMappings)
+        {
+            throw new MongoSourceSchemaChangedException();
+        }
+
+        return new MongoDbEtlSource(
+            _mongoMetadataDatabase,
+            _mongoDbOptions,
+            sourceOptions,
+            configuration.ExpectedSchema);
     }
 
     private async Task<IEtlSource> OpenPostgreSqlAsync(
@@ -121,7 +173,7 @@ public sealed class RunSourceStore : IRunSourceStore
         {
             SourceType.Csv or SourceType.Xlsx =>
                 _fileSourceStore.ReleaseAsync(run, cancellationToken),
-            SourceType.PostgreSql => Task.CompletedTask,
+            SourceType.PostgreSql or SourceType.MongoDb => Task.CompletedTask,
             _ => throw new InvalidOperationException(
                 $"The admitted source type '{configuration.SourceType}' is not supported for execution.")
         };

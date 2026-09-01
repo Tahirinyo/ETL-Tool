@@ -831,13 +831,26 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
             uploadOptions,
             new LocalUploadStorage(uploadOptions),
             new FileExtractorResolver([new CsvFileExtractor(), new XlsxFileExtractor()]));
+        var mongoOptions = new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_postgresql_execution_tests"
+        };
+        var mongoMetadata = new MongoMetadataDatabase(mongoOptions);
+        var mongoTargetAccess = new MongoTargetAccessService(mongoMetadata, mongoOptions);
         return new RunSourceStore(
             fileStore,
             postgreSqlFactory,
             new PostgreSqlMetadataDiscoveryService(postgreSqlFactory),
             new PostgreSqlSourceSchemaConverter(),
             new SourceSchemaComparisonService(),
-            new PostgreSqlDeterministicOrderingResolver());
+            new PostgreSqlDeterministicOrderingResolver(),
+            mongoMetadata,
+            new MongoSourceSchemaInferenceService(
+                mongoMetadata,
+                new MongoSourceMetadataDiscoveryService(mongoMetadata, mongoTargetAccess),
+                mongoOptions),
+            mongoOptions);
     }
 
     private static LocalErrorReportStore CreateErrorReportStore(string temporaryRoot) => new(
