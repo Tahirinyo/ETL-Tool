@@ -78,15 +78,15 @@ public sealed class PostgreSqlConnectionFactory :
             await connection.DisposeAsync().ConfigureAwait(false);
             throw;
         }
-        catch (NpgsqlException)
+        catch (NpgsqlException exception)
         {
             await connection.DisposeAsync().ConfigureAwait(false);
-            throw new PostgreSqlConnectionAccessException();
+            throw new PostgreSqlConnectionAccessException(exception.IsTransient);
         }
         catch (TimeoutException)
         {
             await connection.DisposeAsync().ConfigureAwait(false);
-            throw new PostgreSqlConnectionAccessException();
+            throw new PostgreSqlConnectionAccessException(isTransient: true);
         }
     }
 }

@@ -473,7 +473,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal((8L, 3L, 2L, 1L, 2L, 1L, 0L), Counters(harness.Run));
         Assert.Equal(1, harness.Runs.TerminalProgress!.InsertedRows);
         Assert.Equal(0, harness.Runs.ProgressUpdates);
-        Assert.Equal("MongoDB batch loading failed.", harness.Runs.SystemError);
+        Assert.Equal("Destination batch loading failed.", harness.Runs.SystemError);
     }
 
     [Fact]

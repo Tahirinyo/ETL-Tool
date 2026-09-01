@@ -6,11 +6,27 @@ public sealed class PostgreSqlConnectionOptions
 {
     public const string SectionName = "PostgreSql";
 
+    public int BatchWriteMaximumAttempts { get; set; } = 2;
+
+    public int BatchWriteRetryDelayMilliseconds { get; set; } = 200;
+
     public Dictionary<string, PostgreSqlConnectionProfileOptions> Profiles { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
     public void Validate()
     {
+        if (BatchWriteMaximumAttempts is < 1 or > 10)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value '{SectionName}:BatchWriteMaximumAttempts' must be between 1 and 10.");
+        }
+
+        if (BatchWriteRetryDelayMilliseconds is < 0 or > 60_000)
+        {
+            throw new InvalidOperationException(
+                $"Configuration value '{SectionName}:BatchWriteRetryDelayMilliseconds' must be between 0 and 60000.");
+        }
+
         if (Profiles is null)
         {
             throw new InvalidOperationException(

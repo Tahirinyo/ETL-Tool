@@ -377,13 +377,14 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
     private static string SafeError(Exception exception) => exception switch
     {
-        BatchExecutionException => "MongoDB batch loading failed.",
-        BatchLoadException => "MongoDB batch loading failed.",
+        BatchExecutionException => "Destination batch loading failed.",
+        BatchLoadException => "Destination batch loading failed.",
         MongoTargetAccessException => "The MongoDB target is not accessible.",
         MongoSourceAccessException => "The configured MongoDB source could not be accessed.",
         MongoSourceMetadataObjectNotFoundException => exception.Message,
         MongoSourceSchemaChangedException => MongoSourceSchemaChangedException.SafeMessage,
         PostgreSqlSourceSchemaChangedException => PostgreSqlSourceSchemaChangedException.SafeMessage,
+        PostgreSqlDestinationPreparationException => PostgreSqlDestinationPreparationException.SafeMessage,
         IOException => "The ETL source file could not be read.",
         UnauthorizedAccessException => "The ETL source file could not be accessed.",
         ErrorReportGenerationException => "Error report generation failed.",

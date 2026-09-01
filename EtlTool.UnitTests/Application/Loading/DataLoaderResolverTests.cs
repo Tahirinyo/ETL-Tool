@@ -17,6 +17,17 @@ public sealed class DataLoaderResolverTests
     }
 
     [Fact]
+    public void Resolve_ReturnsEachExplicitlyRegisteredDestinationLoader()
+    {
+        var mongo = new StubLoader(DestinationType.MongoDb);
+        var postgreSql = new StubLoader(DestinationType.PostgreSql);
+        var resolver = new DataLoaderResolver([mongo, postgreSql]);
+
+        Assert.Same(mongo, resolver.Resolve(DestinationType.MongoDb));
+        Assert.Same(postgreSql, resolver.Resolve(DestinationType.PostgreSql));
+    }
+
+    [Fact]
     public void Constructor_RejectsInvalidNullAndDuplicateRegistrations()
     {
         Assert.Throws<ArgumentNullException>(() => new DataLoaderResolver(null!));
