@@ -57,8 +57,8 @@ else
 }
 
 <div class="d-flex flex-wrap gap-2 mt-3">
-    <a class="btn btn-outline-primary" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@Model.PipelineId">Preview</a>
-    <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+    <a class="btn btn-primary" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@Model.PipelineId">Preview &rarr;</a>
+    <a class="btn btn-link text-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
 </div>
 
 @functions {

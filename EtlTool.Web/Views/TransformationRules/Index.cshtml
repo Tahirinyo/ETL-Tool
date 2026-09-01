@@ -79,8 +79,8 @@ else
 }
 
 <div class="d-flex flex-wrap gap-2 mt-3">
-    <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@Model.PipelineId">Configure validations</a>
-    <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
+    <a class="btn btn-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@Model.PipelineId">Configure validations &rarr;</a>
+    <a class="btn btn-link text-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@Model.PipelineId">Back to pipeline</a>
 </div>
 
 @if (Model.Rules.Count > 1)

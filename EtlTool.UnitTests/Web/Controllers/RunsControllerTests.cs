@@ -17,11 +17,13 @@ public sealed class RunsControllerTests
         var runId = Guid.NewGuid();
         var repository = new RecordingRunRepository();
 
-        var result = new RunsController(repository).Progress(runId);
+        var pipelineId = Guid.NewGuid();
+        var result = new RunsController(repository).Progress(runId, pipelineId);
 
         var view = Assert.IsType<ViewResult>(result);
         var model = Assert.IsType<RunProgressViewModel>(view.Model);
         Assert.Equal(runId, model.RunId);
+        Assert.Equal(pipelineId, model.PipelineId);
         Assert.Equal(0, repository.GetByIdCallCount);
     }
 

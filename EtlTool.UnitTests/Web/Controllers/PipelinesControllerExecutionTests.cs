@@ -38,6 +38,7 @@ public sealed class PipelinesControllerExecutionTests
         Assert.Equal(nameof(RunsController.Progress), redirect.ActionName);
         Assert.Equal("Runs", redirect.ControllerName);
         Assert.Equal(runId, redirect.RouteValues!["runId"]);
+        Assert.Equal(pipelineId, redirect.RouteValues["pipelineId"]);
         Assert.Equal(1, admission.CallCount);
         Assert.DoesNotContain(
             typeof(PipelinesController).GetConstructors().Single().GetParameters(),

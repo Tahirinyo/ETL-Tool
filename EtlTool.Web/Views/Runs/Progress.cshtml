@@ -9,6 +9,14 @@
         <h1 class="mb-1">Run progress</h1>
         <p class="text-muted mb-0">This page refreshes automatically while the run is active.</p>
     </div>
+    @if (Model.PipelineId is Guid pipelineId)
+    {
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-primary" asp-controller="Pipelines" asp-action="Preview" asp-route-id="@pipelineId">Back to preview</a>
+            <a class="btn btn-outline-secondary" asp-controller="Pipelines" asp-action="Edit" asp-route-id="@pipelineId">Pipeline configuration</a>
+            <a class="btn btn-outline-secondary" asp-action="History" asp-route-pipelineId="@pipelineId">Run history</a>
+        </div>
+    }
 </div>
 
 <div id="polling-error" class="alert alert-warning d-none" role="alert" aria-live="assertive"></div>

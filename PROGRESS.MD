@@ -15,6 +15,7 @@
 - DB.21 acceptance verified the MongoDB-source to PostgreSQL-destination path with real Testcontainers providers: shared Preview and background execution, mapping/transformation/validation/filter/deduplication, PostgreSQL insert/update idempotency, counters, error CSV, and completed run history.
 - DB.22 cross-database regression acceptance verified CSV-to-MongoDB and XLSX-to-MongoDB through the real MongoDB loader, while revalidating the accepted PostgreSQL-to-MongoDB and MongoDB-to-PostgreSQL paths. Focused file/extractor, loader/lifecycle, cross-database, and full-unit regression groups passed; the prior 100K acceptance remains applicable because no performance-sensitive production code changed.
 - DB.24 updated the README, technical documentation, and demo guide for the accepted database-to-database matrix: CSV/XLSX/PostgreSQL to MongoDB and MongoDB to PostgreSQL. It adds repeatable PostgreSQL-to-MongoDB and MongoDB-to-PostgreSQL demo scenarios using placeholder local configuration only; no production or test code changed.
+- UX.1 polished the MVC pipeline workflow: destination saves return to the destination section, configuration actions now express forward/back hierarchy, and run progress/details provide direct routes to Preview, pipeline configuration, and Run History without changing execution admission semantics.
 
 ## In Progress
 

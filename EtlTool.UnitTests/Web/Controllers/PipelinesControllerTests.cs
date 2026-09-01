@@ -269,7 +269,9 @@ public sealed class PipelinesControllerTests
         var result = await controller.Edit(id, model, cancellationSource.Token);
 
         var redirect = Assert.IsType<RedirectToActionResult>(result);
-        Assert.Equal(nameof(PipelinesController.Index), redirect.ActionName);
+        Assert.Equal(nameof(PipelinesController.Edit), redirect.ActionName);
+        Assert.Equal(id, redirect.RouteValues!["id"]);
+        Assert.Equal("destination", redirect.Fragment);
         Assert.Same(existing, service.UpdatedPipeline);
         Assert.Equal(id, service.UpdatedId);
         Assert.Equal("After", existing.Name);

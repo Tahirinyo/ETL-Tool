@@ -19,7 +19,10 @@ public sealed class PipelinesControllerPostgreSqlDestinationTests
         var result = await CreateController(service).Edit(
             pipeline.Id, Model(), CancellationToken.None);
 
-        Assert.Equal(nameof(PipelinesController.Index), Assert.IsType<RedirectToActionResult>(result).ActionName);
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(PipelinesController.Edit), redirect.ActionName);
+        Assert.Equal(pipeline.Id, redirect.RouteValues!["id"]);
+        Assert.Equal("destination", redirect.Fragment);
         var saved = Assert.IsType<PipelineDefinition>(service.Updated);
         Assert.Equal(DestinationType.PostgreSql, saved.DestinationType);
         Assert.Empty(saved.DestinationDatabase);

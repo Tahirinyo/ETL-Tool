@@ -1664,7 +1664,11 @@ public sealed class PipelinesController : Controller
             return View(model);
         }
 
-        return RedirectToAction(nameof(Index));
+        return RedirectToAction(
+            nameof(Edit),
+            controllerName: null,
+            routeValues: new { id },
+            fragment: "destination");
     }
 
     private async Task<IActionResult> ConfigurePostgreSqlDestinationAsync(
@@ -1809,7 +1813,11 @@ public sealed class PipelinesController : Controller
                 return NotFound();
             }
 
-            return RedirectToAction(nameof(Index));
+            return RedirectToAction(
+                nameof(Edit),
+                controllerName: null,
+                routeValues: new { id },
+                fragment: "destination");
         }
         catch (Exception exception) when (exception is PostgreSqlConnectionProfileNotFoundException
                                          or PostgreSqlConnectionAccessException
@@ -1941,7 +1949,7 @@ public sealed class PipelinesController : Controller
                 return RedirectToAction(
                     nameof(RunsController.Progress),
                     "Runs",
-                    new { runId = result.RunId!.Value });
+                    new { runId = result.RunId!.Value, pipelineId = id });
             case RunAdmissionStatus.PipelineNotFound:
                 return NotFound();
             case RunAdmissionStatus.PipelineNotReady:

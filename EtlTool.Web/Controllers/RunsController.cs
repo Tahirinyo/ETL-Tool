@@ -58,13 +58,14 @@ public sealed class RunsController : Controller
     }
 
     [HttpGet("{runId:guid}")]
-    public IActionResult Progress(Guid runId)
+    public IActionResult Progress(Guid runId, Guid? pipelineId = null)
     {
         if (runId == Guid.Empty) return NotFound();
 
         return View(new RunProgressViewModel
         {
-            RunId = runId
+            RunId = runId,
+            PipelineId = pipelineId
         });
     }
 

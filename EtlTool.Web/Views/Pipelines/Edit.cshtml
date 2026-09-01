@@ -10,10 +10,10 @@
 
 <div class="row">
     <div class="col-lg-7">
-        <form asp-action="Edit" asp-route-id="@pipelineId" method="post">
+        <form asp-action="Edit" asp-route-id="@pipelineId" asp-fragment="destination" method="post">
             <partial name="_PipelineForm" model="Model" />
 
-            <fieldset class="mt-4">
+            <fieldset id="destination" class="mt-4">
                 <legend class="h4">Destination</legend>
                 <div class="form-check">
                     <input class="form-check-input" asp-for="DestinationType" type="radio" value="MongoDb" id="destination-mongodb" />
@@ -164,7 +164,7 @@
                     <div class="d-flex flex-wrap gap-2">
                         <a class="btn btn-outline-primary" asp-action="Source" asp-route-id="@pipelineId">Configure source</a>
                         <a class="btn btn-outline-primary" asp-action="Mapping" asp-route-id="@pipelineId">Configure fields</a>
-                        <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations</a>
+                        <a class="btn btn-outline-primary" asp-controller="TransformationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure transformations &rarr;</a>
                         <a class="btn btn-outline-primary" asp-controller="ValidationRules" asp-action="Index" asp-route-pipelineId="@pipelineId">Configure validations</a>
                     </div>
                 </div>
