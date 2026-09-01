@@ -75,6 +75,84 @@ public sealed class PipelinesControllerPostgreSqlTests
     }
 
     [Fact]
+    public async Task InspectSource_PostgreSqlSchemaChangeRequiresMappingSaveBeforeTheGateClears()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = Pipeline(id);
+        pipeline.SourceType = SourceType.PostgreSql;
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            ConnectionProfile = "ReportingDb", Database = "reporting", Schema = "public", Table = "customers"
+        };
+        pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }];
+        pipeline.FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true }];
+        var service = new RecordingPipelineService { Pipeline = pipeline };
+        var controller = CreateController(
+            service,
+            new RecordingPostgreSqlMetadataDiscoveryService(),
+            new RecordingProfileCatalog("ReportingDb"));
+
+        var result = await controller.InspectSource(id, ValidPostgreSqlModel(), CancellationToken.None, "configure");
+
+        Assert.True(Assert.IsType<FieldMappingViewModel>(Assert.IsType<ViewResult>(result).Model)
+            .SchemaDifference!.RequiresRemapping);
+        Assert.True(service.UpdatedPipeline!.RequiresRemapping);
+
+        var mapping = await controller.Mapping(id, new FieldMappingViewModel
+        {
+            Fields =
+            [
+                new FieldMappingFieldViewModel { SourceField = "Id", TargetField = "id", IsIncluded = true },
+                new FieldMappingFieldViewModel { SourceField = "Name", TargetField = "", IsIncluded = false }
+            ]
+        }, CancellationToken.None);
+
+        Assert.True(Assert.IsType<FieldMappingViewModel>(Assert.IsType<ViewResult>(mapping).Model).IsSaved);
+        Assert.False(service.UpdatedPipeline!.RequiresRemapping);
+    }
+
+    [Fact]
+    public async Task InspectSource_PostgreSqlSuccessfulFileSwitchRetiresThePriorWizardSource()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = Pipeline(id);
+        pipeline.SourceType = SourceType.Csv;
+        var service = new RecordingPipelineService { Pipeline = pipeline };
+        var sourceStore = new RecordingWizardSourceStore();
+        var controller = CreateController(
+            service,
+            new RecordingPostgreSqlMetadataDiscoveryService(),
+            new RecordingProfileCatalog("ReportingDb"),
+            sourceStore);
+
+        await controller.InspectSource(id, ValidPostgreSqlModel(), CancellationToken.None, "configure");
+
+        Assert.Equal([id], sourceStore.RetiredPipelineIds);
+    }
+
+    [Fact]
+    public async Task InspectSource_PostgreSqlFailedConfigurationDoesNotRetireThePriorWizardSource()
+    {
+        var id = Guid.NewGuid();
+        var pipeline = Pipeline(id);
+        pipeline.SourceType = SourceType.Csv;
+        var service = new RecordingPipelineService { Pipeline = pipeline };
+        var sourceStore = new RecordingWizardSourceStore();
+        var controller = CreateController(
+            service,
+            new RecordingPostgreSqlMetadataDiscoveryService
+            {
+                DiscoveryException = new PostgreSqlConnectionAccessException()
+            },
+            new RecordingProfileCatalog("ReportingDb"),
+            sourceStore);
+
+        await controller.InspectSource(id, ValidPostgreSqlModel(), CancellationToken.None, "configure");
+
+        Assert.Empty(sourceStore.RetiredPipelineIds);
+    }
+
+    [Fact]
     public async Task InspectSource_PostgreSqlRejectsStaleDatabaseWithoutSaving()
     {
         var id = Guid.NewGuid();
@@ -260,8 +338,10 @@ public sealed class PipelinesControllerPostgreSqlTests
     private static PipelinesController CreateController(
         RecordingPipelineService pipelineService,
         RecordingPostgreSqlMetadataDiscoveryService discovery,
-        RecordingProfileCatalog profiles) => new(
+        RecordingProfileCatalog profiles,
+        IWizardSourceStore? sourceStore = null) => new(
             pipelineService,
+            wizardSourceStore: sourceStore,
             postgreSqlMetadataDiscoveryService: discovery,
             postgreSqlConnectionProfileCatalog: profiles);
 
@@ -378,7 +458,7 @@ public sealed class PipelinesControllerPostgreSqlTests
 
     private sealed class RecordingPipelineService : IPipelineService
     {
-        public PipelineDefinition? Pipeline { get; init; }
+        public PipelineDefinition? Pipeline { get; set; }
         public PipelineDefinition? UpdatedPipeline { get; private set; }
 
         public Task<PipelineDefinition> CreateAsync(PipelineDefinition pipeline, CancellationToken cancellationToken) =>
@@ -393,9 +473,36 @@ public sealed class PipelinesControllerPostgreSqlTests
         public Task<bool> UpdateAsync(Guid id, PipelineDefinition pipeline, CancellationToken cancellationToken)
         {
             UpdatedPipeline = pipeline;
+            Pipeline = pipeline;
             return Task.FromResult(true);
         }
 
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(false);
+    }
+
+    private sealed class RecordingWizardSourceStore : IWizardSourceStore
+    {
+        public List<Guid> RetiredPipelineIds { get; } = [];
+
+        public Task RetireActiveAsync(Guid pipelineId, CancellationToken cancellationToken)
+        {
+            RetiredPipelineIds.Add(pipelineId);
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> ActivateAsync(Guid pipelineId, Guid sourceReferenceId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task DiscardAsync(Guid sourceReferenceId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IWizardSourceLease?> AcquireAsync(
+            Guid pipelineId,
+            SourceType sourceType,
+            SourceOptions sourceOptions,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task RemoveAsync(Guid pipelineId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

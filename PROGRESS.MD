@@ -10,6 +10,7 @@
 - DB.13 added MongoDB source identity metadata and configured-connection database/collection discovery, including metadata/system-database exclusion and safe access failures. It does not include MongoDB schema inference, extraction, or UI integration.
 - DB.14 added bounded, deterministic MongoDB source schema inference for top-level scalar fields, including null/missing handling, numeric widening, ObjectId mapping, safe conflict/unsupported-BSON failures, shared snapshot compatibility, and MongoDB source readiness validation. MongoDB extraction, Preview, and UI remain deferred.
 - DB.15 added cursor-based MongoDB streaming extraction with configurable fetch size, deterministic `_id` ordering, safe BSON-to-row conversion (including exact IEEE-754 Double-to-CLR-decimal admission), execution-time schema-drift detection, immutable logical-source admission, and background-run integration. MongoDB Preview and UI integration remain deferred.
+- DB.16 integrated MongoDB as a selectable pipeline source: configured-connection database/collection discovery, source-only UI binding, inferred schema handoff to the shared mapping flow, Preview source creation, safe source failures, and source/destination configuration separation. Existing schema comparison/remapping and execution-time drift guards apply to MongoDB sources.
 
 ## In Progress
 
@@ -21,4 +22,4 @@
 
 ## Next
 
-- Plan DB.16 MongoDB Preview and UI integration.
+- Package D Closeout cross-source regression and acceptance validation.

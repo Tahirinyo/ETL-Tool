@@ -29,6 +29,8 @@ public sealed class PipelinesController : Controller
     private readonly IPostgreSqlMetadataDiscoveryService? _postgreSqlMetadataDiscoveryService;
     private readonly IPostgreSqlConnectionProfileCatalog? _postgreSqlConnectionProfileCatalog;
     private readonly PostgreSqlSourceSchemaConverter _postgreSqlSourceSchemaConverter;
+    private readonly IMongoSourceMetadataDiscoveryService? _mongoSourceMetadataDiscoveryService;
+    private readonly IMongoSourceSchemaInferenceService? _mongoSourceSchemaInferenceService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -44,7 +46,9 @@ public sealed class PipelinesController : Controller
         IRunAdmissionService? runAdmissionService = null,
         IPostgreSqlMetadataDiscoveryService? postgreSqlMetadataDiscoveryService = null,
         IPostgreSqlConnectionProfileCatalog? postgreSqlConnectionProfileCatalog = null,
-        PostgreSqlSourceSchemaConverter? postgreSqlSourceSchemaConverter = null)
+        PostgreSqlSourceSchemaConverter? postgreSqlSourceSchemaConverter = null,
+        IMongoSourceMetadataDiscoveryService? mongoSourceMetadataDiscoveryService = null,
+        IMongoSourceSchemaInferenceService? mongoSourceSchemaInferenceService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -61,6 +65,8 @@ public sealed class PipelinesController : Controller
         _postgreSqlMetadataDiscoveryService = postgreSqlMetadataDiscoveryService;
         _postgreSqlConnectionProfileCatalog = postgreSqlConnectionProfileCatalog;
         _postgreSqlSourceSchemaConverter = postgreSqlSourceSchemaConverter ?? new PostgreSqlSourceSchemaConverter();
+        _mongoSourceMetadataDiscoveryService = mongoSourceMetadataDiscoveryService;
+        _mongoSourceSchemaInferenceService = mongoSourceSchemaInferenceService;
     }
 
     public async Task<IActionResult> Mapping(
@@ -161,6 +167,7 @@ public sealed class PipelinesController : Controller
         }
 
         var replacement = CopyPipelineWithMappings(pipeline, fieldMappings);
+        replacement.RequiresRemapping = false;
         if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
         {
             return NotFound();
@@ -183,7 +190,8 @@ public sealed class PipelinesController : Controller
         [FromRoute] Guid id,
         SourceUploadViewModel model,
         CancellationToken cancellationToken,
-        string? postgreSqlAction = null)
+        string? postgreSqlAction = null,
+        string? mongoDbAction = null)
     {
         var pipeline = await _pipelineService.GetByIdAsync(id, cancellationToken);
         if (pipeline is null) return NotFound();
@@ -194,6 +202,15 @@ public sealed class PipelinesController : Controller
                 pipeline,
                 model,
                 postgreSqlAction,
+                cancellationToken);
+        }
+        if (model.SourceType == SourceType.MongoDb)
+        {
+            return await ConfigureMongoDbSourceAsync(
+                id,
+                pipeline,
+                model,
+                mongoDbAction,
                 cancellationToken);
         }
         if (_sourceInspectionService is null) throw new InvalidOperationException("Source inspection is not configured.");
@@ -451,7 +468,7 @@ public sealed class PipelinesController : Controller
         var postgreSqlSource = pipeline.PostgreSqlSource;
         var model = new SourceUploadViewModel
         {
-            SourceType = pipeline.SourceType is SourceType.Xlsx or SourceType.PostgreSql
+            SourceType = pipeline.SourceType is SourceType.Xlsx or SourceType.PostgreSql or SourceType.MongoDb
                 ? pipeline.SourceType
                 : SourceType.Csv,
             Delimiter = pipeline.SourceOptions.Delimiter ?? CsvDelimiter.Comma,
@@ -462,7 +479,10 @@ public sealed class PipelinesController : Controller
             PostgreSqlTable = postgreSqlSource?.Table,
             LoadedPostgreSqlConnectionProfile = postgreSqlSource?.ConnectionProfile,
             LoadedPostgreSqlDatabase = postgreSqlSource?.Database,
-            LoadedPostgreSqlSchema = postgreSqlSource?.Schema
+            LoadedPostgreSqlSchema = postgreSqlSource?.Schema,
+            MongoDbDatabase = pipeline.MongoDbSource?.Database,
+            MongoDbCollection = pipeline.MongoDbSource?.Collection,
+            LoadedMongoDbDatabase = pipeline.MongoDbSource?.Database
         };
         PopulatePostgreSqlConnectionProfiles(model);
         return model;
@@ -582,8 +602,15 @@ public sealed class PipelinesController : Controller
                 return PostgreSqlSourceView(model);
             }
 
+            var comparison = pipeline.ExpectedSchema.Count > 0
+                ? _schemaComparisonService.Compare(
+                    pipeline.ExpectedSchema,
+                    schema,
+                    pipeline.FieldMappings ?? [])
+                : null;
             var replacement = CopyPipeline(pipeline);
             replacement.SourceType = SourceType.PostgreSql;
+            replacement.MongoDbSource = null;
             replacement.PostgreSqlSource = new PostgreSqlSourceOptions
             {
                 ConnectionProfile = model.PostgreSqlConnectionProfile,
@@ -593,10 +620,23 @@ public sealed class PipelinesController : Controller
             };
             replacement.ExpectedSchema = CopySchema(schema);
             replacement.FieldMappings = ReconcileMappings(pipeline, schema);
+            replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
 
             if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
             {
                 return NotFound();
+            }
+
+            await RetireFileSourceAfterDatabaseSwitchAsync(pipeline, id);
+
+            if (RequiresExplicitSchemaConfirmation(comparison))
+            {
+                var mappingModel = CreateMappingModelFromSchema(
+                    replacement.ExpectedSchema,
+                    replacement.FieldMappings,
+                    includeNewFieldsByDefault: false);
+                mappingModel.SchemaDifference = CreateSchemaDifferenceModel(comparison!);
+                return View("Mapping", mappingModel);
             }
 
             return RedirectToAction(nameof(Mapping), new { id });
@@ -705,6 +745,200 @@ public sealed class PipelinesController : Controller
         model.LoadedPostgreSqlDatabase = model.PostgreSqlDatabase;
         model.LoadedPostgreSqlSchema = model.PostgreSqlSchema;
         return View("Source", model);
+    }
+
+    private async Task<IActionResult> ConfigureMongoDbSourceAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        SourceUploadViewModel model,
+        string? mongoDbAction,
+        CancellationToken cancellationToken)
+    {
+        NormalizeMongoDbSelection(model);
+        if (_mongoSourceMetadataDiscoveryService is null
+            || _mongoSourceSchemaInferenceService is null)
+        {
+            ModelState.AddModelError(string.Empty, "MongoDB source configuration is not available.");
+            return MongoDbSourceView(model);
+        }
+
+        try
+        {
+            model.MongoDbDatabases = (await _mongoSourceMetadataDiscoveryService
+                    .DiscoverDatabasesAsync(cancellationToken))
+                .Select(database => database.Name)
+                .ToList();
+            if (!RequireMongoDbSelection(
+                    model,
+                    nameof(model.MongoDbDatabase),
+                    model.MongoDbDatabase,
+                    model.MongoDbDatabases,
+                    "database",
+                    mongoDbAction))
+            {
+                return MongoDbSourceView(model);
+            }
+
+            model.MongoDbCollections = (await _mongoSourceMetadataDiscoveryService
+                    .DiscoverCollectionsAsync(model.MongoDbDatabase!, cancellationToken))
+                .Select(collection => collection.Name)
+                .ToList();
+            if (!RequireMongoDbSelection(
+                    model,
+                    nameof(model.MongoDbCollection),
+                    model.MongoDbCollection,
+                    model.MongoDbCollections,
+                    "collection",
+                    mongoDbAction))
+            {
+                return MongoDbSourceView(model);
+            }
+
+            if (!string.Equals(mongoDbAction, "configure", StringComparison.Ordinal))
+            {
+                return MongoDbSourceView(model);
+            }
+
+            var source = new MongoDbSourceOptions
+            {
+                Database = model.MongoDbDatabase!,
+                Collection = model.MongoDbCollection!
+            };
+            var schema = await _mongoSourceSchemaInferenceService
+                .InferAsync(source, cancellationToken);
+            if (schema.Count == 0)
+            {
+                ModelState.AddModelError(string.Empty, "The selected MongoDB collection has no fields to map.");
+                return MongoDbSourceView(model);
+            }
+
+            var comparison = pipeline.ExpectedSchema.Count > 0
+                ? _schemaComparisonService.Compare(
+                    pipeline.ExpectedSchema,
+                    schema,
+                    pipeline.FieldMappings ?? [])
+                : null;
+            var replacement = CopyPipeline(pipeline);
+            replacement.SourceType = SourceType.MongoDb;
+            replacement.PostgreSqlSource = null;
+            replacement.MongoDbSource = source;
+            replacement.ExpectedSchema = CopySchema(schema);
+            replacement.FieldMappings = ReconcileMappings(pipeline, schema);
+            replacement.RequiresRemapping = RequiresExplicitSchemaConfirmation(comparison);
+
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
+            {
+                return NotFound();
+            }
+
+            await RetireFileSourceAfterDatabaseSwitchAsync(pipeline, id);
+
+            if (RequiresExplicitSchemaConfirmation(comparison))
+            {
+                var mappingModel = CreateMappingModelFromSchema(
+                    replacement.ExpectedSchema,
+                    replacement.FieldMappings,
+                    includeNewFieldsByDefault: false);
+                mappingModel.SchemaDifference = CreateSchemaDifferenceModel(comparison!);
+                return View("Mapping", mappingModel);
+            }
+
+            return RedirectToAction(nameof(Mapping), new { id });
+        }
+        catch (Exception exception) when (exception is MongoSourceAccessException
+                                         or MongoSourceMetadataObjectNotFoundException
+                                         or MongoSourceSchemaInferenceException)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return MongoDbSourceView(model);
+        }
+    }
+
+    private bool RequireMongoDbSelection(
+        SourceUploadViewModel model,
+        string propertyName,
+        string? selectedValue,
+        IReadOnlyList<string> availableValues,
+        string displayName,
+        string? mongoDbAction)
+    {
+        if (string.IsNullOrWhiteSpace(selectedValue))
+        {
+            if (string.Equals(mongoDbAction, "configure", StringComparison.Ordinal))
+            {
+                ModelState.AddModelError(propertyName, $"Choose a MongoDB {displayName}.");
+            }
+
+            return false;
+        }
+
+        if (availableValues.Contains(selectedValue, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        ClearMongoDbSelection(model, propertyName);
+        ModelState.AddModelError(
+            propertyName,
+            $"The selected MongoDB {displayName} is no longer available.");
+        return false;
+    }
+
+    private void NormalizeMongoDbSelection(SourceUploadViewModel model)
+    {
+        if (!string.Equals(model.MongoDbDatabase, model.LoadedMongoDbDatabase, StringComparison.Ordinal))
+        {
+            model.MongoDbCollection = null;
+            ModelState.Remove(nameof(model.MongoDbCollection));
+        }
+    }
+
+    private void ClearMongoDbSelection(SourceUploadViewModel model, string propertyName)
+    {
+        switch (propertyName)
+        {
+            case nameof(SourceUploadViewModel.MongoDbDatabase):
+                model.MongoDbDatabase = null;
+                model.MongoDbCollection = null;
+                ModelState.Remove(nameof(model.MongoDbDatabase));
+                ModelState.Remove(nameof(model.MongoDbCollection));
+                break;
+            case nameof(SourceUploadViewModel.MongoDbCollection):
+                model.MongoDbCollection = null;
+                ModelState.Remove(nameof(model.MongoDbCollection));
+                break;
+        }
+    }
+
+    private IActionResult MongoDbSourceView(SourceUploadViewModel model)
+    {
+        ModelState.Remove(nameof(model.LoadedMongoDbDatabase));
+        model.LoadedMongoDbDatabase = model.MongoDbDatabase;
+        return View("Source", model);
+    }
+
+    private async Task RetireFileSourceAfterDatabaseSwitchAsync(
+        PipelineDefinition priorPipeline,
+        Guid pipelineId)
+    {
+        if (priorPipeline.SourceType is not SourceType.Csv and not SourceType.Xlsx
+            || _wizardSourceStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _wizardSourceStore.RetireActiveAsync(pipelineId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger?.LogWarning(
+                exception,
+                "The prior file source for pipeline {PipelineId} could not be removed immediately.",
+                pipelineId);
+        }
     }
 
     private FieldMappingViewModel CreateMappingModel(
@@ -856,8 +1090,10 @@ public sealed class PipelinesController : Controller
         SourceType = pipeline.SourceType,
         SourceOptions = CopySourceOptions(pipeline.SourceOptions),
         PostgreSqlSource = CopyPostgreSqlSourceOptions(pipeline.PostgreSqlSource),
+        MongoDbSource = CopyMongoDbSourceOptions(pipeline.MongoDbSource),
         ExpectedSchema = CopySchema(pipeline.ExpectedSchema),
         FieldMappings = CopyMappings(pipeline.FieldMappings ?? []),
+        RequiresRemapping = pipeline.RequiresRemapping,
         TransformationRules = (pipeline.TransformationRules ?? [])
             .Select(rule => new TransformationRule
             {
@@ -899,8 +1135,10 @@ public sealed class PipelinesController : Controller
         SourceType = pipeline.SourceType,
         SourceOptions = pipeline.SourceOptions,
         PostgreSqlSource = CopyPostgreSqlSourceOptions(pipeline.PostgreSqlSource),
+        MongoDbSource = CopyMongoDbSourceOptions(pipeline.MongoDbSource),
         ExpectedSchema = pipeline.ExpectedSchema,
         FieldMappings = fieldMappings,
+        RequiresRemapping = pipeline.RequiresRemapping,
         TransformationRules = pipeline.TransformationRules,
         ValidationRules = pipeline.ValidationRules,
         DestinationDatabase = pipeline.DestinationDatabase,
@@ -934,6 +1172,15 @@ public sealed class PipelinesController : Controller
             Database = options.Database,
             Schema = options.Schema,
             Table = options.Table
+        };
+
+    private static MongoDbSourceOptions? CopyMongoDbSourceOptions(
+        MongoDbSourceOptions? options) => options is null
+        ? null
+        : new MongoDbSourceOptions
+        {
+            Database = options.Database,
+            Collection = options.Collection
         };
 
     private static List<FieldMapping> ReconcileMappings(
@@ -998,8 +1245,10 @@ public sealed class PipelinesController : Controller
             SourceType = type,
             SourceOptions = CopySourceOptions(options),
             PostgreSqlSource = null,
+            MongoDbSource = null,
             ExpectedSchema = CopySchema(schema),
             FieldMappings = CopyMappings(mappings),
+            RequiresRemapping = false,
             TransformationRules = pipeline.TransformationRules,
             ValidationRules = pipeline.ValidationRules,
             DestinationDatabase = pipeline.DestinationDatabase,
@@ -1618,5 +1867,8 @@ public sealed class PipelinesController : Controller
             or NotSupportedException
             or PostgreSqlConnectionProfileNotFoundException
             or PostgreSqlConnectionAccessException
-            or PostgreSqlMetadataObjectNotFoundException;
+            or PostgreSqlMetadataObjectNotFoundException
+            or MongoSourceAccessException
+            or MongoSourceMetadataObjectNotFoundException
+            or MongoSourceSchemaChangedException;
 }

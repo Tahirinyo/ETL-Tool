@@ -17,6 +17,8 @@ public sealed class EtlRunExecutionConfiguration
 
     public List<FieldMapping> FieldMappings { get; set; } = [];
 
+    public bool RequiresRemapping { get; set; }
+
     public List<TransformationRule> TransformationRules { get; set; } = [];
 
     public List<ValidationRule> ValidationRules { get; set; } = [];
@@ -39,6 +41,7 @@ public sealed class EtlRunExecutionConfiguration
             MongoDbSource = Copy(pipeline.MongoDbSource),
             ExpectedSchema = pipeline.ExpectedSchema.Select(Copy).ToList(),
             FieldMappings = pipeline.FieldMappings.Select(Copy).ToList(),
+            RequiresRemapping = pipeline.RequiresRemapping,
             TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
             ValidationRules = pipeline.ValidationRules.Select(Copy).ToList(),
             DestinationDatabase = pipeline.DestinationDatabase,
@@ -55,6 +58,7 @@ public sealed class EtlRunExecutionConfiguration
         MongoDbSource = Copy(MongoDbSource),
         ExpectedSchema = ExpectedSchema.Select(Copy).ToList(),
         FieldMappings = FieldMappings.Select(Copy).ToList(),
+        RequiresRemapping = RequiresRemapping,
         TransformationRules = TransformationRules.Select(Copy).ToList(),
         ValidationRules = ValidationRules.Select(Copy).ToList(),
         DestinationDatabase = DestinationDatabase,

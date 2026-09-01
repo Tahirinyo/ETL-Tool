@@ -57,22 +57,7 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
     public PipelineReadinessResult Evaluate(PipelineDefinition pipeline)
         => EvaluateCore(pipeline);
 
-    public PipelineReadinessResult EvaluateForPreview(PipelineDefinition pipeline)
-    {
-        var readiness = Evaluate(pipeline);
-        if (pipeline.SourceType != SourceType.MongoDb)
-        {
-            return readiness;
-        }
-
-        return new PipelineReadinessResult(
-        [
-            .. readiness.Problems,
-            new PipelineReadinessProblem(
-                SourceComponent,
-                "MongoDB source preview is not available.")
-        ]);
-    }
+    public PipelineReadinessResult EvaluateForPreview(PipelineDefinition pipeline) => Evaluate(pipeline);
 
     private PipelineReadinessResult EvaluateCore(PipelineDefinition pipeline)
     {
@@ -80,6 +65,13 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
 
         var problems = new List<PipelineReadinessProblem>();
         var sourceState = EvaluateSourceAndSchema(pipeline, problems);
+        if (pipeline.RequiresRemapping)
+        {
+            AddProblem(
+                problems,
+                MappingComponent,
+                "The source schema changed. Review and save the field mapping before previewing or running the pipeline.");
+        }
         var mappingState = EvaluateMappings(pipeline, sourceState.HasUsableSchema, problems);
 
         EvaluateTransformations(pipeline, mappingState, problems);

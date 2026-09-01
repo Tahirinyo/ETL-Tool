@@ -23,6 +23,8 @@ public sealed class PipelineDefinition
 
     public List<FieldMapping> FieldMappings { get; set; } = [];
 
+    public bool RequiresRemapping { get; set; }
+
     public List<TransformationRule> TransformationRules { get; set; } = [];
 
     public List<ValidationRule> ValidationRules { get; set; } = [];

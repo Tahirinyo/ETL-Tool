@@ -26,6 +26,11 @@ public sealed class SourceUploadViewModel
     public IReadOnlyList<string> PostgreSqlDatabases { get; set; } = [];
     public IReadOnlyList<string> PostgreSqlSchemas { get; set; } = [];
     public IReadOnlyList<string> PostgreSqlTables { get; set; } = [];
+    public string? MongoDbDatabase { get; set; }
+    public string? MongoDbCollection { get; set; }
+    public string? LoadedMongoDbDatabase { get; set; }
+    public IReadOnlyList<string> MongoDbDatabases { get; set; } = [];
+    public IReadOnlyList<string> MongoDbCollections { get; set; } = [];
     public bool HasInspection => Columns.Count > 0 || SampleRows.Count > 0;
 }
 

@@ -4,12 +4,14 @@ using EtlTool.Application.Processing;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
+using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Sources;
 using EtlTool.Application.PostgreSql;
 using EtlDataRow = EtlTool.Application.Extraction.DataRow;
@@ -287,7 +289,11 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
                 new UnexpectedWizardSourceStore(),
                 factory,
                 new PostgreSqlMetadataDiscoveryService(factory),
-                new PostgreSqlDeterministicOrderingResolver());
+                new PostgreSqlDeterministicOrderingResolver(),
+                new MongoMetadataDatabase(MongoOptions()),
+                MongoOptions(),
+                new UnexpectedMongoSchemaInferenceService(),
+                new SourceSchemaComparisonService());
             await using var source = await previewSourceFactory.AcquireAsync(
                 previewSourcePipeline,
                 CancellationToken.None)
@@ -337,6 +343,19 @@ public sealed class PostgreSqlEtlSourceIntegrationTests(PostgreSqlFixture fixtur
         new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString).Database
         ?? throw new InvalidOperationException(
             "The PostgreSQL test container did not provide a database name.");
+
+    private static MongoDbOptions MongoOptions() => new()
+    {
+        ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+        MetadataDatabaseName = "etl_tool_postgresql_preview_source_factory_tests"
+    };
+
+    private sealed class UnexpectedMongoSchemaInferenceService : IMongoSourceSchemaInferenceService
+    {
+        public Task<IReadOnlyList<SourceFieldDefinition>> InferAsync(
+            MongoDbSourceOptions source,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
 
     private PostgreSqlEtlSource CreateSource(
         IPostgreSqlConnectionFactory factory,

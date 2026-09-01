@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.PostgreSql;
+using EtlTool.Application.MongoDB;
 using EtlTool.Application.Preview;
 using EtlTool.Application.Sources;
 using EtlTool.Domain.Entities;
@@ -112,6 +113,41 @@ public sealed class PipelinesControllerPreviewTests
         var model = Assert.IsType<PipelinePreviewViewModel>(Assert.IsType<ViewResult>(result).Model);
         Assert.Equal(StatusCodes.Status500InternalServerError, controller.Response.StatusCode);
         Assert.DoesNotContain("PostgreSQL", model.FailureMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sourceStore.LeaseDisposed);
+    }
+
+    [Fact]
+    public async Task Preview_MongoDbAccessFailureReturnsSafeServerErrorAndDisposesLease()
+    {
+        var pipeline = ReadyPipeline();
+        var sourceStore = new RecordingWizardSourceStore();
+        var previewService = new RecordingPreviewService(
+            (_, _, _) => throw new MongoSourceAccessException());
+        var controller = Controller(pipeline, Ready(), sourceStore, previewService);
+
+        var result = await controller.Preview(pipeline.Id, CancellationToken.None);
+
+        var model = Assert.IsType<PipelinePreviewViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(StatusCodes.Status500InternalServerError, controller.Response.StatusCode);
+        Assert.DoesNotContain("MongoDB", model.FailureMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sourceStore.LeaseDisposed);
+    }
+
+    [Fact]
+    public async Task Preview_MongoDbSchemaChangedFailureReturnsSafeServerErrorAndDisposesLease()
+    {
+        var pipeline = ReadyPipeline();
+        var sourceStore = new RecordingWizardSourceStore();
+        var previewService = new RecordingPreviewService(
+            (_, _, _) => throw new MongoSourceSchemaChangedException(
+                MongoSourceSchemaInferenceException.Unsupported("payload", "Array")));
+        var controller = Controller(pipeline, Ready(), sourceStore, previewService);
+
+        var result = await controller.Preview(pipeline.Id, CancellationToken.None);
+
+        var model = Assert.IsType<PipelinePreviewViewModel>(Assert.IsType<ViewResult>(result).Model);
+        Assert.Equal(StatusCodes.Status500InternalServerError, controller.Response.StatusCode);
+        Assert.DoesNotContain("payload", model.FailureMessage, StringComparison.OrdinalIgnoreCase);
         Assert.True(sourceStore.LeaseDisposed);
     }
 

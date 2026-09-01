@@ -29,7 +29,7 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
-    public void EvaluateForPreview_ReportsMongoDbPreviewUnavailableAndRetainsRuleValidation()
+    public void EvaluateForPreview_AllowsMongoDbAndRetainsRuleValidation()
     {
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.MongoDb;
@@ -50,12 +50,47 @@ public sealed class PipelineReadinessServiceTests
         var result = service.EvaluateForPreview(pipeline);
 
         Assert.False(result.IsReady);
-        Assert.Contains(
-            new PipelineReadinessProblem("Source", "MongoDB source preview is not available."),
-            result.Problems);
+        Assert.DoesNotContain(result.Problems, problem =>
+            problem.Component == "Source"
+            && problem.Message.Contains("preview is not available", StringComparison.Ordinal));
         Assert.Contains(result.Problems, problem =>
             problem.Component == "Transformation"
             && problem.Message.Contains("'missing' is not", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(SourceType.PostgreSql)]
+    [InlineData(SourceType.MongoDb)]
+    public void EvaluateAndEvaluateForPreview_BlockDatabaseSourceUntilRemappingIsSaved(
+        SourceType sourceType)
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = sourceType;
+        pipeline.RequiresRemapping = true;
+        if (sourceType == SourceType.PostgreSql)
+        {
+            pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                ConnectionProfile = "ReportingDb", Database = "reporting", Schema = "public", Table = "customers"
+            };
+        }
+        else
+        {
+            pipeline.MongoDbSource = new MongoDbSourceOptions { Database = "reporting", Collection = "customers" };
+        }
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
+
+        var execution = service.Evaluate(pipeline);
+        var preview = service.EvaluateForPreview(pipeline);
+
+        Assert.False(execution.IsReady);
+        Assert.False(preview.IsReady);
+        Assert.All([execution, preview], result => Assert.Contains(result.Problems, problem =>
+            problem.Component == "Mapping"
+            && problem.Message.Contains("Review and save", StringComparison.Ordinal)));
     }
 
     [Fact]

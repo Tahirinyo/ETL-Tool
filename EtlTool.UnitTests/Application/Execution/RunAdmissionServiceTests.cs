@@ -207,6 +207,37 @@ public sealed class RunAdmissionServiceTests
         Assert.True(store.HasActiveSource);
     }
 
+    [Theory]
+    [InlineData(SourceType.PostgreSql)]
+    [InlineData(SourceType.MongoDb)]
+    public async Task AdmitAsync_DatabaseSourceRemappingProblemBlocksExecution(SourceType sourceType)
+    {
+        var pipeline = sourceType == SourceType.PostgreSql
+            ? PostgreSqlPipeline()
+            : MongoDbPipeline();
+        var store = new RecordingSourceStore(pipeline.Id);
+        var repository = new RecordingRunRepository();
+        var queue = new RecordingQueue();
+        PipelineReadinessProblem[] problems =
+        [
+            new("Mapping", "The source schema changed. Review and save the field mapping before previewing or running the pipeline.")
+        ];
+        var service = Service(
+            pipeline,
+            store,
+            repository,
+            queue,
+            new PipelineReadinessResult(problems));
+
+        var result = await service.AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.PipelineNotReady, result.Status);
+        Assert.Equal(problems, result.ReadinessProblems);
+        Assert.Empty(repository.Runs);
+        Assert.Empty(queue.Jobs);
+        Assert.Equal(0, store.ReservationCount);
+    }
+
     [Fact]
     public async Task AdmitAsync_MongoDbPersistsImmutableLogicalSourceWithoutFileReservationOrSecrets()
     {

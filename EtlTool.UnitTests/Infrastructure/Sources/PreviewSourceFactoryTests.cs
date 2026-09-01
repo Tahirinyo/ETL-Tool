@@ -7,7 +7,10 @@ using EtlTool.Domain.Entities;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
+using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.Sources;
+using EtlTool.Application.MongoDB;
+using EtlTool.Application.Pipelines;
 
 namespace EtlTool.UnitTests.Infrastructure.Sources;
 
@@ -52,6 +55,67 @@ public sealed class PreviewSourceFactoryTests
     }
 
     [Fact]
+    public async Task AcquireAsync_MongoDbCreatesTheExistingMongoDbEtlSourceWithoutFileAcquisition()
+    {
+        var store = new RecordingWizardSourceStore();
+        var factory = CreateFactory(store);
+        var pipeline = Pipeline(SourceType.MongoDb);
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
+        };
+        pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }];
+
+        await using var source = await factory.AcquireAsync(pipeline, CancellationToken.None);
+
+        Assert.IsType<MongoDbEtlSource>(source);
+        Assert.Equal(0, store.AcquireCallCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_MongoDbSchemaDifferenceRequiresRemappingBeforePreview()
+    {
+        var store = new RecordingWizardSourceStore();
+        var factory = CreateFactory(store);
+        var pipeline = Pipeline(SourceType.MongoDb);
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
+        };
+        pipeline.ExpectedSchema = [new SourceFieldDefinition { Name = "Name", DataType = SourceFieldType.String }];
+        pipeline.FieldMappings = [new FieldMapping { SourceField = "Name", TargetField = "name" }];
+
+        var exception = await Assert.ThrowsAsync<MongoSourceSchemaChangedException>(() =>
+            factory.AcquireAsync(pipeline, CancellationToken.None));
+
+        Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.Equal(0, store.AcquireCallCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_MongoDbIncompatibleLiveSchemaUsesSafeSchemaChangedFailure()
+    {
+        var store = new RecordingWizardSourceStore();
+        var factory = CreateFactory(
+            store,
+            new RecordingMongoSchemaInferenceService
+            {
+                Failure = MongoSourceSchemaInferenceException.Unsupported("payload", "Array")
+            });
+        var pipeline = Pipeline(SourceType.MongoDb);
+        pipeline.MongoDbSource = new MongoDbSourceOptions { Database = "reporting", Collection = "customers" };
+
+        var exception = await Assert.ThrowsAsync<MongoSourceSchemaChangedException>(() =>
+            factory.AcquireAsync(pipeline, CancellationToken.None));
+
+        Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, exception.Message);
+        Assert.DoesNotContain("payload", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, store.AcquireCallCount);
+    }
+
+    [Fact]
     public async Task AcquireAsync_RejectsUnsupportedOrIncompleteSourcesAndPreservesCancellation()
     {
         var store = new RecordingWizardSourceStore();
@@ -63,6 +127,9 @@ public sealed class PreviewSourceFactoryTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             factory.AcquireAsync(Pipeline(SourceType.PostgreSql), CancellationToken.None));
 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.AcquireAsync(Pipeline(SourceType.MongoDb), CancellationToken.None));
+
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -70,11 +137,23 @@ public sealed class PreviewSourceFactoryTests
         Assert.Equal(0, store.AcquireCallCount);
     }
 
-    private static PreviewSourceFactory CreateFactory(RecordingWizardSourceStore store) => new(
+    private static PreviewSourceFactory CreateFactory(
+        RecordingWizardSourceStore store,
+        IMongoSourceSchemaInferenceService? mongoInference = null) => new(
         store,
         new ThrowingConnectionFactory(),
         new ThrowingMetadataDiscoveryService(),
-        new PostgreSqlDeterministicOrderingResolver());
+        new PostgreSqlDeterministicOrderingResolver(),
+        new MongoMetadataDatabase(MongoOptions()),
+        MongoOptions(),
+        mongoInference ?? new RecordingMongoSchemaInferenceService(),
+        new SourceSchemaComparisonService());
+
+    private static MongoDbOptions MongoOptions() => new()
+    {
+        ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+        MetadataDatabaseName = "etl_tool_preview_source_factory_tests"
+    };
 
     private static PipelineDefinition Pipeline(SourceType sourceType) => new()
     {
@@ -156,5 +235,17 @@ public sealed class PreviewSourceFactoryTests
 
         public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingMongoSchemaInferenceService : IMongoSourceSchemaInferenceService
+    {
+        public Exception? Failure { get; init; }
+
+        public Task<IReadOnlyList<SourceFieldDefinition>> InferAsync(
+            MongoDbSourceOptions source,
+            CancellationToken cancellationToken) => Failure is null
+                ? Task.FromResult<IReadOnlyList<SourceFieldDefinition>>
+                    ([new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }])
+                : Task.FromException<IReadOnlyList<SourceFieldDefinition>>(Failure);
     }
 }

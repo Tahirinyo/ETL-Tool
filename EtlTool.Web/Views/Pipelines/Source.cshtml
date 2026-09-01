@@ -7,7 +7,7 @@
 
 <div class="mb-4">
     <h1 class="mb-1">Configure source</h1>
-    <p class="text-muted mb-0">Choose a CSV, modern Excel workbook, or PostgreSQL table to configure its schema.</p>
+    <p class="text-muted mb-0">Choose a CSV, modern Excel workbook, PostgreSQL table, or MongoDB collection to configure its schema.</p>
 </div>
 
 <div class="row"><div class="col-lg-8">
@@ -19,6 +19,7 @@
                 <option value="Csv">CSV</option>
                 <option value="Xlsx">Excel (.xlsx)</option>
                 <option value="PostgreSql">PostgreSQL</option>
+                <option value="MongoDb">MongoDB</option>
             </select>
         </div>
         <div id="file-source-fields">
@@ -77,6 +78,34 @@
             <div class="d-flex flex-wrap gap-2">
                 <button type="submit" class="btn btn-outline-primary" name="postgreSqlAction" value="refresh">Load options</button>
                 <button type="submit" class="btn btn-primary" name="postgreSqlAction" value="configure">Inspect table and configure mapping</button>
+            </div>
+        </div>
+        <div id="mongodb-source-fields">
+            <input asp-for="LoadedMongoDbDatabase" type="hidden" />
+            <div class="mb-3">
+                <label class="form-label">Connection</label>
+                <input class="form-control" value="Configured application MongoDB connection" readonly aria-describedby="mongodb-connection-help" />
+                <div id="mongodb-connection-help" class="form-text">Connection credentials are supplied by application configuration and are not stored with this pipeline.</div>
+            </div>
+            <div class="mb-3">
+                <label asp-for="MongoDbDatabase" class="form-label">Database</label>
+                <select asp-for="MongoDbDatabase" class="form-select" disabled="@(Model.MongoDbDatabases.Count == 0)">
+                    <option value="">Select a database</option>
+                    @foreach (var database in Model.MongoDbDatabases) { <option value="@database">@database</option> }
+                </select>
+                <span asp-validation-for="MongoDbDatabase" class="text-danger"></span>
+            </div>
+            <div class="mb-3">
+                <label asp-for="MongoDbCollection" class="form-label">Collection</label>
+                <select asp-for="MongoDbCollection" class="form-select" disabled="@(Model.MongoDbCollections.Count == 0)">
+                    <option value="">Select a collection</option>
+                    @foreach (var collection in Model.MongoDbCollections) { <option value="@collection">@collection</option> }
+                </select>
+                <span asp-validation-for="MongoDbCollection" class="text-danger"></span>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-outline-primary" name="mongoDbAction" value="refresh">Load options</button>
+                <button type="submit" class="btn btn-primary" name="mongoDbAction" value="configure">Inspect collection and configure mapping</button>
             </div>
         </div>
         <div class="mt-3"><a class="btn btn-outline-secondary" asp-action="Edit" asp-route-id="@pipelineId">Back to pipeline</a></div>
@@ -150,15 +179,22 @@
         const delimiter = document.getElementById('delimiter-group');
         const fileFields = document.getElementById('file-source-fields');
         const postgreSqlFields = document.getElementById('postgresql-source-fields');
+        const mongoDbFields = document.getElementById('mongodb-source-fields');
         const sync = () => {
             const isPostgreSql = type.value === 'PostgreSql';
-            fileFields.hidden = isPostgreSql;
+            const isMongoDb = type.value === 'MongoDb';
+            const isDatabaseSource = isPostgreSql || isMongoDb;
+            fileFields.hidden = isDatabaseSource;
             postgreSqlFields.hidden = !isPostgreSql;
+            mongoDbFields.hidden = !isMongoDb;
             delimiter.hidden = type.value !== 'Csv';
-            fileFields.querySelectorAll('input, select, button').forEach(element => element.disabled = isPostgreSql);
+            fileFields.querySelectorAll('input, select, button').forEach(element => element.disabled = isDatabaseSource);
             postgreSqlFields.querySelectorAll('input, button').forEach(element => element.disabled = !isPostgreSql);
             postgreSqlFields.querySelectorAll('select').forEach(element =>
                 element.disabled = !isPostgreSql || element.options.length <= 1);
+            mongoDbFields.querySelectorAll('input, button').forEach(element => element.disabled = !isMongoDb);
+            mongoDbFields.querySelectorAll('select').forEach(element =>
+                element.disabled = !isMongoDb || element.options.length <= 1);
         };
         type.addEventListener('change', sync); sync();
     </script>
