@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -22,11 +23,13 @@ using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.Reporting;
 using EtlTool.Infrastructure.Uploads;
+using EtlTool.IntegrationTests.Execution;
 using EtlTool.IntegrationTests.MongoDB;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Npgsql;
+using Xunit.Abstractions;
 
 namespace EtlTool.IntegrationTests.PostgreSql;
 
@@ -41,7 +44,8 @@ public sealed class PostgreSqlMongoExecutionCollection :
 [Collection(PostgreSqlMongoExecutionCollection.CollectionName)]
 public sealed class PostgreSqlMongoExecutionIntegrationTests(
     PostgreSqlFixture postgreSqlFixture,
-    MongoDbFixture mongoDbFixture)
+    MongoDbFixture mongoDbFixture,
+    ITestOutputHelper output)
 {
     [Fact]
     public async Task ExecuteAsync_StreamsSharedProcessingIntoMongoAndRerunsIdempotently()
@@ -502,6 +506,101 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
         }
     }
 
+    [BatchExecutionAcceptanceFact]
+    [Trait("Category", "Performance")]
+    public async Task ExecuteAsync_Streams100kPostgreSqlRowsIntoMongoInConfiguredBatches()
+    {
+        const int sourceRowCount = 100_000;
+        const int batchSize = 1_000;
+        await using var testDatabase = mongoDbFixture.CreateDatabase();
+        var schema = $"db12_performance_{Guid.NewGuid():N}";
+        var table = "performance_rows";
+        var targetDatabase = $"{testDatabase.DatabaseName}_target";
+        var targetCollection = "customers";
+        var temporaryRoot = Path.Combine(Path.GetTempPath(), $"EtlTool-DB12-Performance-{Guid.NewGuid():N}");
+        var factory = CreatePostgreSqlFactory();
+        await using var setupConnection = await factory.OpenAsync("ReportingDb", CancellationToken.None);
+        var snapshots = new List<MemorySnapshot>();
+
+        try
+        {
+            await ExecuteSqlAsync(
+                setupConnection,
+                $"CREATE SCHEMA \"{schema}\"; " +
+                $"CREATE TABLE \"{schema}\".\"{table}\" " +
+                "(\"Source Id\" integer PRIMARY KEY, \"Kind\" text NOT NULL, " +
+                "\"Logical Id\" text NOT NULL, \"Name\" text NOT NULL, \"Amount\" text NOT NULL); " +
+                $"INSERT INTO \"{schema}\".\"{table}\" " +
+                "SELECT value, 'normal', 'customer-' || value, ' Customer ' || value || ' ', '1' " +
+                $"FROM generate_series(1, {sourceRowCount}) AS value;");
+
+            var pipeline = Pipeline(
+                GetPostgreSqlDatabaseName(),
+                schema,
+                table,
+                targetDatabase,
+                targetCollection);
+            var sourceStore = new TrackingRunSourceStore(CreateRunSourceStore(factory, temporaryRoot));
+            ForceFullCollection();
+            snapshots.Add(CaptureSnapshot("Baseline", 0));
+            var stopwatch = Stopwatch.StartNew();
+            var loader = new TrackingLoader(
+                testDatabase.Loader,
+                sourceStore,
+                (batchNumber, rowsRead) => snapshots.Add(CaptureSnapshot(
+                    $"Batch{batchNumber}",
+                    rowsRead)));
+            var executor = CreateExecutor(
+                testDatabase,
+                factory,
+                temporaryRoot,
+                batchSize,
+                loader,
+                sourceStore);
+            var run = Run(pipeline);
+            await testDatabase.EtlRunRepository.AddAsync(run, CancellationToken.None);
+
+            await executor.ExecuteAsync(new BackgroundJob(run.Id), CancellationToken.None);
+            stopwatch.Stop();
+            ForceFullCollection();
+            snapshots.Add(CaptureSnapshot("PostRun", sourceStore.RowsRead));
+
+            var completed = Assert.IsType<EtlRun>(await testDatabase.EtlRunRepository.GetByIdAsync(
+                run.Id,
+                CancellationToken.None));
+            Assert.Equal(EtlRunStatus.Completed, completed.Status);
+            Assert.Equal(
+                (100_000L, 100_000L, 0L, 0L, 0L, 100_000L, 0L),
+                Counters(completed));
+            Assert.Equal(sourceRowCount / batchSize, loader.BatchCount);
+            Assert.Equal(batchSize, loader.FirstBatchSize);
+            Assert.True(loader.SourceRowsReadAtFirstLoad > 0);
+            Assert.True(
+                loader.SourceRowsReadAtFirstLoad < sourceRowCount,
+                "The first MongoDB batch was not written until all PostgreSQL source rows were enumerated.");
+            var target = testDatabase.Client
+                .GetDatabase(targetDatabase)
+                .GetCollection<BsonDocument>(targetCollection);
+            Assert.Equal(sourceRowCount, await target.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty));
+
+            WritePerformanceMeasurements(
+                sourceRowCount,
+                batchSize,
+                stopwatch.Elapsed,
+                loader.SourceRowsReadAtFirstLoad,
+                snapshots);
+        }
+        finally
+        {
+            await ExecuteSqlAsync(setupConnection, $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE;");
+            await testDatabase.Client.DropDatabaseAsync(targetDatabase);
+            if (Directory.Exists(temporaryRoot))
+            {
+                Directory.Delete(temporaryRoot, recursive: true);
+            }
+        }
+    }
+
     private PostgreSqlConnectionFactory CreatePostgreSqlFactory() => new(
         new PostgreSqlConnectionOptions
         {
@@ -758,6 +857,50 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
         await command.ExecuteNonQueryAsync();
     }
 
+    private void WritePerformanceMeasurements(
+        int sourceRowCount,
+        int batchSize,
+        TimeSpan elapsed,
+        long sourceRowsReadAtFirstLoad,
+        IReadOnlyList<MemorySnapshot> snapshots)
+    {
+        var baseline = snapshots[0];
+        var peak = snapshots.MaxBy(snapshot => snapshot.PrivateMemoryBytes)!;
+        var postRun = snapshots[^1];
+        output.WriteLine($"Source: PostgreSQL {sourceRowCount:N0} rows.");
+        output.WriteLine($"Batch size: {batchSize:N0}.");
+        output.WriteLine($"First MongoDB batch after {sourceRowsReadAtFirstLoad:N0}/{sourceRowCount:N0} source rows.");
+        output.WriteLine($"Elapsed: {elapsed.TotalMilliseconds:F0} ms.");
+        output.WriteLine("Snapshot           Rows  ManagedMiB  WorkingSetMiB  PrivateMiB");
+        foreach (var snapshot in new[] { baseline, peak, postRun }.Distinct())
+        {
+            output.WriteLine(
+                $"{snapshot.Name,-16} {snapshot.RowsRead,6:N0} " +
+                $"{ToMiB(snapshot.ManagedBytes),11:F2} {ToMiB(snapshot.WorkingSetBytes),14:F2} {ToMiB(snapshot.PrivateMemoryBytes),11:F2}");
+        }
+    }
+
+    private static MemorySnapshot CaptureSnapshot(string name, long rowsRead)
+    {
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        return new MemorySnapshot(
+            name,
+            rowsRead,
+            GC.GetTotalMemory(forceFullCollection: false),
+            process.WorkingSet64,
+            process.PrivateMemorySize64);
+    }
+
+    private static void ForceFullCollection()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+    }
+
+    private static double ToMiB(long bytes) => bytes / 1024d / 1024d;
+
     private sealed class BlockingAfterFirstLoadLoader(IDataLoader inner) : IDataLoader
     {
         private int _callCount;
@@ -785,6 +928,82 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
             throw new InvalidOperationException("The blocked load unexpectedly resumed.");
         }
     }
+
+    private sealed class TrackingLoader(
+        IDataLoader inner,
+        TrackingRunSourceStore sourceStore,
+        Action<int, long> onBatchStarting) : IDataLoader
+    {
+        private int _batchCount;
+
+        public int BatchCount => _batchCount;
+
+        public int FirstBatchSize { get; private set; }
+
+        public long SourceRowsReadAtFirstLoad { get; private set; }
+
+        public async Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken)
+        {
+            var batchNumber = Interlocked.Increment(ref _batchCount);
+            var rowsRead = sourceStore.RowsRead;
+            if (batchNumber == 1)
+            {
+                FirstBatchSize = rows.Count;
+                SourceRowsReadAtFirstLoad = rowsRead;
+            }
+
+            onBatchStarting(batchNumber, rowsRead);
+            return await inner.UpsertBatchAsync(rows, target, upsertKeyField, cancellationToken);
+        }
+    }
+
+    private sealed class TrackingRunSourceStore(IRunSourceStore inner) : IRunSourceStore
+    {
+        private TrackingSource? _source;
+
+        public long RowsRead => _source?.RowsRead ?? 0;
+
+        public async Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
+        {
+            _source = new TrackingSource(await inner.OpenAsync(run, cancellationToken));
+            return _source;
+        }
+
+        public Task ReleaseAsync(EtlRun run, CancellationToken cancellationToken) =>
+            inner.ReleaseAsync(run, cancellationToken);
+
+        private sealed class TrackingSource(IEtlSource innerSource) : IEtlSource
+        {
+            private long _rowsRead;
+
+            public long RowsRead => Interlocked.Read(ref _rowsRead);
+
+            public async IAsyncEnumerable<DataRow> ReadAsync(
+                [EnumeratorCancellation] CancellationToken cancellationToken)
+            {
+                await foreach (var row in innerSource
+                    .ReadAsync(cancellationToken)
+                    .WithCancellation(cancellationToken))
+                {
+                    Interlocked.Increment(ref _rowsRead);
+                    yield return row;
+                }
+            }
+
+            public ValueTask DisposeAsync() => innerSource.DisposeAsync();
+        }
+    }
+
+    private sealed record MemorySnapshot(
+        string Name,
+        long RowsRead,
+        long ManagedBytes,
+        long WorkingSetBytes,
+        long PrivateMemoryBytes);
 
     private sealed class FailingAfterFirstRowRunSourceStore(IRunSourceStore inner) : IRunSourceStore
     {
