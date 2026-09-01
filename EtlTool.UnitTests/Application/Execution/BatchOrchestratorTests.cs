@@ -18,6 +18,98 @@ namespace EtlTool.UnitTests.Application.Execution;
 public sealed class BatchOrchestratorTests
 {
     [Fact]
+    public async Task ExecuteWithLoadResultAsync_UsesPublicLoaderPathInPreparationBeforeSourceAndBatchLoad()
+    {
+        var events = new List<string>();
+        var source = new RecordingEtlSource([Row(2, ("Value", "value"))], events);
+        var loader = new DelegatingLoader(
+            token =>
+            {
+                events.Add("prepare");
+                return Task.CompletedTask;
+            },
+            (rows, _) =>
+            {
+                events.Add("load");
+                return Task.FromResult(new BatchLoadResult(rows.Count, 0));
+            });
+
+        var result = await ProductionOrchestrator(batchSize: 1)
+            .ExecuteWithLoadResultAsync(
+                source,
+                ReadyPipeline(),
+                loader,
+                static (_, _) => Task.CompletedTask,
+                static (_, _) => Task.CompletedTask,
+                CancellationToken.None);
+
+        Assert.Equal(["prepare", "source", "load"], events);
+        Assert.Equal(1, loader.PrepareCallCount);
+        Assert.Equal(1, loader.LoadCallCount);
+        Assert.Equal(1, result.InsertedRows);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_PreparationFailurePreventsSourceAndLoadWithoutProgress()
+    {
+        var source = new RecordingEtlSource([Row(2, ("Value", "value"))]);
+        var loader = new DelegatingLoader(
+            _ => Task.FromException(new InvalidOperationException("Preparation failed.")),
+            (rows, _) => Task.FromResult(new BatchLoadResult(rows.Count, 0)));
+        var progress = new List<BatchExecutionProgress>();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ProductionOrchestrator(batchSize: 1).ExecuteWithLoadResultAsync(
+                source,
+                ReadyPipeline(),
+                loader,
+                static (_, _) => Task.CompletedTask,
+                (snapshot, _) =>
+                {
+                    progress.Add(snapshot);
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None));
+
+        Assert.Equal(1, loader.PrepareCallCount);
+        Assert.Equal(0, source.EnumerationCount);
+        Assert.Equal(0, loader.LoadCallCount);
+        Assert.Empty(progress);
+    }
+
+    [Fact]
+    public async Task ExecuteWithLoadResultAsync_PreparationCancellationPreventsSourceAndLoad()
+    {
+        var preparationStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new RecordingEtlSource([Row(2, ("Value", "value"))]);
+        var loader = new DelegatingLoader(
+            async token =>
+            {
+                preparationStarted.SetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            },
+            (rows, _) => Task.FromResult(new BatchLoadResult(rows.Count, 0)));
+        using var cancellation = new CancellationTokenSource();
+
+        var execution = ProductionOrchestrator(batchSize: 1).ExecuteWithLoadResultAsync(
+            source,
+            ReadyPipeline(),
+            loader,
+            static (_, _) => Task.CompletedTask,
+            static (_, _) => Task.CompletedTask,
+            cancellation.Token);
+
+        await preparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        Assert.Equal(1, loader.PrepareCallCount);
+        Assert.Equal(0, source.EnumerationCount);
+        Assert.Equal(0, loader.LoadCallCount);
+    }
+
+    [Fact]
     public async Task ExecuteWithLoadResultAsync_AccumulatesOnlyConfirmedLoadCounters()
     {
         var rows = new[]
@@ -1244,9 +1336,26 @@ public sealed class BatchOrchestratorTests
                     mappingService,
                     new TransformationEngine(new TransformationHandlerRegistry(transformations ?? [])),
                     new ValidationEngine(new ValidationHandlerRegistry(validations ?? []))),
-                resolvedTargetAccessService,
                 new BatchExecutionOptions { BatchSize = batchSize }),
-            resolver);
+            resolver,
+            resolvedTargetAccessService);
+    }
+
+    private static BatchOrchestrator ProductionOrchestrator(
+        int batchSize,
+        IMongoTargetAccessService? targetAccessService = null)
+    {
+        var mappingService = new FieldMappingService();
+        return new BatchOrchestrator(
+            new PipelineReadinessService(
+                new NullRepository(),
+                mappingService,
+                targetAccessService ?? AllowedTargetAccessService.Instance),
+            new PipelineRowProcessor(
+                mappingService,
+                new TransformationEngine(new TransformationHandlerRegistry([])),
+                new ValidationEngine(new ValidationHandlerRegistry([]))),
+            new BatchExecutionOptions { BatchSize = batchSize });
     }
 
     private static PipelineDefinition ReadyPipeline(params string[] sourceFields) => new()
@@ -1327,20 +1436,32 @@ public sealed class BatchOrchestratorTests
 
     private sealed class TestBatchOrchestrator(
         BatchOrchestrator inner,
-        IFileExtractorResolver resolver)
+        IFileExtractorResolver resolver,
+        IMongoTargetAccessService targetAccessService)
     {
         public Task<BatchExecutionResult> ExecuteAsync(
             Stream source,
-            PipelineDefinition pipeline,
-            Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
-            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
-            CancellationToken cancellationToken) =>
-            inner.ExecuteAsync(
+        PipelineDefinition pipeline,
+        Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+        CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(processBatchAsync);
+
+            return inner.ExecuteWithLoadResultAsync(
                 Wrap(source, pipeline),
                 pipeline,
-                processBatchAsync,
+                new CallbackLoader(
+                    async (batch, token) =>
+                    {
+                        await processBatchAsync(batch, token);
+                        return BatchLoadResult.Empty;
+                    },
+                    targetAccessService),
+                static (_, _) => Task.CompletedTask,
                 reportProgressAsync,
                 cancellationToken);
+        }
 
         public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
             Stream source,
@@ -1351,7 +1472,8 @@ public sealed class BatchOrchestratorTests
             inner.ExecuteWithLoadResultAsync(
                 Wrap(source, pipeline),
                 pipeline,
-                processBatchAsync,
+                new CallbackLoader(processBatchAsync, targetAccessService),
+                static (_, _) => Task.CompletedTask,
                 reportProgressAsync,
                 cancellationToken);
 
@@ -1365,13 +1487,39 @@ public sealed class BatchOrchestratorTests
             inner.ExecuteWithLoadResultAsync(
                 Wrap(source, pipeline),
                 pipeline,
-                processBatchAsync,
+                new CallbackLoader(processBatchAsync, targetAccessService),
                 reportInvalidRowAsync,
                 reportProgressAsync,
                 cancellationToken);
 
         private IEtlSource Wrap(Stream source, PipelineDefinition pipeline) =>
             source is null ? null! : new TestEtlSource(source, resolver, pipeline);
+
+        private sealed class CallbackLoader(
+            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> load,
+            IMongoTargetAccessService accessService) : IDataLoader
+        {
+            public DestinationType DestinationType => DestinationType.MongoDb;
+
+            public async Task PrepareAsync(
+                PipelineDefinition pipeline,
+                CancellationToken cancellationToken)
+            {
+                var target = new MongoTarget(
+                    pipeline.DestinationDatabase,
+                    pipeline.DestinationCollection);
+                await accessService.EnsureAccessibleAsync(target, cancellationToken);
+                await accessService.EnsureUpsertIndexAsync(
+                    target,
+                    pipeline.UpsertKeyField,
+                    cancellationToken);
+            }
+
+            public Task<BatchLoadResult> UpsertBatchAsync(
+                IReadOnlyList<DataRow> rows,
+                PipelineDefinition pipeline,
+                CancellationToken cancellationToken) => load(rows, cancellationToken);
+        }
     }
 
     private sealed class TestEtlSource : IEtlSource
@@ -1400,6 +1548,57 @@ public sealed class BatchOrchestratorTests
                 .ReadAsync(_stream, _pipeline.SourceOptions, cancellationToken);
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingEtlSource(
+        IReadOnlyList<DataRow> rows,
+        List<string>? events = null) : IEtlSource
+    {
+        public int EnumerationCount { get; private set; }
+
+        public async IAsyncEnumerable<DataRow> ReadAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            EnumerationCount++;
+            events?.Add("source");
+
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Yield();
+                yield return row;
+            }
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DelegatingLoader(
+        Func<CancellationToken, Task> prepare,
+        Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> load) : IDataLoader
+    {
+        public int PrepareCallCount { get; private set; }
+
+        public int LoadCallCount { get; private set; }
+
+        public DestinationType DestinationType => DestinationType.MongoDb;
+
+        public Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            PrepareCallCount++;
+            return prepare(cancellationToken);
+        }
+
+        public Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            LoadCallCount++;
+            return load(rows, cancellationToken);
+        }
     }
 
     private sealed class SequenceExtractor(

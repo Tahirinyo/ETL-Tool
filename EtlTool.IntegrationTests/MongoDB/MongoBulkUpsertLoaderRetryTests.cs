@@ -1,6 +1,8 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using EtlTool.Infrastructure.MongoDB;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -9,6 +11,34 @@ namespace EtlTool.IntegrationTests.MongoDB;
 
 public sealed class MongoBulkUpsertLoaderRetryTests
 {
+    [Fact]
+    public async Task PrepareAsync_UsesPipelineTargetAndUpsertKeyWithOriginalCancellationToken()
+    {
+        var access = new RecordingTargetAccessService();
+        var loader = Loader(
+            new StubWriter(),
+            maximumAttempts: 1,
+            delayMilliseconds: 0,
+            access);
+        var pipeline = new PipelineDefinition
+        {
+            DestinationType = DestinationType.MongoDb,
+            DestinationDatabase = "target_db",
+            DestinationCollection = "rows",
+            UpsertKeyField = "id"
+        };
+        using var cancellation = new CancellationTokenSource();
+
+        await loader.PrepareAsync(pipeline, cancellation.Token);
+
+        Assert.Equal(DestinationType.MongoDb, loader.DestinationType);
+        Assert.Equal(new MongoTarget("target_db", "rows"), access.AccessTarget);
+        Assert.Equal(access.AccessTarget, access.IndexTarget);
+        Assert.Equal("id", access.UpsertKeyField);
+        Assert.Equal(cancellation.Token, access.AccessToken);
+        Assert.Equal(cancellation.Token, access.IndexToken);
+    }
+
     [Fact]
     public async Task Loader_CreatesOneReplacementUpsertPerRowUsingCanonicalKey()
     {
@@ -207,7 +237,8 @@ public sealed class MongoBulkUpsertLoaderRetryTests
     private static MongoBulkUpsertLoader Loader(
         IMongoBulkWriteExecutor writer,
         int maximumAttempts,
-        int delayMilliseconds)
+        int delayMilliseconds,
+        IMongoTargetAccessService? targetAccessService = null)
     {
         var options = new MongoDbOptions
         {
@@ -218,6 +249,7 @@ public sealed class MongoBulkUpsertLoaderRetryTests
         };
         return new MongoBulkUpsertLoader(
             new MongoMetadataDatabase(options),
+            targetAccessService ?? AllowedTargetAccessService.Instance,
             options,
             writer);
     }
@@ -268,6 +300,59 @@ public sealed class MongoBulkUpsertLoaderRetryTests
             Attempts++;
             LastRequests = requests;
             return Execute(Attempts);
+        }
+    }
+
+    private sealed class AllowedTargetAccessService : IMongoTargetAccessService
+    {
+        public static AllowedTargetAccessService Instance { get; } = new();
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(
+            MongoTarget target,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingTargetAccessService : IMongoTargetAccessService
+    {
+        public MongoTarget? AccessTarget { get; private set; }
+
+        public MongoTarget? IndexTarget { get; private set; }
+
+        public string? UpsertKeyField { get; private set; }
+
+        public CancellationToken AccessToken { get; private set; }
+
+        public CancellationToken IndexToken { get; private set; }
+
+        public MongoTargetValidationResult Validate(MongoTarget target) =>
+            MongoTargetValidationResult.Allowed;
+
+        public Task EnsureAccessibleAsync(
+            MongoTarget target,
+            CancellationToken cancellationToken)
+        {
+            AccessTarget = target;
+            AccessToken = cancellationToken;
+            return Task.CompletedTask;
+        }
+
+        public Task EnsureUpsertIndexAsync(
+            MongoTarget target,
+            string upsertKeyField,
+            CancellationToken cancellationToken)
+        {
+            IndexTarget = target;
+            UpsertKeyField = upsertKeyField;
+            IndexToken = cancellationToken;
+            return Task.CompletedTask;
         }
     }
 }

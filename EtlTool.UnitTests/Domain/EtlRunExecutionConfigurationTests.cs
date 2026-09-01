@@ -79,6 +79,7 @@ public sealed class EtlRunExecutionConfigurationTests
                     ErrorMessage = "Customer identifier is required."
                 }
             ],
+            DestinationType = DestinationType.PostgreSql,
             DestinationDatabase = "admitted_database",
             DestinationCollection = "admitted_collection",
             UpsertKeyField = "customer_id",
@@ -107,6 +108,7 @@ public sealed class EtlRunExecutionConfigurationTests
         pipeline.ValidationRules[0].Field = "edited_id";
         pipeline.ValidationRules[0].Configuration["Mode"] = "Edited";
         pipeline.ValidationRules[0].ErrorMessage = "Edited message";
+        pipeline.DestinationType = DestinationType.MongoDb;
         pipeline.DestinationDatabase = "edited_database";
         pipeline.DestinationCollection = "edited_collection";
         pipeline.UpsertKeyField = "edited_id";
@@ -135,6 +137,7 @@ public sealed class EtlRunExecutionConfigurationTests
         Assert.Equal("customer_id", snapshot.ValidationRules[0].Field);
         Assert.Equal("Strict", snapshot.ValidationRules[0].Configuration["Mode"]);
         Assert.Equal("Customer identifier is required.", snapshot.ValidationRules[0].ErrorMessage);
+        Assert.Equal(DestinationType.PostgreSql, snapshot.DestinationType);
         Assert.Equal("admitted_database", snapshot.DestinationDatabase);
         Assert.Equal("admitted_collection", snapshot.DestinationCollection);
         Assert.Equal("customer_id", snapshot.UpsertKeyField);
@@ -152,6 +155,7 @@ public sealed class EtlRunExecutionConfigurationTests
     {
         var snapshot = EtlRunExecutionConfiguration.Capture(new PipelineDefinition
         {
+            DestinationType = DestinationType.PostgreSql,
             SourceOptions = new SourceOptions { CultureName = "tr-TR" },
             PostgreSqlSource = new PostgreSqlSourceOptions
             {
@@ -190,6 +194,7 @@ public sealed class EtlRunExecutionConfigurationTests
         });
 
         var runtime = snapshot.ToPipelineDefinition();
+        runtime.DestinationType = DestinationType.MongoDb;
         runtime.SourceOptions.CultureName = "en-US";
         runtime.PostgreSqlSource!.Table = "edited";
         runtime.MongoDbSource!.Collection = "edited";
@@ -199,6 +204,7 @@ public sealed class EtlRunExecutionConfigurationTests
         runtime.ValidationRules[0].Configuration["Value"] = "edited";
 
         Assert.Equal("tr-TR", snapshot.SourceOptions.CultureName);
+        Assert.Equal(DestinationType.PostgreSql, snapshot.DestinationType);
         Assert.Equal("customers", snapshot.PostgreSqlSource!.Table);
         Assert.Equal("audit", snapshot.MongoDbSource!.Collection);
         Assert.Equal("Id", snapshot.ExpectedSchema[0].Name);

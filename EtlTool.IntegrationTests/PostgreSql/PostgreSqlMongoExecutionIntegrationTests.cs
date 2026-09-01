@@ -806,14 +806,13 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
         var orchestrator = new BatchOrchestrator(
             readiness,
             processor,
-            testDatabase.TargetAccessService,
             new BatchExecutionOptions { BatchSize = batchSize });
         var errorReportStore = CreateErrorReportStore(temporaryRoot);
 
         return new EtlRunBackgroundJobExecutor(
             testDatabase.EtlRunRepository,
             orchestrator,
-            loader ?? testDatabase.Loader,
+            new DataLoaderResolver([loader ?? testDatabase.Loader]),
             TimeProvider.System,
             new CsvErrorReportWriter(),
             sourceStore ?? CreateRunSourceStore(postgreSqlFactory, temporaryRoot),
@@ -918,21 +917,26 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
     {
         private int _callCount;
 
+        public DestinationType DestinationType => inner.DestinationType;
+
         public TaskCompletionSource SecondCallEntered { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) =>
+            inner.PrepareAsync(pipeline, cancellationToken);
+
         public async Task<BatchLoadResult> UpsertBatchAsync(
             IReadOnlyList<DataRow> rows,
-            MongoTarget target,
-            string upsertKeyField,
+            PipelineDefinition pipeline,
             CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _callCount) == 1)
             {
                 return await inner.UpsertBatchAsync(
                     rows,
-                    target,
-                    upsertKeyField,
+                    pipeline,
                     cancellationToken);
             }
 
@@ -949,16 +953,22 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
     {
         private int _batchCount;
 
+        public DestinationType DestinationType => inner.DestinationType;
+
         public int BatchCount => _batchCount;
 
         public int FirstBatchSize { get; private set; }
 
         public long SourceRowsReadAtFirstLoad { get; private set; }
 
+        public Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) =>
+            inner.PrepareAsync(pipeline, cancellationToken);
+
         public async Task<BatchLoadResult> UpsertBatchAsync(
             IReadOnlyList<DataRow> rows,
-            MongoTarget target,
-            string upsertKeyField,
+            PipelineDefinition pipeline,
             CancellationToken cancellationToken)
         {
             var batchNumber = Interlocked.Increment(ref _batchCount);
@@ -970,7 +980,7 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
             }
 
             onBatchStarting(batchNumber, rowsRead);
-            return await inner.UpsertBatchAsync(rows, target, upsertKeyField, cancellationToken);
+            return await inner.UpsertBatchAsync(rows, pipeline, cancellationToken);
         }
     }
 

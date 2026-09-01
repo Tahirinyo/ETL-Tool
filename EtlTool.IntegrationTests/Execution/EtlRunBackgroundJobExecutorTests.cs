@@ -78,7 +78,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         var executor = new EtlRunBackgroundJobExecutor(
             runRepository,
             orchestrator,
-            loader,
+            new DataLoaderResolver([loader]),
             new FixedTimeProvider(),
             sourceFiles,
             new CsvErrorReportWriter(),
@@ -92,6 +92,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         reusablePipeline.DestinationDatabase = "edited_database";
         reusablePipeline.DestinationCollection = "edited_collection";
         reusablePipeline.UpsertKeyField = "edited_id";
+        reusablePipeline.DestinationType = DestinationType.PostgreSql;
 
         await executor.ExecuteAsync(
             Assert.Single(queue.Jobs),
@@ -105,9 +106,10 @@ public sealed class EtlRunBackgroundJobExecutorTests
         Assert.Equal("admitted_database", executed.DestinationDatabase);
         Assert.Equal("admitted_collection", executed.DestinationCollection);
         Assert.Equal("customer_id", executed.UpsertKeyField);
-        Assert.Equal("admitted_database", loader.LastTarget!.DatabaseName);
-        Assert.Equal("admitted_collection", loader.LastTarget.CollectionName);
-        Assert.Equal("customer_id", loader.LastUpsertKeyField);
+        Assert.Equal(DestinationType.MongoDb, executed.DestinationType);
+        Assert.Equal("admitted_database", loader.LastPipeline!.DestinationDatabase);
+        Assert.Equal("admitted_collection", loader.LastPipeline.DestinationCollection);
+        Assert.Equal("customer_id", loader.LastPipeline.UpsertKeyField);
     }
 
     [Fact]
@@ -774,7 +776,7 @@ public sealed class EtlRunBackgroundJobExecutorTests
         var executor = new EtlRunBackgroundJobExecutor(
             runs,
             orchestrator,
-            loader,
+            new DataLoaderResolver([loader]),
             new FixedTimeProvider(),
             sourceFiles,
             errorReportWriter ?? new CsvErrorReportWriter(),
@@ -1231,42 +1233,19 @@ public sealed class EtlRunBackgroundJobExecutorTests
             CancellationToken,
             Task<BatchExecutionResult>> Execute { get; set; } = DefaultExecute;
 
-        public Task<BatchExecutionResult> ExecuteAsync(
+        public async Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
             IEtlSource source,
             PipelineDefinition pipeline,
-            Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
-            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
-
-        public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-            IEtlSource source,
-            PipelineDefinition pipeline,
-            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
-            Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
-            CancellationToken cancellationToken)
-        {
-            LastPipeline = pipeline;
-            ExecutionCount++;
-            return Execute(
-                processBatchAsync,
-                static (_, _) => Task.CompletedTask,
-                reportProgressAsync,
-                source,
-                cancellationToken);
-        }
-
-        public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-            IEtlSource source,
-            PipelineDefinition pipeline,
-            Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
+            IDataLoader loader,
             Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
             Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
             CancellationToken cancellationToken)
         {
             LastPipeline = pipeline;
             ExecutionCount++;
-            return Execute(
-                processBatchAsync,
+            await loader.PrepareAsync(pipeline, cancellationToken);
+            return await Execute(
+                (rows, token) => loader.UpsertBatchAsync(rows, pipeline, token),
                 reportInvalidRowAsync,
                 reportProgressAsync,
                 source,
@@ -1289,23 +1268,32 @@ public sealed class EtlRunBackgroundJobExecutorTests
 
     private sealed class StubLoader : IDataLoader
     {
+        public DestinationType DestinationType => DestinationType.MongoDb;
+
         public BatchLoadResult Result { get; set; } = BatchLoadResult.Empty;
 
         public int CallCount { get; private set; }
 
-        public Application.MongoDB.MongoTarget? LastTarget { get; private set; }
+        public PipelineDefinition? LastPipeline { get; private set; }
 
-        public string? LastUpsertKeyField { get; private set; }
+        public int PrepareCallCount { get; private set; }
+
+        public Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            PrepareCallCount++;
+            LastPipeline = pipeline;
+            return Task.CompletedTask;
+        }
 
         public Task<BatchLoadResult> UpsertBatchAsync(
             IReadOnlyList<DataRow> rows,
-            Application.MongoDB.MongoTarget target,
-            string upsertKeyField,
+            PipelineDefinition pipeline,
             CancellationToken cancellationToken)
         {
             CallCount++;
-            LastTarget = target;
-            LastUpsertKeyField = upsertKeyField;
+            LastPipeline = pipeline;
             return Task.FromResult(Result);
         }
     }

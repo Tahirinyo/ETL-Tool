@@ -23,6 +23,8 @@ public sealed class EtlRunExecutionConfiguration
 
     public List<ValidationRule> ValidationRules { get; set; } = [];
 
+    public DestinationType DestinationType { get; set; } = DestinationType.MongoDb;
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;
@@ -44,6 +46,7 @@ public sealed class EtlRunExecutionConfiguration
             RequiresRemapping = pipeline.RequiresRemapping,
             TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
             ValidationRules = pipeline.ValidationRules.Select(Copy).ToList(),
+            DestinationType = pipeline.DestinationType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField
@@ -61,6 +64,7 @@ public sealed class EtlRunExecutionConfiguration
         RequiresRemapping = RequiresRemapping,
         TransformationRules = TransformationRules.Select(Copy).ToList(),
         ValidationRules = ValidationRules.Select(Copy).ToList(),
+        DestinationType = DestinationType,
         DestinationDatabase = DestinationDatabase,
         DestinationCollection = DestinationCollection,
         UpsertKeyField = UpsertKeyField

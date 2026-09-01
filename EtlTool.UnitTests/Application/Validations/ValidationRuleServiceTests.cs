@@ -30,6 +30,7 @@ public sealed class ValidationRuleServiceTests
         Assert.Equal(Now, repository.UpdatedPipeline!.UpdatedAt);
         Assert.Single(repository.UpdatedPipeline.ValidationRules);
         Assert.Same(pipeline.TransformationRules, repository.UpdatedPipeline.TransformationRules);
+        Assert.Equal(DestinationType.PostgreSql, repository.UpdatedPipeline.DestinationType);
     }
 
     [Theory]
@@ -266,7 +267,8 @@ public sealed class ValidationRuleServiceTests
 
     private static PipelineDefinition Pipeline() => new()
     {
-        Id = Guid.NewGuid(), Name = "Import", CreatedAt = Now.AddDays(-1), UpdatedAt = Now.AddHours(-1),
+        Id = Guid.NewGuid(), Name = "Import", DestinationType = DestinationType.PostgreSql,
+        CreatedAt = Now.AddDays(-1), UpdatedAt = Now.AddHours(-1),
         FieldMappings =
         [
             new() { SourceField = "Email", TargetField = "email", IsIncluded = true },

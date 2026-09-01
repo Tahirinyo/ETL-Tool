@@ -39,6 +39,27 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
     }
 
     [Fact]
+    public async Task GetByIdAsync_LegacyPipelineWithoutDestinationTypeDefaultsToMongoDb()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        var pipelineId = Guid.NewGuid();
+        var collection = testDatabase.Database.GetCollection<BsonDocument>(
+            MongoMetadataCollectionNames.PipelineDefinitions);
+        await collection.InsertOneAsync(new BsonDocument
+        {
+            ["_id"] = new BsonBinaryData(pipelineId, GuidRepresentation.Standard),
+            [nameof(PipelineDefinition.Name)] = "Legacy MongoDB pipeline"
+        });
+
+        var persisted = await testDatabase.Repository.GetByIdAsync(
+            pipelineId,
+            CancellationToken.None);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(DestinationType.MongoDb, persisted.DestinationType);
+    }
+
+    [Fact]
     public async Task AddAndGetAsync_RoundTripsPostgreSqlSourceMetadataWithoutCredentials()
     {
         await using var testDatabase = fixture.CreateDatabase();
@@ -329,6 +350,7 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
                     ErrorMessage = "Email is invalid."
                 }
             ],
+            DestinationType = DestinationType.PostgreSql,
             DestinationDatabase = $"destination_{Guid.NewGuid():N}",
             DestinationCollection = "customers",
             UpsertKeyField = "customer_id",
@@ -369,6 +391,7 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
         Assert.Equal(expected.Name, actual.Name);
         Assert.Equal(expected.Description, actual.Description);
         Assert.Equal(expected.SourceType, actual.SourceType);
+        Assert.Equal(expected.DestinationType, actual.DestinationType);
         Assert.Equal(expected.SourceOptions.CultureName, actual.SourceOptions.CultureName);
         Assert.Equal(expected.SourceOptions.DateFormat, actual.SourceOptions.DateFormat);
         Assert.Equal(expected.SourceOptions.Delimiter, actual.SourceOptions.Delimiter);

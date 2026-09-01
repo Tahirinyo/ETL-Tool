@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
@@ -57,15 +58,8 @@ public sealed class MongoIndexedBatchOrchestratorPerformanceAcceptanceTests(
             result = await orchestrator.ExecuteWithLoadResultAsync(
                 source,
                 pipeline,
-                async (batch, cancellationToken) =>
-                {
-                    batches++;
-                    return await database.Loader.UpsertBatchAsync(
-                        batch,
-                        target,
-                        pipeline.UpsertKeyField,
-                        cancellationToken);
-                },
+                new CountingLoader(database.Loader, () => batches++),
+                static (_, _) => Task.CompletedTask,
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None);
         }
@@ -128,8 +122,26 @@ public sealed class MongoIndexedBatchOrchestratorPerformanceAcceptanceTests(
                     new NumericRangeValidationHandler(),
                     new DateRangeValidationHandler()
                 ]))),
-            targetAccessService,
             new BatchExecutionOptions { BatchSize = BatchSize });
+    }
+
+    private sealed class CountingLoader(IDataLoader inner, Action onLoad) : IDataLoader
+    {
+        public DestinationType DestinationType => inner.DestinationType;
+
+        public Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) =>
+            inner.PrepareAsync(pipeline, cancellationToken);
+
+        public Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            onLoad();
+            return inner.UpsertBatchAsync(rows, pipeline, cancellationToken);
+        }
     }
 
     private static PipelineDefinition CreatePipeline(MongoTarget target) => new()

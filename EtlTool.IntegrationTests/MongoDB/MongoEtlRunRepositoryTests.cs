@@ -56,6 +56,34 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
     }
 
     [Fact]
+    public async Task GetByIdAsync_LegacyExecutionConfigurationWithoutDestinationTypeDefaultsToMongoDb()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        var run = CreateRun();
+        await testDatabase.EtlRunRepository.AddAsync(run, CancellationToken.None);
+        var collection = testDatabase.Database.GetCollection<BsonDocument>(
+            MongoMetadataCollectionNames.EtlRuns);
+        await collection.UpdateOneAsync(
+            new BsonDocument(
+                "_id",
+                new BsonBinaryData(run.Id, GuidRepresentation.Standard)),
+            new BsonDocument(
+                "$unset",
+                new BsonDocument(
+                    $"{nameof(EtlRun.ExecutionConfiguration)}.{nameof(EtlRunExecutionConfiguration.DestinationType)}",
+                    string.Empty)));
+
+        var persisted = await testDatabase.EtlRunRepository.GetByIdAsync(
+            run.Id,
+            CancellationToken.None);
+
+        Assert.NotNull(persisted?.ExecutionConfiguration);
+        Assert.Equal(
+            DestinationType.MongoDb,
+            persisted.ExecutionConfiguration.DestinationType);
+    }
+
+    [Fact]
     public async Task ListByPipelineIdAsync_ReturnsOnlyMatchingRunsNewestFirst()
     {
         await using var testDatabase = fixture.CreateDatabase();

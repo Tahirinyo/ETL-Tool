@@ -1,6 +1,7 @@
 using System.Text;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
@@ -53,6 +54,7 @@ public sealed class BatchOrchestratorIntegrationTests
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
         var orchestrator = scope.ServiceProvider.GetRequiredService<IBatchOrchestrator>();
+        var targetAccess = scope.ServiceProvider.GetRequiredService<IMongoTargetAccessService>();
         var pipeline = ReadyPipeline();
         var csv = "Id,Name\r\n1, Ada \r\n2, Grace \r\n3, Linus \r\n4, Margaret \r\n5, Barbara \r\n";
         await using var sourceStream = new MemoryStream(Encoding.UTF8.GetBytes(csv));
@@ -62,14 +64,15 @@ public sealed class BatchOrchestratorIntegrationTests
             pipeline.SourceOptions);
         var batches = new List<IReadOnlyList<DataRow>>();
 
-        var result = await orchestrator.ExecuteAsync(
+        var result = await orchestrator.ExecuteWithLoadResultAsync(
             source,
             pipeline,
-            (batch, _) =>
+            new CallbackLoader(targetAccess, batch =>
             {
                 batches.Add(batch);
-                return Task.CompletedTask;
-            },
+                return Task.FromResult(BatchLoadResult.Empty);
+            }),
+            static (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
@@ -102,7 +105,6 @@ public sealed class BatchOrchestratorIntegrationTests
         var orchestrator = new BatchOrchestrator(
             new PipelineReadinessService(new NullRepository(), mapping, targetAccess),
             processor,
-            targetAccess,
             new BatchExecutionOptions { BatchSize = 2 });
         var pipeline = ReadyPipeline();
         pipeline.SourceType = SourceType.Xlsx;
@@ -120,14 +122,15 @@ public sealed class BatchOrchestratorIntegrationTests
             pipeline.SourceOptions);
         var batches = new List<IReadOnlyList<DataRow>>();
 
-        var result = await orchestrator.ExecuteAsync(
+        var result = await orchestrator.ExecuteWithLoadResultAsync(
             source,
             pipeline,
-            (batch, _) =>
+            new CallbackLoader(targetAccess, batch =>
             {
                 batches.Add(batch);
-                return Task.CompletedTask;
-            },
+                return Task.FromResult(BatchLoadResult.Empty);
+            }),
+            static (_, _) => Task.CompletedTask,
             (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
@@ -206,5 +209,31 @@ public sealed class BatchOrchestratorIntegrationTests
             string upsertKeyField,
             CancellationToken cancellationToken) =>
             Task.CompletedTask;
+    }
+
+    private sealed class CallbackLoader(
+        IMongoTargetAccessService targetAccessService,
+        Func<IReadOnlyList<DataRow>, Task<BatchLoadResult>> load) : IDataLoader
+    {
+        public DestinationType DestinationType => DestinationType.MongoDb;
+
+        public async Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            var target = new MongoTarget(
+                pipeline.DestinationDatabase,
+                pipeline.DestinationCollection);
+            await targetAccessService.EnsureAccessibleAsync(target, cancellationToken);
+            await targetAccessService.EnsureUpsertIndexAsync(
+                target,
+                pipeline.UpsertKeyField,
+                cancellationToken);
+        }
+
+        public Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) => load(rows);
     }
 }

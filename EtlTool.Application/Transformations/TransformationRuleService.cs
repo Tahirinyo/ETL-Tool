@@ -135,6 +135,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
             FieldMappings = pipeline.FieldMappings,
             TransformationRules = rules,
             ValidationRules = pipeline.ValidationRules,
+            DestinationType = pipeline.DestinationType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,

@@ -18,7 +18,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
     private readonly IEtlRunRepository _runRepository;
     private readonly IBatchOrchestrator _orchestrator;
-    private readonly IDataLoader _loader;
+    private readonly IDataLoaderResolver _loaderResolver;
     private readonly TimeProvider _timeProvider;
     private readonly IRunSourceStore _sourceStore;
     private readonly IErrorReportWriter _errorReportWriter;
@@ -28,7 +28,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     public EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
         IBatchOrchestrator orchestrator,
-        IDataLoader loader,
+        IDataLoaderResolver loaderResolver,
         TimeProvider timeProvider,
         IErrorReportWriter errorReportWriter,
         IRunSourceStore sourceStore,
@@ -37,7 +37,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     {
         ArgumentNullException.ThrowIfNull(runRepository);
         ArgumentNullException.ThrowIfNull(orchestrator);
-        ArgumentNullException.ThrowIfNull(loader);
+        ArgumentNullException.ThrowIfNull(loaderResolver);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(sourceStore);
         ArgumentNullException.ThrowIfNull(errorReportWriter);
@@ -46,7 +46,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
 
         _runRepository = runRepository;
         _orchestrator = orchestrator;
-        _loader = loader;
+        _loaderResolver = loaderResolver;
         _timeProvider = timeProvider;
         _sourceStore = sourceStore;
         _errorReportWriter = errorReportWriter;
@@ -57,13 +57,13 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
     internal EtlRunBackgroundJobExecutor(
         IEtlRunRepository runRepository,
         IBatchOrchestrator orchestrator,
-        IDataLoader loader,
+        IDataLoaderResolver loaderResolver,
         TimeProvider timeProvider,
         IRunSourceStore sourceStore,
         IErrorReportWriter errorReportWriter,
         IErrorReportStore errorReportStore,
         ILogger<EtlRunBackgroundJobExecutor> logger)
-        : this(runRepository, orchestrator, loader, timeProvider,
+        : this(runRepository, orchestrator, loaderResolver, timeProvider,
             errorReportWriter, sourceStore, errorReportStore, logger)
     {
     }
@@ -125,12 +125,10 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
                 ?? throw new InvalidOperationException(MissingExecutionConfigurationMessage);
 
             cancellationToken.ThrowIfCancellationRequested();
+            var loader = _loaderResolver.Resolve(pipeline.DestinationType);
             source = await _sourceStore
                 .OpenAsync(run, cancellationToken)
                 .ConfigureAwait(false);
-            var target = new MongoTarget(
-                pipeline.DestinationDatabase,
-                pipeline.DestinationCollection);
             errorReportSession = new InvalidRowReportSession(
                 _errorReportWriter,
                 _errorReportStore,
@@ -142,11 +140,7 @@ public sealed class EtlRunBackgroundJobExecutor : IBackgroundJobExecutor
             _ = await _orchestrator.ExecuteWithLoadResultAsync(
                 source,
                 pipeline,
-                (batch, token) => _loader.UpsertBatchAsync(
-                    batch,
-                    target,
-                    pipeline.UpsertKeyField,
-                    token),
+                loader,
                 errorReportSession.ReportAsync,
                 async (progress, token) =>
                 {

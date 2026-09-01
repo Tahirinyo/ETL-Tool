@@ -28,6 +28,7 @@ public sealed class TransformationRuleServiceTests
         Assert.Equal("", created.Configuration["Value"]);
         Assert.Equal([4, 5], repository.UpdatedPipeline!.TransformationRules.Select(rule => rule.Order));
         Assert.Equal(Now, repository.UpdatedPipeline.UpdatedAt);
+        Assert.Equal(DestinationType.PostgreSql, repository.UpdatedPipeline.DestinationType);
     }
 
     [Fact]
@@ -591,6 +592,7 @@ public sealed class TransformationRuleServiceTests
     {
         Id = Guid.NewGuid(),
         Name = "Customer import",
+        DestinationType = DestinationType.PostgreSql,
         CreatedAt = Now.AddDays(-1),
         UpdatedAt = Now.AddHours(-1),
         FieldMappings = [new FieldMapping { SourceField = "Name", TargetField = "name", IsIncluded = true }],

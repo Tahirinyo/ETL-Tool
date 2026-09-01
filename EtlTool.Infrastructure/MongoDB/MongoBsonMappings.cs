@@ -1,4 +1,5 @@
 using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Serializers;
@@ -26,6 +27,14 @@ internal static class MongoBsonMappings
                 classMap.AutoMap();
                 classMap.MapIdMember(pipeline => pipeline.Id)
                     .SetSerializer(guidSerializer);
+                classMap.MapMember(pipeline => pipeline.DestinationType)
+                    .SetDefaultValue(DestinationType.MongoDb);
+            });
+            BsonClassMap.RegisterClassMap<EtlRunExecutionConfiguration>(classMap =>
+            {
+                classMap.AutoMap();
+                classMap.MapMember(configuration => configuration.DestinationType)
+                    .SetDefaultValue(DestinationType.MongoDb);
             });
             BsonClassMap.RegisterClassMap<EtlRun>(classMap =>
             {

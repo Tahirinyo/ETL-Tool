@@ -92,12 +92,12 @@ public sealed class MongoDbTestDatabase : IAsyncDisposable
 
         Repository = new MongoPipelineDefinitionRepository(metadataDatabase);
         EtlRunRepository = new MongoEtlRunRepository(metadataDatabase);
-        Loader = new MongoBulkUpsertLoader(metadataDatabase, new MongoDbOptions
+        TargetAccessService = new MongoTargetAccessService(metadataDatabase, new MongoDbOptions
         {
             ConnectionString = connectionString,
             MetadataDatabaseName = databaseName
         });
-        TargetAccessService = new MongoTargetAccessService(metadataDatabase, new MongoDbOptions
+        Loader = new MongoBulkUpsertLoader(metadataDatabase, TargetAccessService, new MongoDbOptions
         {
             ConnectionString = connectionString,
             MetadataDatabaseName = databaseName

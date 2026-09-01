@@ -1,6 +1,8 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -12,42 +14,62 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
     private const string RetryableWriteErrorLabel = "RetryableWriteError";
 
     private readonly MongoMetadataDatabase _metadataDatabase;
+    private readonly IMongoTargetAccessService _targetAccessService;
     private readonly IMongoBulkWriteExecutor _writeExecutor;
     private readonly int _maximumAttempts;
     private readonly TimeSpan _retryDelay;
 
     public MongoBulkUpsertLoader(
         MongoMetadataDatabase metadataDatabase,
+        IMongoTargetAccessService targetAccessService,
         MongoDbOptions options)
-        : this(metadataDatabase, options, new MongoBulkWriteExecutor())
+        : this(metadataDatabase, targetAccessService, options, new MongoBulkWriteExecutor())
     {
     }
 
     internal MongoBulkUpsertLoader(
         MongoMetadataDatabase metadataDatabase,
+        IMongoTargetAccessService targetAccessService,
         MongoDbOptions options,
         IMongoBulkWriteExecutor writeExecutor)
     {
         ArgumentNullException.ThrowIfNull(metadataDatabase);
+        ArgumentNullException.ThrowIfNull(targetAccessService);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(writeExecutor);
         options.Validate();
 
         _metadataDatabase = metadataDatabase;
+        _targetAccessService = targetAccessService;
         _writeExecutor = writeExecutor;
         _maximumAttempts = options.BulkWriteMaximumAttempts;
         _retryDelay = TimeSpan.FromMilliseconds(options.BulkWriteRetryDelayMilliseconds);
     }
 
+    public DestinationType DestinationType => DestinationType.MongoDb;
+
+    public async Task PrepareAsync(
+        PipelineDefinition pipeline,
+        CancellationToken cancellationToken)
+    {
+        var target = CreateTarget(pipeline);
+
+        await _targetAccessService
+            .EnsureAccessibleAsync(target, cancellationToken)
+            .ConfigureAwait(false);
+        await _targetAccessService
+            .EnsureUpsertIndexAsync(target, pipeline.UpsertKeyField, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<BatchLoadResult> UpsertBatchAsync(
         IReadOnlyList<DataRow> rows,
-        MongoTarget target,
-        string upsertKeyField,
+        PipelineDefinition pipeline,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentException.ThrowIfNullOrWhiteSpace(upsertKeyField);
+        var target = CreateTarget(pipeline);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeline.UpsertKeyField);
 
         if (rows.Count == 0)
         {
@@ -55,7 +77,7 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var requests = CreateRequests(rows, upsertKeyField);
+        var requests = CreateRequests(rows, pipeline.UpsertKeyField);
         var collection = _metadataDatabase
             .GetDatabase(target.DatabaseName)
             .GetCollection<BsonDocument>(target.CollectionName);
@@ -98,6 +120,41 @@ public sealed class MongoBulkUpsertLoader : IDataLoader
                     exception);
             }
         }
+    }
+
+    internal Task<BatchLoadResult> UpsertBatchAsync(
+        IReadOnlyList<DataRow> rows,
+        MongoTarget target,
+        string upsertKeyField,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        return UpsertBatchAsync(
+            rows,
+            new PipelineDefinition
+            {
+                DestinationType = DestinationType.MongoDb,
+                DestinationDatabase = target.DatabaseName,
+                DestinationCollection = target.CollectionName,
+                UpsertKeyField = upsertKeyField
+            },
+            cancellationToken);
+    }
+
+    private static MongoTarget CreateTarget(PipelineDefinition pipeline)
+    {
+        ArgumentNullException.ThrowIfNull(pipeline);
+
+        if (pipeline.DestinationType != DestinationType.MongoDb)
+        {
+            throw new InvalidOperationException(
+                $"The MongoDB data loader cannot handle destination type '{pipeline.DestinationType}'.");
+        }
+
+        return new MongoTarget(
+            pipeline.DestinationDatabase,
+            pipeline.DestinationCollection);
     }
 
     private static IReadOnlyList<WriteModel<BsonDocument>> CreateRequests(

@@ -90,6 +90,7 @@ public sealed class ValidationRuleService : IValidationRuleService
             FieldMappings = pipeline.FieldMappings,
             TransformationRules = pipeline.TransformationRules,
             ValidationRules = rules,
+            DestinationType = pipeline.DestinationType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,

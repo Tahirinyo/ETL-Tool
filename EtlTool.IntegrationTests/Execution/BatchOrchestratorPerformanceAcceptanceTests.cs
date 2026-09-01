@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
@@ -33,7 +34,8 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
 
         var inputBytes = new FileInfo(path).Length;
         var pipeline = CreatePipeline();
-        var orchestrator = CreateOrchestrator();
+        var targetAccess = new AllowedTargetAccessService();
+        var orchestrator = CreateOrchestrator(targetAccess);
         var snapshots = new List<MemorySnapshot>();
         var batchesProcessed = 0;
         var rowsLoaded = 0L;
@@ -49,29 +51,33 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
             new CsvFileExtractor(),
             pipeline.SourceOptions))
         {
-            var result = await orchestrator.ExecuteAsync(
+            var loader = new CallbackLoader(targetAccess, batch =>
+            {
+                batchesProcessed++;
+                rowsLoaded += batch.Count;
+                Assert.Equal(BatchSize, batch.Count);
+                Assert.All(batch, row => Assert.Equal(7, row.Values.Count));
+
+                if (batchesProcessed == 1)
+                {
+                    bytesReadAtFirstBatch = sourceStream.BytesRead;
+                }
+
+                snapshots.Add(CaptureSnapshot(
+                    $"Batch{batchesProcessed}",
+                    rowsLoaded,
+                    stopwatch.Elapsed));
+                return Task.FromResult(BatchLoadResult.Empty);
+            });
+            var result = await orchestrator.ExecuteWithLoadResultAsync(
                 source,
                 pipeline,
-                (batch, _) =>
-                {
-                    batchesProcessed++;
-                    rowsLoaded += batch.Count;
-                    Assert.Equal(BatchSize, batch.Count);
-                    Assert.All(batch, row => Assert.Equal(7, row.Values.Count));
-
-                    if (batchesProcessed == 1)
-                    {
-                        bytesReadAtFirstBatch = sourceStream.BytesRead;
-                    }
-
-                    snapshots.Add(CaptureSnapshot(
-                        $"Batch{batchesProcessed}",
-                        rowsLoaded,
-                        stopwatch.Elapsed));
-                    return Task.CompletedTask;
-                },
+                loader,
+                static (_, _) => Task.CompletedTask,
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None);
+
+            Assert.Equal(1, loader.PrepareCallCount);
 
             stopwatch.Stop();
 
@@ -94,7 +100,8 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
         WriteMeasurements(inputBytes, bytesReadAtFirstBatch, stopwatch.Elapsed, snapshots);
     }
 
-    private static BatchOrchestrator CreateOrchestrator()
+    private static BatchOrchestrator CreateOrchestrator(
+        IMongoTargetAccessService targetAccess)
     {
         var mapping = new FieldMappingService();
         var transformations = new TransformationEngine(new TransformationHandlerRegistry(
@@ -111,12 +118,9 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
             new NumericRangeValidationHandler(),
             new DateRangeValidationHandler()
         ]));
-        var targetAccess = new AllowedTargetAccessService();
-
         return new BatchOrchestrator(
             new PipelineReadinessService(new NullRepository(), mapping, targetAccess),
             new PipelineRowProcessor(mapping, transformations, validations),
-            targetAccess,
             new BatchExecutionOptions { BatchSize = BatchSize });
     }
 
@@ -267,6 +271,35 @@ public sealed class BatchOrchestratorPerformanceAcceptanceTests(ITestOutputHelpe
             string upsertKeyField,
             CancellationToken cancellationToken) =>
             Task.CompletedTask;
+    }
+
+    private sealed class CallbackLoader(
+        IMongoTargetAccessService targetAccessService,
+        Func<IReadOnlyList<DataRow>, Task<BatchLoadResult>> load) : IDataLoader
+    {
+        public int PrepareCallCount { get; private set; }
+
+        public DestinationType DestinationType => DestinationType.MongoDb;
+
+        public async Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            PrepareCallCount++;
+            var target = new MongoTarget(
+                pipeline.DestinationDatabase,
+                pipeline.DestinationCollection);
+            await targetAccessService.EnsureAccessibleAsync(target, cancellationToken);
+            await targetAccessService.EnsureUpsertIndexAsync(
+                target,
+                pipeline.UpsertKeyField,
+                cancellationToken);
+        }
+
+        public Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken) => load(rows);
     }
 
     private sealed class NullRepository : IPipelineDefinitionRepository

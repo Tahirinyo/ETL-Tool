@@ -114,6 +114,7 @@ builder.Services.AddSingleton<IMongoSourceSchemaInferenceService, MongoSourceSch
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton<IDataLoader, MongoBulkUpsertLoader>();
+builder.Services.AddSingleton<IDataLoaderResolver, DataLoaderResolver>();
 builder.Services.AddSingleton<IErrorReportWriter, CsvErrorReportWriter>();
 builder.Services.AddSingleton(errorReportStorageOptions);
 builder.Services.AddSingleton<IErrorReportStore, LocalErrorReportStore>();

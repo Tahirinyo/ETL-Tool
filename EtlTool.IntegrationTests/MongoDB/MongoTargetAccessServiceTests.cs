@@ -2,6 +2,7 @@ using System.Text;
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Mapping;
+using EtlTool.Application.Loading;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Processing;
@@ -351,24 +352,20 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 new ThrowingPipelineRepository(),
                 mappingService,
                 targetAccessService),
-            new PipelineRowProcessor(
-                mappingService,
-                new TransformationEngine(new TransformationHandlerRegistry([])),
-                new ValidationEngine(new ValidationHandlerRegistry([]))),
-            targetAccessService,
+                new PipelineRowProcessor(
+                    mappingService,
+                    new TransformationEngine(new TransformationHandlerRegistry([])),
+                    new ValidationEngine(new ValidationHandlerRegistry([]))),
             new BatchExecutionOptions { BatchSize = 1 });
         await using var source = new ThrowIfReadEtlSource();
         var callbackInvocations = 0;
 
         await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
-            orchestrator.ExecuteAsync(
+            orchestrator.ExecuteWithLoadResultAsync(
                 source,
                 ReadyPipeline(testDatabase.DatabaseName, unauthorizedCollection),
-                (_, _) =>
-                {
-                    callbackInvocations++;
-                    return Task.CompletedTask;
-                },
+                new PreparationLoader(targetAccessService, () => callbackInvocations++),
+                static (_, _) => Task.CompletedTask,
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None));
 
@@ -391,24 +388,20 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
                 new ThrowingPipelineRepository(),
                 mappingService,
                 targetAccessService),
-            new PipelineRowProcessor(
-                mappingService,
-                new TransformationEngine(new TransformationHandlerRegistry([])),
-                new ValidationEngine(new ValidationHandlerRegistry([]))),
-            targetAccessService,
+                new PipelineRowProcessor(
+                    mappingService,
+                    new TransformationEngine(new TransformationHandlerRegistry([])),
+                    new ValidationEngine(new ValidationHandlerRegistry([]))),
             new BatchExecutionOptions { BatchSize = 1 });
         await using var source = new ThrowIfReadEtlSource();
         var callbackInvocations = 0;
 
         await Assert.ThrowsAsync<MongoTargetAccessException>(() =>
-            orchestrator.ExecuteAsync(
+            orchestrator.ExecuteWithLoadResultAsync(
                 source,
                 ReadyPipeline(testDatabase.DatabaseName, collectionName),
-                (_, _) =>
-                {
-                    callbackInvocations++;
-                    return Task.CompletedTask;
-                },
+                new PreparationLoader(targetAccessService, () => callbackInvocations++),
+                static (_, _) => Task.CompletedTask,
                 (_, _) => Task.CompletedTask,
                 CancellationToken.None));
 
@@ -511,6 +504,36 @@ public sealed class MongoTargetAccessServiceIntegrationTests(MongoDbFixture fixt
             throw new InvalidOperationException("The source must not be read.");
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class PreparationLoader(
+        IMongoTargetAccessService targetAccessService,
+        Action onLoad) : IDataLoader
+    {
+        public DestinationType DestinationType => DestinationType.MongoDb;
+
+        public async Task PrepareAsync(
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            var target = new MongoTarget(
+                pipeline.DestinationDatabase,
+                pipeline.DestinationCollection);
+            await targetAccessService.EnsureAccessibleAsync(target, cancellationToken);
+            await targetAccessService.EnsureUpsertIndexAsync(
+                target,
+                pipeline.UpsertKeyField,
+                cancellationToken);
+        }
+
+        public Task<BatchLoadResult> UpsertBatchAsync(
+            IReadOnlyList<DataRow> rows,
+            PipelineDefinition pipeline,
+            CancellationToken cancellationToken)
+        {
+            onLoad();
+            return Task.FromResult(BatchLoadResult.Empty);
+        }
     }
 
     private sealed class ThrowingPipelineRepository : IPipelineDefinitionRepository

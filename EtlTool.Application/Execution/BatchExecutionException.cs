@@ -7,7 +7,7 @@ public sealed class BatchExecutionException : Exception
     internal BatchExecutionException(
         BatchExecutionProgress confirmedProgress,
         BatchLoadException loadFailure)
-        : base("Batch execution failed after MongoDB reported confirmed write results.", loadFailure)
+        : base("Batch execution failed after the destination reported confirmed write results.", loadFailure)
     {
         ConfirmedProgress = confirmedProgress;
     }

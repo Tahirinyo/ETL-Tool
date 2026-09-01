@@ -1,13 +1,19 @@
 using EtlTool.Application.Extraction;
-using EtlTool.Application.MongoDB;
+using EtlTool.Domain.Entities;
+using EtlTool.Domain.Enums;
 
 namespace EtlTool.Application.Loading;
 
 public interface IDataLoader
 {
+    DestinationType DestinationType { get; }
+
+    Task PrepareAsync(
+        PipelineDefinition pipeline,
+        CancellationToken cancellationToken);
+
     Task<BatchLoadResult> UpsertBatchAsync(
         IReadOnlyList<DataRow> rows,
-        MongoTarget target,
-        string upsertKeyField,
+        PipelineDefinition pipeline,
         CancellationToken cancellationToken);
 }

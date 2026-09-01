@@ -1,5 +1,6 @@
 using EtlTool.Application.Execution;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Loading;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
@@ -236,7 +237,6 @@ public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
                 fieldMapping,
                 new TransformationEngine(new TransformationHandlerRegistry([])),
                 new ValidationEngine(new ValidationHandlerRegistry([]))),
-            database.TargetAccessService,
             new BatchExecutionOptions { BatchSize = 1 });
         var reportStore = new LocalErrorReportStore(new ErrorReportStorageOptions
         {
@@ -246,7 +246,7 @@ public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
         return new EtlRunBackgroundJobExecutor(
             database.EtlRunRepository,
             orchestrator,
-            database.Loader,
+            new DataLoaderResolver([database.Loader]),
             TimeProvider.System,
             new CsvErrorReportWriter(),
             sourceStore,

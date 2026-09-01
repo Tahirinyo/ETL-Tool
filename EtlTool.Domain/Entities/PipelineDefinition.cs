@@ -29,6 +29,8 @@ public sealed class PipelineDefinition
 
     public List<ValidationRule> ValidationRules { get; set; } = [];
 
+    public DestinationType DestinationType { get; set; } = DestinationType.MongoDb;
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;

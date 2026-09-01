@@ -1118,6 +1118,7 @@ public sealed class PipelinesController : Controller
                 ErrorMessage = rule.ErrorMessage
             })
             .ToList(),
+        DestinationType = pipeline.DestinationType,
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1141,6 +1142,7 @@ public sealed class PipelinesController : Controller
         RequiresRemapping = pipeline.RequiresRemapping,
         TransformationRules = pipeline.TransformationRules,
         ValidationRules = pipeline.ValidationRules,
+        DestinationType = pipeline.DestinationType,
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1251,6 +1253,7 @@ public sealed class PipelinesController : Controller
             RequiresRemapping = false,
             TransformationRules = pipeline.TransformationRules,
             ValidationRules = pipeline.ValidationRules,
+            DestinationType = pipeline.DestinationType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,

@@ -1,6 +1,5 @@
 using EtlTool.Application.Extraction;
 using EtlTool.Application.Loading;
-using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.Processing;
 using EtlTool.Domain.Entities;
@@ -11,66 +10,48 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
 {
     private readonly IPipelineReadinessService _readinessService;
     private readonly PipelineRowProcessor _rowProcessor;
-    private readonly IMongoTargetAccessService _targetAccessService;
     private readonly int _batchSize;
 
     public BatchOrchestrator(
         IPipelineReadinessService readinessService,
         PipelineRowProcessor rowProcessor,
-        IMongoTargetAccessService targetAccessService,
         BatchExecutionOptions options)
     {
         ArgumentNullException.ThrowIfNull(readinessService);
         ArgumentNullException.ThrowIfNull(rowProcessor);
-        ArgumentNullException.ThrowIfNull(targetAccessService);
         ArgumentNullException.ThrowIfNull(options);
 
         options.Validate();
 
         _readinessService = readinessService;
         _rowProcessor = rowProcessor;
-        _targetAccessService = targetAccessService;
         _batchSize = options.BatchSize;
     }
-
-    public Task<BatchExecutionResult> ExecuteAsync(
-        IEtlSource source,
-        PipelineDefinition pipeline,
-        Func<IReadOnlyList<DataRow>, CancellationToken, Task> processBatchAsync,
-        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(processBatchAsync);
-
-        return ExecuteWithLoadResultAsync(
-            source,
-            pipeline,
-            async (batch, token) =>
-            {
-                await processBatchAsync(batch, token).ConfigureAwait(false);
-                return BatchLoadResult.Empty;
-            },
-            reportProgressAsync,
-            cancellationToken);
-    }
-
-    public Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
-        IEtlSource source,
-        PipelineDefinition pipeline,
-        Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
-        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
-        CancellationToken cancellationToken) =>
-        ExecuteWithLoadResultAsync(
-            source,
-            pipeline,
-            processBatchAsync,
-            static (_, _) => Task.CompletedTask,
-            reportProgressAsync,
-            cancellationToken);
 
     public async Task<BatchExecutionResult> ExecuteWithLoadResultAsync(
         IEtlSource source,
         PipelineDefinition pipeline,
+        IDataLoader loader,
+        Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
+        Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(loader);
+
+        return await ExecuteCoreAsync(
+            source,
+            pipeline,
+            token => loader.PrepareAsync(pipeline, token),
+            (batch, token) => loader.UpsertBatchAsync(batch, pipeline, token),
+            reportInvalidRowAsync,
+            reportProgressAsync,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<BatchExecutionResult> ExecuteCoreAsync(
+        IEtlSource source,
+        PipelineDefinition pipeline,
+        Func<CancellationToken, Task> prepareDestinationAsync,
         Func<IReadOnlyList<DataRow>, CancellationToken, Task<BatchLoadResult>> processBatchAsync,
         Func<RowProcessingResult, CancellationToken, Task> reportInvalidRowAsync,
         Func<BatchExecutionProgress, CancellationToken, Task> reportProgressAsync,
@@ -78,6 +59,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(pipeline);
+        ArgumentNullException.ThrowIfNull(prepareDestinationAsync);
         ArgumentNullException.ThrowIfNull(processBatchAsync);
         ArgumentNullException.ThrowIfNull(reportInvalidRowAsync);
         ArgumentNullException.ThrowIfNull(reportProgressAsync);
@@ -90,16 +72,7 @@ public sealed class BatchOrchestrator : IBatchOrchestrator
             throw new PipelineNotReadyException(readiness.Problems);
         }
 
-        var target = new MongoTarget(
-            pipeline.DestinationDatabase,
-            pipeline.DestinationCollection);
-        await _targetAccessService.EnsureAccessibleAsync(
-            target,
-            cancellationToken).ConfigureAwait(false);
-        await _targetAccessService.EnsureUpsertIndexAsync(
-            target,
-            pipeline.UpsertKeyField,
-            cancellationToken).ConfigureAwait(false);
+        await prepareDestinationAsync(cancellationToken).ConfigureAwait(false);
 
         var session = _rowProcessor.CreateSession(pipeline);
         var currentBatch = new List<DataRow>(_batchSize);

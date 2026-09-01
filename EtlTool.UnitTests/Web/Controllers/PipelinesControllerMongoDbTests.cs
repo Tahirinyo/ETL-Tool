@@ -140,6 +140,7 @@ public sealed class PipelinesControllerMongoDbTests
             Collection = "customers"
         };
         pipeline.RequiresRemapping = true;
+        pipeline.DestinationType = DestinationType.PostgreSql;
         var service = new RecordingPipelineService(pipeline);
         var controller = new PipelinesController(service);
 
@@ -158,6 +159,7 @@ public sealed class PipelinesControllerMongoDbTests
             (saved.MongoDbSource!.Database, saved.MongoDbSource.Collection));
         Assert.Equal(("destination_db", "destination_rows", "id"),
             (saved.DestinationDatabase, saved.DestinationCollection, saved.UpsertKeyField));
+        Assert.Equal(DestinationType.PostgreSql, saved.DestinationType);
         Assert.False(saved.RequiresRemapping);
     }
 
