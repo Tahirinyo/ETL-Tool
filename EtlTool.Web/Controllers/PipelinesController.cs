@@ -31,6 +31,7 @@ public sealed class PipelinesController : Controller
     private readonly PostgreSqlSourceSchemaConverter _postgreSqlSourceSchemaConverter;
     private readonly IMongoSourceMetadataDiscoveryService? _mongoSourceMetadataDiscoveryService;
     private readonly IMongoSourceSchemaInferenceService? _mongoSourceSchemaInferenceService;
+    private readonly IPostgreSqlDestinationAccessService? _postgreSqlDestinationAccessService;
 
     public PipelinesController(
         IPipelineService pipelineService,
@@ -48,7 +49,8 @@ public sealed class PipelinesController : Controller
         IPostgreSqlConnectionProfileCatalog? postgreSqlConnectionProfileCatalog = null,
         PostgreSqlSourceSchemaConverter? postgreSqlSourceSchemaConverter = null,
         IMongoSourceMetadataDiscoveryService? mongoSourceMetadataDiscoveryService = null,
-        IMongoSourceSchemaInferenceService? mongoSourceSchemaInferenceService = null)
+        IMongoSourceSchemaInferenceService? mongoSourceSchemaInferenceService = null,
+        IPostgreSqlDestinationAccessService? postgreSqlDestinationAccessService = null)
     {
         ArgumentNullException.ThrowIfNull(pipelineService);
         _pipelineService = pipelineService;
@@ -67,6 +69,7 @@ public sealed class PipelinesController : Controller
         _postgreSqlSourceSchemaConverter = postgreSqlSourceSchemaConverter ?? new PostgreSqlSourceSchemaConverter();
         _mongoSourceMetadataDiscoveryService = mongoSourceMetadataDiscoveryService;
         _mongoSourceSchemaInferenceService = mongoSourceSchemaInferenceService;
+        _postgreSqlDestinationAccessService = postgreSqlDestinationAccessService;
     }
 
     public async Task<IActionResult> Mapping(
@@ -736,6 +739,13 @@ public sealed class PipelinesController : Controller
             .ToList()
             ?? [];
 
+    private void PopulatePostgreSqlConnectionProfiles(PipelineFormViewModel model) =>
+        model.PostgreSqlConnectionProfiles = _postgreSqlConnectionProfileCatalog?
+            .GetProfileNames()
+            .OrderBy(profileName => profileName, StringComparer.Ordinal)
+            .ToList()
+            ?? [];
+
     private IActionResult PostgreSqlSourceView(SourceUploadViewModel model)
     {
         ModelState.Remove(nameof(model.LoadedPostgreSqlConnectionProfile));
@@ -1119,6 +1129,7 @@ public sealed class PipelinesController : Controller
             })
             .ToList(),
         DestinationType = pipeline.DestinationType,
+        PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1143,6 +1154,7 @@ public sealed class PipelinesController : Controller
         TransformationRules = pipeline.TransformationRules,
         ValidationRules = pipeline.ValidationRules,
         DestinationType = pipeline.DestinationType,
+        PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
         DestinationDatabase = pipeline.DestinationDatabase,
         DestinationCollection = pipeline.DestinationCollection,
         UpsertKeyField = pipeline.UpsertKeyField,
@@ -1183,6 +1195,23 @@ public sealed class PipelinesController : Controller
         {
             Database = options.Database,
             Collection = options.Collection
+        };
+
+    private static PostgreSqlDestinationOptions? CopyPostgreSqlDestinationOptions(
+        PostgreSqlDestinationOptions? options) => options is null
+        ? null
+        : new PostgreSqlDestinationOptions
+        {
+            ConnectionProfile = options.ConnectionProfile,
+            Database = options.Database,
+            Schema = options.Schema,
+            Table = options.Table,
+            ColumnMappings = (options.ColumnMappings ?? []).Select(mapping => new PostgreSqlDestinationColumnMapping
+            {
+                OutputField = mapping.OutputField,
+                DestinationColumn = mapping.DestinationColumn
+            }).ToList(),
+            UpsertKeyColumn = options.UpsertKeyColumn
         };
 
     private static List<FieldMapping> ReconcileMappings(
@@ -1254,6 +1283,7 @@ public sealed class PipelinesController : Controller
             TransformationRules = pipeline.TransformationRules,
             ValidationRules = pipeline.ValidationRules,
             DestinationType = pipeline.DestinationType,
+            PostgreSqlDestination = CopyPostgreSqlDestinationOptions(pipeline.PostgreSqlDestination),
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,
@@ -1429,8 +1459,13 @@ public sealed class PipelinesController : Controller
                 Id = pipeline.Id,
                 Name = pipeline.Name,
                 SourceType = pipeline.SourceType,
-                DestinationDatabase = pipeline.DestinationDatabase,
-                DestinationCollection = pipeline.DestinationCollection,
+                DestinationType = pipeline.DestinationType,
+                DestinationDatabase = pipeline.DestinationType == DestinationType.PostgreSql
+                    ? pipeline.PostgreSqlDestination?.Database ?? string.Empty
+                    : pipeline.DestinationDatabase,
+                DestinationCollection = pipeline.DestinationType == DestinationType.PostgreSql
+                    ? pipeline.PostgreSqlDestination?.Table ?? string.Empty
+                    : pipeline.DestinationCollection,
                 UpdatedAt = pipeline.UpdatedAt
             })
             .ToList();
@@ -1501,11 +1536,27 @@ public sealed class PipelinesController : Controller
         {
             Name = pipeline.Name,
             Description = pipeline.Description,
+            DestinationType = pipeline.DestinationType,
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
-            UpsertKeyField = pipeline.UpsertKeyField
+            UpsertKeyField = pipeline.UpsertKeyField,
+            PostgreSqlConnectionProfile = pipeline.PostgreSqlDestination?.ConnectionProfile,
+            PostgreSqlDatabase = pipeline.PostgreSqlDestination?.Database,
+            PostgreSqlSchema = pipeline.PostgreSqlDestination?.Schema,
+            PostgreSqlTable = pipeline.PostgreSqlDestination?.Table,
+            LoadedPostgreSqlConnectionProfile = pipeline.PostgreSqlDestination?.ConnectionProfile,
+            LoadedPostgreSqlDatabase = pipeline.PostgreSqlDestination?.Database,
+            LoadedPostgreSqlSchema = pipeline.PostgreSqlDestination?.Schema,
+            PostgreSqlColumnMappings = (pipeline.PostgreSqlDestination?.ColumnMappings ?? [])
+                .Select(mapping => new PostgreSqlDestinationMappingViewModel
+                {
+                    OutputField = mapping.OutputField,
+                    DestinationColumn = mapping.DestinationColumn
+                }).ToList(),
+            PostgreSqlUpsertKeyColumn = pipeline.PostgreSqlDestination?.UpsertKeyColumn
         };
         PopulateAvailableMappedFields(model, pipeline);
+        PopulatePostgreSqlConnectionProfiles(model);
         return View(model);
     }
 
@@ -1531,6 +1582,22 @@ public sealed class PipelinesController : Controller
         }
 
         PopulateAvailableMappedFields(model, pipeline);
+
+        if (!Enum.IsDefined(model.DestinationType)
+            || model.DestinationType == DestinationType.Unspecified)
+        {
+            ModelState.AddModelError(nameof(PipelineFormViewModel.DestinationType), "Choose a destination type.");
+        }
+
+        if (model.DestinationType == DestinationType.PostgreSql)
+        {
+            return await ConfigurePostgreSqlDestinationAsync(
+                id,
+                pipeline,
+                model,
+                model.PostgreSqlDestinationAction,
+                cancellationToken);
+        }
 
         var hasDestinationConfiguration = !string.IsNullOrWhiteSpace(model.DestinationDatabase)
             || !string.IsNullOrWhiteSpace(model.DestinationCollection);
@@ -1578,6 +1645,8 @@ public sealed class PipelinesController : Controller
 
         pipeline.Name = model.Name;
         pipeline.Description = model.Description;
+        pipeline.DestinationType = DestinationType.MongoDb;
+        pipeline.PostgreSqlDestination = null;
         pipeline.DestinationDatabase = model.DestinationDatabase ?? string.Empty;
         pipeline.DestinationCollection = model.DestinationCollection ?? string.Empty;
         pipeline.UpsertKeyField = model.UpsertKeyField ?? string.Empty;
@@ -1596,6 +1665,161 @@ public sealed class PipelinesController : Controller
         }
 
         return RedirectToAction(nameof(Index));
+    }
+
+    private async Task<IActionResult> ConfigurePostgreSqlDestinationAsync(
+        Guid id,
+        PipelineDefinition pipeline,
+        PipelineFormViewModel model,
+        string? postgreSqlDestinationAction,
+        CancellationToken cancellationToken)
+    {
+        NormalizePostgreSqlDestinationSelection(model);
+        PopulatePostgreSqlConnectionProfiles(model);
+        var isSave = !string.Equals(postgreSqlDestinationAction, "refresh", StringComparison.Ordinal);
+
+        if (_postgreSqlMetadataDiscoveryService is null
+            || _postgreSqlConnectionProfileCatalog is null
+            || _postgreSqlDestinationAccessService is null)
+        {
+            ModelState.AddModelError(string.Empty, "PostgreSQL destination configuration is not available.");
+            return PostgreSqlDestinationView(model);
+        }
+
+        if (string.IsNullOrWhiteSpace(model.PostgreSqlConnectionProfile))
+        {
+            if (isSave)
+            {
+                ModelState.AddModelError(nameof(model.PostgreSqlConnectionProfile), "Choose a PostgreSQL connection profile.");
+            }
+            return PostgreSqlDestinationView(model);
+        }
+
+        if (!model.PostgreSqlConnectionProfiles.Contains(model.PostgreSqlConnectionProfile, StringComparer.Ordinal))
+        {
+            ModelState.AddModelError(nameof(model.PostgreSqlConnectionProfile),
+                "The selected PostgreSQL connection profile is no longer available.");
+            return PostgreSqlDestinationView(model);
+        }
+
+        try
+        {
+            model.PostgreSqlDatabases = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverDatabasesAsync(model.PostgreSqlConnectionProfile, cancellationToken))
+                .Select(database => database.Name)
+                .ToList();
+            if (!RequirePostgreSqlDestinationSelection(
+                    model, nameof(model.PostgreSqlDatabase), model.PostgreSqlDatabase,
+                    model.PostgreSqlDatabases, "database", isSave))
+            {
+                return PostgreSqlDestinationView(model);
+            }
+
+            model.PostgreSqlSchemas = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverSchemasAsync(model.PostgreSqlConnectionProfile, model.PostgreSqlDatabase!, cancellationToken))
+                .Select(schema => schema.Name)
+                .ToList();
+            if (!RequirePostgreSqlDestinationSelection(
+                    model, nameof(model.PostgreSqlSchema), model.PostgreSqlSchema,
+                    model.PostgreSqlSchemas, "schema", isSave))
+            {
+                return PostgreSqlDestinationView(model);
+            }
+
+            model.PostgreSqlTables = (await _postgreSqlMetadataDiscoveryService
+                    .DiscoverTablesAsync(
+                        model.PostgreSqlConnectionProfile, model.PostgreSqlDatabase!, model.PostgreSqlSchema!, cancellationToken))
+                .Select(table => table.Name)
+                .ToList();
+            if (!RequirePostgreSqlDestinationSelection(
+                    model, nameof(model.PostgreSqlTable), model.PostgreSqlTable,
+                    model.PostgreSqlTables, "table", isSave))
+            {
+                return PostgreSqlDestinationView(model);
+            }
+
+            await _postgreSqlDestinationAccessService.EnsureDestinationAccessibleAsync(
+                model.PostgreSqlConnectionProfile,
+                model.PostgreSqlDatabase!,
+                model.PostgreSqlSchema!,
+                model.PostgreSqlTable!,
+                cancellationToken);
+
+            var columns = await _postgreSqlMetadataDiscoveryService.DiscoverColumnsAsync(
+                model.PostgreSqlConnectionProfile,
+                model.PostgreSqlDatabase!,
+                model.PostgreSqlSchema!,
+                model.PostgreSqlTable!,
+                cancellationToken);
+            var constraints = await _postgreSqlMetadataDiscoveryService.DiscoverKeyConstraintsAsync(
+                model.PostgreSqlConnectionProfile,
+                model.PostgreSqlDatabase!,
+                model.PostgreSqlSchema!,
+                model.PostgreSqlTable!,
+                cancellationToken);
+            PopulatePostgreSqlDestinationMetadata(model, columns, constraints);
+
+            if (!isSave)
+            {
+                return PostgreSqlDestinationView(model);
+            }
+
+            var destination = new PostgreSqlDestinationOptions
+            {
+                ConnectionProfile = model.PostgreSqlConnectionProfile,
+                Database = model.PostgreSqlDatabase!,
+                Schema = model.PostgreSqlSchema!,
+                Table = model.PostgreSqlTable!,
+                ColumnMappings = (model.PostgreSqlColumnMappings ?? [])
+                    .Select(mapping => new PostgreSqlDestinationColumnMapping
+                    {
+                        OutputField = mapping.OutputField ?? string.Empty,
+                        DestinationColumn = mapping.DestinationColumn ?? string.Empty
+                    }).ToList(),
+                UpsertKeyColumn = model.PostgreSqlUpsertKeyColumn ?? string.Empty
+            };
+
+            try
+            {
+                PostgreSqlDestinationConfigurationValidator.Validate(
+                    destination,
+                    model.AvailableMappedFields.ToHashSet(StringComparer.Ordinal),
+                    columns,
+                    constraints);
+            }
+            catch (InvalidOperationException exception)
+            {
+                ModelState.AddModelError(string.Empty, exception.Message);
+                return PostgreSqlDestinationView(model);
+            }
+
+            var upsertMapping = destination.ColumnMappings.Single(mapping =>
+                string.Equals(mapping.DestinationColumn, destination.UpsertKeyColumn, StringComparison.Ordinal));
+            var replacement = CopyPipeline(pipeline);
+            replacement.Name = model.Name;
+            replacement.Description = model.Description;
+            replacement.DestinationType = DestinationType.PostgreSql;
+            replacement.PostgreSqlDestination = destination;
+            replacement.DestinationDatabase = string.Empty;
+            replacement.DestinationCollection = string.Empty;
+            replacement.UpsertKeyField = upsertMapping.OutputField;
+
+            if (!await _pipelineService.UpdateAsync(id, replacement, cancellationToken))
+            {
+                return NotFound();
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
+        catch (Exception exception) when (exception is PostgreSqlConnectionProfileNotFoundException
+                                         or PostgreSqlConnectionAccessException
+                                         or PostgreSqlMetadataObjectNotFoundException)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                "The PostgreSQL destination could not be accessed. Check the selected connection and target, then try again.");
+            return PostgreSqlDestinationView(model);
+        }
     }
 
     public async Task<IActionResult> Preview(Guid id, CancellationToken cancellationToken)
@@ -1836,6 +2060,115 @@ public sealed class PipelinesController : Controller
             // An invalid mapping has no effective output fields to select from.
             model.AvailableMappedFields = [];
         }
+    }
+
+    private bool RequirePostgreSqlDestinationSelection(
+        PipelineFormViewModel model,
+        string propertyName,
+        string? selectedValue,
+        IReadOnlyList<string> availableValues,
+        string displayName,
+        bool isSave)
+    {
+        if (string.IsNullOrWhiteSpace(selectedValue))
+        {
+            if (isSave)
+            {
+                ModelState.AddModelError(propertyName, $"Choose a PostgreSQL {displayName}.");
+            }
+            return false;
+        }
+
+        if (availableValues.Contains(selectedValue, StringComparer.Ordinal))
+        {
+            return true;
+        }
+
+        ClearPostgreSqlDestinationSelection(model, propertyName);
+        ModelState.AddModelError(propertyName, $"The selected PostgreSQL {displayName} is no longer available.");
+        return false;
+    }
+
+    private static void PopulatePostgreSqlDestinationMetadata(
+        PipelineFormViewModel model,
+        IReadOnlyList<PostgreSqlColumnMetadata> columns,
+        IReadOnlyList<PostgreSqlKeyConstraintMetadata> constraints)
+    {
+        model.PostgreSqlColumns = columns.Select(column => new PostgreSqlDestinationColumnViewModel
+        {
+            Name = column.Name,
+            NativeType = column.NativeType,
+            IsNullable = column.IsNullable
+        }).ToList();
+        model.PostgreSqlUpsertKeyColumns = PostgreSqlDestinationConfigurationValidator
+            .GetEligibleSingleColumnKeyColumns(constraints);
+
+        if (model.PostgreSqlColumnMappings.Count == 0)
+        {
+            model.PostgreSqlColumnMappings = model.AvailableMappedFields
+                .Select(field => new PostgreSqlDestinationMappingViewModel { OutputField = field })
+                .ToList();
+        }
+    }
+
+    private void NormalizePostgreSqlDestinationSelection(PipelineFormViewModel model)
+    {
+        if (!string.Equals(model.PostgreSqlConnectionProfile, model.LoadedPostgreSqlConnectionProfile, StringComparison.Ordinal))
+        {
+            ClearPostgreSqlDestinationSelection(model, nameof(model.PostgreSqlDatabase));
+            return;
+        }
+
+        if (!string.Equals(model.PostgreSqlDatabase, model.LoadedPostgreSqlDatabase, StringComparison.Ordinal))
+        {
+            ClearPostgreSqlDestinationSelection(model, nameof(model.PostgreSqlSchema));
+            return;
+        }
+
+        if (!string.Equals(model.PostgreSqlSchema, model.LoadedPostgreSqlSchema, StringComparison.Ordinal))
+        {
+            ClearPostgreSqlDestinationSelection(model, nameof(model.PostgreSqlTable));
+        }
+    }
+
+    private void ClearPostgreSqlDestinationSelection(PipelineFormViewModel model, string propertyName)
+    {
+        switch (propertyName)
+        {
+            case nameof(PipelineFormViewModel.PostgreSqlDatabase):
+                model.PostgreSqlDatabase = null;
+                model.PostgreSqlSchema = null;
+                model.PostgreSqlTable = null;
+                break;
+            case nameof(PipelineFormViewModel.PostgreSqlSchema):
+                model.PostgreSqlSchema = null;
+                model.PostgreSqlTable = null;
+                break;
+            case nameof(PipelineFormViewModel.PostgreSqlTable):
+                model.PostgreSqlTable = null;
+                break;
+        }
+
+        model.PostgreSqlColumns = [];
+        model.PostgreSqlColumnMappings = [];
+        model.PostgreSqlUpsertKeyColumn = null;
+        model.PostgreSqlUpsertKeyColumns = [];
+        ModelState.Remove(nameof(model.PostgreSqlDatabase));
+        ModelState.Remove(nameof(model.PostgreSqlSchema));
+        ModelState.Remove(nameof(model.PostgreSqlTable));
+        ModelState.Remove(nameof(model.PostgreSqlColumnMappings));
+        ModelState.Remove(nameof(model.PostgreSqlUpsertKeyColumn));
+    }
+
+    private IActionResult PostgreSqlDestinationView(PipelineFormViewModel model)
+    {
+        ModelState.Remove(nameof(model.LoadedPostgreSqlConnectionProfile));
+        ModelState.Remove(nameof(model.LoadedPostgreSqlDatabase));
+        ModelState.Remove(nameof(model.LoadedPostgreSqlSchema));
+        model.LoadedPostgreSqlConnectionProfile = model.PostgreSqlConnectionProfile;
+        model.LoadedPostgreSqlDatabase = model.PostgreSqlDatabase;
+        model.LoadedPostgreSqlSchema = model.PostgreSqlSchema;
+        return View("Edit", model);
     }
 
     private void ValidateDestination(PipelineFormViewModel model)

@@ -64,6 +64,19 @@ public sealed class MongoBsonMappingsTests
                     Schema = "public",
                     Table = "customers"
                 },
+                DestinationType = DestinationType.PostgreSql,
+                PostgreSqlDestination = new PostgreSqlDestinationOptions
+                {
+                    ConnectionProfile = "WarehouseDb",
+                    Database = "warehouse",
+                    Schema = "import",
+                    Table = "customers",
+                    ColumnMappings =
+                    [
+                        new PostgreSqlDestinationColumnMapping { OutputField = "id", DestinationColumn = "customer_id" }
+                    ],
+                    UpsertKeyColumn = "customer_id"
+                },
                 ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
                 FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
                 TransformationRules =
@@ -117,6 +130,9 @@ public sealed class MongoBsonMappingsTests
         Assert.Equal(validationId, roundTripped.ExecutionConfiguration.ValidationRules[0].Id);
         Assert.NotNull(roundTripped.ExecutionConfiguration.PostgreSqlSource);
         Assert.Equal("ReportingDb", roundTripped.ExecutionConfiguration.PostgreSqlSource.ConnectionProfile);
+        Assert.NotNull(roundTripped.ExecutionConfiguration.PostgreSqlDestination);
+        Assert.Equal("WarehouseDb", roundTripped.ExecutionConfiguration.PostgreSqlDestination.ConnectionProfile);
+        Assert.Equal("customer_id", roundTripped.ExecutionConfiguration.PostgreSqlDestination.UpsertKeyColumn);
         Assert.DoesNotContain("ConnectionString", document.ToJson(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);

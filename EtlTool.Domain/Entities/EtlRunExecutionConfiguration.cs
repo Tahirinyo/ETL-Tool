@@ -25,6 +25,8 @@ public sealed class EtlRunExecutionConfiguration
 
     public DestinationType DestinationType { get; set; } = DestinationType.MongoDb;
 
+    public PostgreSqlDestinationOptions? PostgreSqlDestination { get; set; }
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;
@@ -47,6 +49,7 @@ public sealed class EtlRunExecutionConfiguration
             TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
             ValidationRules = pipeline.ValidationRules.Select(Copy).ToList(),
             DestinationType = pipeline.DestinationType,
+            PostgreSqlDestination = Copy(pipeline.PostgreSqlDestination),
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField
@@ -65,6 +68,7 @@ public sealed class EtlRunExecutionConfiguration
         TransformationRules = TransformationRules.Select(Copy).ToList(),
         ValidationRules = ValidationRules.Select(Copy).ToList(),
         DestinationType = DestinationType,
+        PostgreSqlDestination = Copy(PostgreSqlDestination),
         DestinationDatabase = DestinationDatabase,
         DestinationCollection = DestinationCollection,
         UpsertKeyField = UpsertKeyField
@@ -95,6 +99,24 @@ public sealed class EtlRunExecutionConfiguration
         {
             Database = value.Database,
             Collection = value.Collection
+        };
+
+    private static PostgreSqlDestinationOptions? Copy(PostgreSqlDestinationOptions? value) => value is null
+        ? null
+        : new PostgreSqlDestinationOptions
+        {
+            ConnectionProfile = value.ConnectionProfile,
+            Database = value.Database,
+            Schema = value.Schema,
+            Table = value.Table,
+            ColumnMappings = (value.ColumnMappings ?? [])
+                .Select(mapping => new PostgreSqlDestinationColumnMapping
+                {
+                    OutputField = mapping.OutputField,
+                    DestinationColumn = mapping.DestinationColumn
+                })
+                .ToList(),
+            UpsertKeyColumn = value.UpsertKeyColumn
         };
 
     private static SourceFieldDefinition Copy(SourceFieldDefinition value) => new()

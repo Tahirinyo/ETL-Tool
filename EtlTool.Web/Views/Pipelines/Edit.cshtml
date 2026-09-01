@@ -6,12 +6,25 @@
 }
 
 <h1>Edit pipeline</h1>
-<p class="text-muted">Update the draft details and MongoDB destination configuration.</p>
+<p class="text-muted">Update the draft details and destination configuration.</p>
 
 <div class="row">
     <div class="col-lg-7">
         <form asp-action="Edit" asp-route-id="@pipelineId" method="post">
             <partial name="_PipelineForm" model="Model" />
+
+            <fieldset class="mt-4">
+                <legend class="h4">Destination</legend>
+                <div class="form-check">
+                    <input class="form-check-input" asp-for="DestinationType" type="radio" value="MongoDb" id="destination-mongodb" />
+                    <label class="form-check-label" for="destination-mongodb">MongoDB</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" asp-for="DestinationType" type="radio" value="PostgreSql" id="destination-postgresql" />
+                    <label class="form-check-label" for="destination-postgresql">PostgreSQL</label>
+                </div>
+                <span asp-validation-for="DestinationType" class="text-danger"></span>
+            </fieldset>
 
             <fieldset class="mt-4">
                 <legend class="h4">MongoDB destination</legend>
@@ -37,6 +50,107 @@
                     </select>
                     <span asp-validation-for="UpsertKeyField" class="text-danger"></span>
                 </div>
+            </fieldset>
+
+            <fieldset class="mt-4">
+                <legend class="h4">PostgreSQL destination</legend>
+                <p class="text-muted">Select an accessible target, then refresh its columns and eligible single-column keys before saving.</p>
+                <input asp-for="LoadedPostgreSqlConnectionProfile" type="hidden" />
+                <input asp-for="LoadedPostgreSqlDatabase" type="hidden" />
+                <input asp-for="LoadedPostgreSqlSchema" type="hidden" />
+                <div class="mb-3">
+                    <label asp-for="PostgreSqlConnectionProfile" class="form-label"></label>
+                    <select asp-for="PostgreSqlConnectionProfile" class="form-select">
+                        <option value="">Select a connection profile</option>
+                        @foreach (var profile in Model.PostgreSqlConnectionProfiles)
+                        {
+                            <option value="@profile">@profile</option>
+                        }
+                    </select>
+                    <span asp-validation-for="PostgreSqlConnectionProfile" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="PostgreSqlDatabase" class="form-label"></label>
+                    <select asp-for="PostgreSqlDatabase" class="form-select">
+                        <option value="">Select a database</option>
+                        @foreach (var database in Model.PostgreSqlDatabases)
+                        {
+                            <option value="@database">@database</option>
+                        }
+                    </select>
+                    <span asp-validation-for="PostgreSqlDatabase" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="PostgreSqlSchema" class="form-label"></label>
+                    <select asp-for="PostgreSqlSchema" class="form-select">
+                        <option value="">Select a schema</option>
+                        @foreach (var schema in Model.PostgreSqlSchemas)
+                        {
+                            <option value="@schema">@schema</option>
+                        }
+                    </select>
+                    <span asp-validation-for="PostgreSqlSchema" class="text-danger"></span>
+                </div>
+                <div class="mb-3">
+                    <label asp-for="PostgreSqlTable" class="form-label"></label>
+                    <select asp-for="PostgreSqlTable" class="form-select">
+                        <option value="">Select a table</option>
+                        @foreach (var table in Model.PostgreSqlTables)
+                        {
+                            <option value="@table">@table</option>
+                        }
+                    </select>
+                    <span asp-validation-for="PostgreSqlTable" class="text-danger"></span>
+                </div>
+                <button type="submit" name="PostgreSqlDestinationAction" value="refresh" class="btn btn-outline-secondary">Refresh PostgreSQL metadata</button>
+
+                @if (Model.PostgreSqlColumns.Count > 0)
+                {
+                    <div class="mt-3">
+                        <div class="small text-muted mb-2">Destination columns</div>
+                        <ul class="small mb-3">
+                            @foreach (var column in Model.PostgreSqlColumns)
+                            {
+                                <li>@column.Name (@column.NativeType@(column.IsNullable ? ", nullable" : string.Empty))</li>
+                            }
+                        </ul>
+                        <div class="small text-muted mb-2">Output-to-column mapping</div>
+                        @for (var index = 0; index < Model.PostgreSqlColumnMappings.Count; index++)
+                        {
+                            <div class="row g-2 mb-2">
+                                <div class="col-md-6">
+                                    <select asp-for="PostgreSqlColumnMappings[index].OutputField" class="form-select">
+                                        <option value="">Select an output field</option>
+                                        @foreach (var field in Model.AvailableMappedFields)
+                                        {
+                                            <option value="@field">@field</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <select asp-for="PostgreSqlColumnMappings[index].DestinationColumn" class="form-select">
+                                        <option value="">Select a PostgreSQL column</option>
+                                        @foreach (var column in Model.PostgreSqlColumns)
+                                        {
+                                            <option value="@column.Name">@column.Name</option>
+                                        }
+                                    </select>
+                                </div>
+                            </div>
+                        }
+                        <div class="mb-3">
+                            <label asp-for="PostgreSqlUpsertKeyColumn" class="form-label"></label>
+                            <select asp-for="PostgreSqlUpsertKeyColumn" class="form-select">
+                                <option value="">Select a PRIMARY KEY or UNIQUE column</option>
+                                @foreach (var column in Model.PostgreSqlUpsertKeyColumns)
+                                {
+                                    <option value="@column">@column</option>
+                                }
+                            </select>
+                            <span asp-validation-for="PostgreSqlUpsertKeyColumn" class="text-danger"></span>
+                        </div>
+                    </div>
+                }
             </fieldset>
 
             <div class="mt-4">

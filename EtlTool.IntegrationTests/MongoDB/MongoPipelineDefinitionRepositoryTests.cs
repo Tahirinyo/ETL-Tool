@@ -351,8 +351,23 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
                 }
             ],
             DestinationType = DestinationType.PostgreSql,
-            DestinationDatabase = $"destination_{Guid.NewGuid():N}",
-            DestinationCollection = "customers",
+            PostgreSqlDestination = new PostgreSqlDestinationOptions
+            {
+                ConnectionProfile = "WarehouseDb",
+                Database = $"destination_{Guid.NewGuid():N}",
+                Schema = "import",
+                Table = "customers",
+                ColumnMappings =
+                [
+                    new PostgreSqlDestinationColumnMapping
+                    {
+                        OutputField = "customer_id", DestinationColumn = "customer_id"
+                    }
+                ],
+                UpsertKeyColumn = "customer_id"
+            },
+            DestinationDatabase = string.Empty,
+            DestinationCollection = string.Empty,
             UpsertKeyField = "customer_id",
             CreatedAt = new DateTimeOffset(2026, 8, 17, 9, 30, 0, TimeSpan.FromHours(3)),
             UpdatedAt = new DateTimeOffset(2026, 8, 17, 10, 45, 0, TimeSpan.FromHours(3))
@@ -392,6 +407,14 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
         Assert.Equal(expected.Description, actual.Description);
         Assert.Equal(expected.SourceType, actual.SourceType);
         Assert.Equal(expected.DestinationType, actual.DestinationType);
+        Assert.Equal(expected.PostgreSqlDestination?.ConnectionProfile, actual.PostgreSqlDestination?.ConnectionProfile);
+        Assert.Equal(expected.PostgreSqlDestination?.Database, actual.PostgreSqlDestination?.Database);
+        Assert.Equal(expected.PostgreSqlDestination?.Schema, actual.PostgreSqlDestination?.Schema);
+        Assert.Equal(expected.PostgreSqlDestination?.Table, actual.PostgreSqlDestination?.Table);
+        Assert.Equal(expected.PostgreSqlDestination?.UpsertKeyColumn, actual.PostgreSqlDestination?.UpsertKeyColumn);
+        Assert.Equal(
+            expected.PostgreSqlDestination?.ColumnMappings.Select(mapping => (mapping.OutputField, mapping.DestinationColumn)),
+            actual.PostgreSqlDestination?.ColumnMappings.Select(mapping => (mapping.OutputField, mapping.DestinationColumn)));
         Assert.Equal(expected.SourceOptions.CultureName, actual.SourceOptions.CultureName);
         Assert.Equal(expected.SourceOptions.DateFormat, actual.SourceOptions.DateFormat);
         Assert.Equal(expected.SourceOptions.Delimiter, actual.SourceOptions.Delimiter);

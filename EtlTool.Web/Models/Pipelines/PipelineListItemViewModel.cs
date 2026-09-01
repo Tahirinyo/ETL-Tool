@@ -10,6 +10,8 @@ public sealed class PipelineListItemViewModel
 
     public SourceType SourceType { get; init; }
 
+    public DestinationType DestinationType { get; init; }
+
     public string DestinationDatabase { get; init; } = string.Empty;
 
     public string DestinationCollection { get; init; } = string.Empty;
@@ -27,4 +29,8 @@ public sealed class PipelineListItemViewModel
     public string DestinationCollectionDisplay => string.IsNullOrWhiteSpace(DestinationCollection)
         ? "Not configured"
         : DestinationCollection;
+
+    public string DestinationTypeDisplay => DestinationType == DestinationType.Unspecified
+        ? "Not configured"
+        : DestinationType == DestinationType.PostgreSql ? "PostgreSQL" : "MongoDB";
 }

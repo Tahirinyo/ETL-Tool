@@ -30,8 +30,9 @@ else
                 <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Source type</th>
+                    <th scope="col">Destination type</th>
                     <th scope="col">Destination database</th>
-                    <th scope="col">Destination collection</th>
+                    <th scope="col">Destination target</th>
                     <th scope="col">Updated</th>
                     <th scope="col" class="text-end">Actions</th>
                 </tr>
@@ -42,6 +43,7 @@ else
                     <tr>
                         <td>@pipeline.Name</td>
                         <td>@pipeline.SourceTypeDisplay</td>
+                        <td>@pipeline.DestinationTypeDisplay</td>
                         <td>@pipeline.DestinationDatabaseDisplay</td>
                         <td>@pipeline.DestinationCollectionDisplay</td>
                         <td>@pipeline.UpdatedAt.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'")</td>

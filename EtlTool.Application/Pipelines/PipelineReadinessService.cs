@@ -1,6 +1,7 @@
 using System.Globalization;
 using EtlTool.Application.Mapping;
 using EtlTool.Application.MongoDB;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Transformations;
 using EtlTool.Application.Validations;
 using EtlTool.Domain.Entities;
@@ -474,6 +475,18 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         PipelineDefinition pipeline,
         List<PipelineReadinessProblem> problems)
     {
+        if (pipeline.DestinationType == DestinationType.PostgreSql)
+        {
+            EvaluatePostgreSqlDestination(pipeline, problems);
+            return;
+        }
+
+        if (pipeline.DestinationType != DestinationType.MongoDb)
+        {
+            AddProblem(problems, DestinationComponent, "The pipeline destination type is not supported.");
+            return;
+        }
+
         var hasDatabase = !string.IsNullOrWhiteSpace(pipeline.DestinationDatabase);
         var hasCollection = !string.IsNullOrWhiteSpace(pipeline.DestinationCollection);
 
@@ -500,6 +513,41 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         if (!validation.IsAllowed)
         {
             AddProblem(problems, DestinationComponent, validation.FailureMessage!);
+        }
+    }
+
+    private static void EvaluatePostgreSqlDestination(
+        PipelineDefinition pipeline,
+        List<PipelineReadinessProblem> problems)
+    {
+        var activeOutputFields = (pipeline.FieldMappings ?? [])
+            .Where(mapping => mapping is not null
+                && mapping.IsIncluded
+                && !string.IsNullOrWhiteSpace(mapping.TargetField))
+            .Select(mapping => mapping.TargetField)
+            .ToHashSet(StringComparer.Ordinal);
+        try
+        {
+            PostgreSqlDestinationConfigurationValidator.Validate(
+                pipeline.PostgreSqlDestination,
+                activeOutputFields);
+
+            var upsertMapping = pipeline.PostgreSqlDestination!.ColumnMappings.Single(mapping =>
+                string.Equals(
+                    mapping.DestinationColumn,
+                    pipeline.PostgreSqlDestination.UpsertKeyColumn,
+                    StringComparison.Ordinal));
+            if (!string.Equals(pipeline.UpsertKeyField, upsertMapping.OutputField, StringComparison.Ordinal))
+            {
+                AddProblem(
+                    problems,
+                    DestinationComponent,
+                    "The PostgreSQL upsert key must use the output field mapped to its selected destination column.");
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            AddProblem(problems, DestinationComponent, exception.Message);
         }
     }
 

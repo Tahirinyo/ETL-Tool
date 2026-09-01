@@ -8,7 +8,104 @@ namespace EtlTool.IntegrationTests.PostgreSql;
 public sealed class PostgreSqlMetadataDiscoveryServiceIntegrationTests(PostgreSqlFixture fixture)
 {
     [Fact]
-    public async Task DiscoverKeyConstraintsAsync_PreservesCompositeOrderNullabilityAndQuotedNames()
+    public async Task EnsureDestinationAccessibleAsync_RequiresBothInsertAndUpdateWithoutWriting()
+    {
+        const string schema = "DB18 Destination Access";
+        const string table = "Rows";
+        const string role = "db18_destination_access";
+        const string password = "test-only-destination-password";
+        var administratorFactory = CreateFactory();
+        var database = GetDatabaseName();
+        await using var administratorConnection = await administratorFactory.OpenAsync("ReportingDb", CancellationToken.None);
+        try
+        {
+            await ExecuteAsync(
+                administratorConnection,
+                "CREATE ROLE db18_destination_access LOGIN PASSWORD 'test-only-destination-password'; " +
+                "CREATE SCHEMA \"DB18 Destination Access\"; " +
+                "CREATE TABLE \"DB18 Destination Access\".\"Rows\" (id integer); " +
+                "GRANT USAGE ON SCHEMA \"DB18 Destination Access\" TO db18_destination_access; " +
+                "GRANT SELECT, INSERT ON \"DB18 Destination Access\".\"Rows\" TO db18_destination_access;");
+            var restrictedConnectionString = new Npgsql.NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+            {
+                Username = role,
+                Password = password,
+                Pooling = false
+            }.ConnectionString;
+            var destinationAccess = new PostgreSqlMetadataDiscoveryService(new PostgreSqlConnectionFactory(
+                new PostgreSqlConnectionOptions
+                {
+                    Profiles = new Dictionary<string, PostgreSqlConnectionProfileOptions>
+                    {
+                        ["Restricted"] = new() { ConnectionString = restrictedConnectionString }
+                    }
+                }));
+
+            var denied = await Assert.ThrowsAsync<PostgreSqlMetadataObjectNotFoundException>(() =>
+                destinationAccess.EnsureDestinationAccessibleAsync(
+                    "Restricted", database, schema, table, CancellationToken.None));
+            Assert.Equal("destination table", denied.ObjectType);
+            Assert.DoesNotContain(password, denied.ToString(), StringComparison.Ordinal);
+
+            await ExecuteAsync(
+                administratorConnection,
+                "REVOKE INSERT ON \"DB18 Destination Access\".\"Rows\" FROM db18_destination_access; " +
+                "GRANT UPDATE ON \"DB18 Destination Access\".\"Rows\" TO db18_destination_access;");
+            await Assert.ThrowsAsync<PostgreSqlMetadataObjectNotFoundException>(() =>
+                destinationAccess.EnsureDestinationAccessibleAsync(
+                    "Restricted", database, schema, table, CancellationToken.None));
+
+            await ExecuteAsync(
+                administratorConnection,
+                "GRANT INSERT ON \"DB18 Destination Access\".\"Rows\" TO db18_destination_access;");
+            await destinationAccess.EnsureDestinationAccessibleAsync(
+                "Restricted", database, schema, table, CancellationToken.None);
+        }
+        finally
+        {
+            await ExecuteAsync(administratorConnection, "DROP SCHEMA IF EXISTS \"DB18 Destination Access\" CASCADE;");
+            await ExecuteAsync(administratorConnection, "DROP ROLE IF EXISTS db18_destination_access;");
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverKeyConstraintsAsync_DoesNotExposeDeferrableUniqueConstraintsAsUpsertCandidates()
+    {
+        const string schema = "DB18 Deferrable";
+        const string table = "Rows";
+        var factory = CreateFactory();
+        var discovery = new PostgreSqlMetadataDiscoveryService(factory);
+        await using var connection = await factory.OpenAsync("ReportingDb", CancellationToken.None);
+        try
+        {
+            await ExecuteAsync(
+                connection,
+                "CREATE SCHEMA \"DB18 Deferrable\"; " +
+                "CREATE TABLE \"DB18 Deferrable\".\"Rows\" (" +
+                "id integer NOT NULL, " +
+                "CONSTRAINT \"UX Deferrable Id\" UNIQUE (id) DEFERRABLE INITIALLY IMMEDIATE);");
+
+            var constraints = await discovery.DiscoverKeyConstraintsAsync(
+                "ReportingDb",
+                GetDatabaseName(),
+                schema,
+                table,
+                CancellationToken.None);
+
+            var deferrable = Assert.Single(constraints, constraint => constraint.Name == "UX Deferrable Id");
+            Assert.True(deferrable.IsDeferrable);
+            Assert.DoesNotContain(
+                PostgreSqlDestinationConfigurationValidator.GetEligibleSingleColumnKeyColumns(constraints),
+                column => column == "id");
+        }
+        finally
+        {
+            await ExecuteAsync(connection, "DROP SCHEMA IF EXISTS \"DB18 Deferrable\" CASCADE;");
+        }
+    }
+
+    [Fact]
+    public async Task DiscoverKeyConstraintsAsync_PreservesConstraintsAndEligibleBareUniqueIndexes()
     {
         const string schema = "DB9 \"Metadata";
         const string table = "Rows \"Table";
@@ -36,7 +133,7 @@ public sealed class PostgreSqlMetadataDiscoveryServiceIntegrationTests(PostgreSq
                 table,
                 CancellationToken.None);
 
-            Assert.Equal(5, constraints.Count);
+            Assert.Equal(6, constraints.Count);
             var primaryKey = Assert.Single(
                 constraints,
                 constraint => constraint.Kind == PostgreSqlKeyConstraintKind.PrimaryKey);
@@ -53,7 +150,9 @@ public sealed class PostgreSqlMetadataDiscoveryServiceIntegrationTests(PostgreSq
             Assert.Equal(["Tenant Id", "Email"], compositeUnique.Columns.Select(column => column.Name));
             Assert.Equal([1, 2], compositeUnique.Columns.Select(column => column.KeyOrdinal));
             Assert.All(compositeUnique.Columns, column => Assert.False(column.IsNullable));
-            Assert.DoesNotContain(constraints, constraint => constraint.Name == "Bare Unique Index");
+            var bareIndex = Assert.Single(constraints, constraint => constraint.Name == "Bare Unique Index");
+            Assert.Equal(PostgreSqlKeyConstraintKind.Unique, bareIndex.Kind);
+            Assert.Equal(["Tenant Id", "Email"], bareIndex.Columns.Select(column => column.Name));
             Assert.True(Assert.Single(constraints, constraint => constraint.Name == "UX Alias").Columns[0].IsNullable);
             Assert.True(Assert.Single(
                 constraints,

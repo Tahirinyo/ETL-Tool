@@ -204,6 +204,45 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_RequiresStructurallyValidPostgreSqlDestinationConfiguration()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.DestinationType = DestinationType.PostgreSql;
+        pipeline.DestinationDatabase = string.Empty;
+        pipeline.DestinationCollection = string.Empty;
+        pipeline.PostgreSqlDestination = new PostgreSqlDestinationOptions
+        {
+            ConnectionProfile = "WarehouseDb",
+            Database = "warehouse",
+            Schema = "import",
+            Table = "customers",
+            ColumnMappings =
+            [
+                new PostgreSqlDestinationColumnMapping { OutputField = "email", DestinationColumn = "email" }
+            ],
+            UpsertKeyColumn = "email"
+        };
+
+        var valid = await EvaluateAsync(pipeline);
+
+        Assert.True(valid!.IsReady);
+
+        pipeline.PostgreSqlDestination.ColumnMappings[0].OutputField = "missing";
+        var stale = await EvaluateAsync(pipeline);
+
+        Assert.False(stale!.IsReady);
+        Assert.Contains(stale.Problems, problem => problem.Component == "Destination"
+            && problem.Message.Contains("not an included mapped output field", StringComparison.Ordinal));
+
+        pipeline.PostgreSqlDestination.ColumnMappings[0].OutputField = "email";
+        pipeline.UpsertKeyField = "amount";
+        var inconsistent = await EvaluateAsync(pipeline);
+
+        Assert.Contains(inconsistent!.Problems, problem => problem.Component == "Destination"
+            && problem.Message.Contains("must use the output field", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void EvaluateForPreview_AndExecutionShareConfiguredPostgreSqlReadiness()
     {
         var pipeline = ReadyPipeline();

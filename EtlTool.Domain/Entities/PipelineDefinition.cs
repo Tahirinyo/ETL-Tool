@@ -31,6 +31,8 @@ public sealed class PipelineDefinition
 
     public DestinationType DestinationType { get; set; } = DestinationType.MongoDb;
 
+    public PostgreSqlDestinationOptions? PostgreSqlDestination { get; set; }
+
     public string DestinationDatabase { get; set; } = string.Empty;
 
     public string DestinationCollection { get; set; } = string.Empty;

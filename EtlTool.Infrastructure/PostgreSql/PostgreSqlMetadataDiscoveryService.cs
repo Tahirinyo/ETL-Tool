@@ -5,7 +5,9 @@ using Npgsql;
 namespace EtlTool.Infrastructure.PostgreSql;
 
 public sealed class PostgreSqlMetadataDiscoveryService(
-    IPostgreSqlConnectionFactory connectionFactory) : IPostgreSqlMetadataDiscoveryService
+    IPostgreSqlConnectionFactory connectionFactory) :
+    IPostgreSqlMetadataDiscoveryService,
+    IPostgreSqlDestinationAccessService
 {
     private const string DatabasesQuery = """
         SELECT datname
@@ -51,6 +53,18 @@ public sealed class PostgreSqlMetadataDiscoveryService(
               AND has_table_privilege(c.oid, 'SELECT'));
         """;
 
+    private const string DestinationAccessQuery = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_class AS c
+            INNER JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+            WHERE n.nspname = @schema
+              AND c.relname = @table
+              AND c.relkind IN ('r', 'p')
+              AND has_table_privilege(c.oid, 'INSERT')
+              AND has_table_privilege(c.oid, 'UPDATE'));
+        """;
+
     private const string ColumnsQuery = """
         SELECT a.attname,
                pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -74,7 +88,8 @@ public sealed class PostgreSqlMetadataDiscoveryService(
                a.attname,
                key_columns.ordinality,
                NOT a.attnotnull,
-               key_index.indnullsnotdistinct
+               key_index.indnullsnotdistinct,
+               con.condeferrable
         FROM pg_catalog.pg_constraint AS con
         INNER JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
         INNER JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
@@ -88,7 +103,36 @@ public sealed class PostgreSqlMetadataDiscoveryService(
           AND c.relkind IN ('r', 'p')
           AND has_table_privilege(c.oid, 'SELECT')
           AND con.contype IN ('p', 'u')
-        ORDER BY con.conname, key_columns.ordinality;
+        UNION ALL
+        SELECT index_class.relname,
+               'u',
+               a.attname,
+               key_columns.ordinality,
+               NOT a.attnotnull,
+               key_index.indnullsnotdistinct,
+               false
+        FROM pg_catalog.pg_index AS key_index
+        INNER JOIN pg_catalog.pg_class AS c ON c.oid = key_index.indrelid
+        INNER JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        INNER JOIN pg_catalog.pg_class AS index_class ON index_class.oid = key_index.indexrelid
+        INNER JOIN unnest(key_index.indkey) WITH ORDINALITY AS key_columns(attnum, ordinality)
+            ON key_columns.ordinality <= key_index.indnkeyatts
+        INNER JOIN pg_catalog.pg_attribute AS a
+            ON a.attrelid = c.oid
+           AND a.attnum = key_columns.attnum
+        WHERE n.nspname = @schema
+          AND c.relname = @table
+          AND c.relkind IN ('r', 'p')
+          AND has_table_privilege(c.oid, 'SELECT')
+          AND key_index.indisunique
+          AND NOT key_index.indisprimary
+          AND key_index.indpred IS NULL
+          AND key_index.indexprs IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_catalog.pg_constraint AS con
+              WHERE con.conindid = key_index.indexrelid)
+        ORDER BY 1, 4;
         """;
 
     public async Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(
@@ -199,7 +243,8 @@ public sealed class PostgreSqlMetadataDiscoveryService(
                 reader.GetString(2),
                 reader.GetInt64(3),
                 reader.GetBoolean(4),
-                reader.GetBoolean(5)),
+                reader.GetBoolean(5),
+                reader.GetBoolean(6)),
             cancellationToken).ConfigureAwait(false);
 
         return rows
@@ -217,8 +262,35 @@ public sealed class PostgreSqlMetadataDiscoveryService(
                         checked((int)row.KeyOrdinal),
                         row.IsNullable))
                     .ToArray(),
-                group.First().IsNullsNotDistinct))
+                group.First().IsNullsNotDistinct,
+                group.First().IsDeferrable))
             .ToArray();
+    }
+
+    public async Task EnsureDestinationAccessibleAsync(
+        string connectionProfile,
+        string database,
+        string schema,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory
+            .OpenDatabaseAsync(connectionProfile, database, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSchemaExistsAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+
+        if (!await ExecuteExistsAsync(
+                connection,
+                DestinationAccessQuery,
+                command =>
+                {
+                    AddParameter(command, "@schema", schema);
+                    AddParameter(command, "@table", table);
+                },
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new PostgreSqlMetadataObjectNotFoundException("destination table");
+        }
     }
 
     private static async Task EnsureSchemaExistsAsync(
@@ -338,5 +410,6 @@ public sealed class PostgreSqlMetadataDiscoveryService(
         string ColumnName,
         long KeyOrdinal,
         bool IsNullable,
-        bool IsNullsNotDistinct);
+        bool IsNullsNotDistinct,
+        bool IsDeferrable);
 }

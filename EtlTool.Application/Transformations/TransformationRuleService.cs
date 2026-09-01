@@ -136,6 +136,7 @@ public sealed class TransformationRuleService : ITransformationRuleService
             TransformationRules = rules,
             ValidationRules = pipeline.ValidationRules,
             DestinationType = pipeline.DestinationType,
+            PostgreSqlDestination = CopyPostgreSqlDestination(pipeline.PostgreSqlDestination),
             DestinationDatabase = pipeline.DestinationDatabase,
             DestinationCollection = pipeline.DestinationCollection,
             UpsertKeyField = pipeline.UpsertKeyField,
@@ -353,6 +354,23 @@ public sealed class TransformationRuleService : ITransformationRuleService
             Configuration = new Dictionary<string, string>(rule.Configuration, StringComparer.Ordinal)
         })
         .ToList();
+
+    private static PostgreSqlDestinationOptions? CopyPostgreSqlDestination(
+        PostgreSqlDestinationOptions? value) => value is null
+        ? null
+        : new PostgreSqlDestinationOptions
+        {
+            ConnectionProfile = value.ConnectionProfile,
+            Database = value.Database,
+            Schema = value.Schema,
+            Table = value.Table,
+            ColumnMappings = (value.ColumnMappings ?? []).Select(mapping => new PostgreSqlDestinationColumnMapping
+            {
+                OutputField = mapping.OutputField,
+                DestinationColumn = mapping.DestinationColumn
+            }).ToList(),
+            UpsertKeyColumn = value.UpsertKeyColumn
+        };
 
     private static void ValidatePipelineId(Guid pipelineId)
     {

@@ -28,4 +28,5 @@ public sealed record PostgreSqlKeyConstraintMetadata(
     string Name,
     PostgreSqlKeyConstraintKind Kind,
     IReadOnlyList<PostgreSqlKeyColumnMetadata> Columns,
-    bool IsNullsNotDistinct = false);
+    bool IsNullsNotDistinct = false,
+    bool IsDeferrable = false);

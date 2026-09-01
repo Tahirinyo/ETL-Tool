@@ -80,6 +80,21 @@ public sealed class EtlRunExecutionConfigurationTests
                 }
             ],
             DestinationType = DestinationType.PostgreSql,
+            PostgreSqlDestination = new PostgreSqlDestinationOptions
+            {
+                ConnectionProfile = "WarehouseDb",
+                Database = "warehouse",
+                Schema = "import",
+                Table = "customer_rows",
+                ColumnMappings =
+                [
+                    new PostgreSqlDestinationColumnMapping
+                    {
+                        OutputField = "customer_id", DestinationColumn = "customer_id"
+                    }
+                ],
+                UpsertKeyColumn = "customer_id"
+            },
             DestinationDatabase = "admitted_database",
             DestinationCollection = "admitted_collection",
             UpsertKeyField = "customer_id",
@@ -109,6 +124,8 @@ public sealed class EtlRunExecutionConfigurationTests
         pipeline.ValidationRules[0].Configuration["Mode"] = "Edited";
         pipeline.ValidationRules[0].ErrorMessage = "Edited message";
         pipeline.DestinationType = DestinationType.MongoDb;
+        pipeline.PostgreSqlDestination!.Table = "edited_rows";
+        pipeline.PostgreSqlDestination.ColumnMappings[0].DestinationColumn = "edited_customer_id";
         pipeline.DestinationDatabase = "edited_database";
         pipeline.DestinationCollection = "edited_collection";
         pipeline.UpsertKeyField = "edited_id";
@@ -138,6 +155,11 @@ public sealed class EtlRunExecutionConfigurationTests
         Assert.Equal("Strict", snapshot.ValidationRules[0].Configuration["Mode"]);
         Assert.Equal("Customer identifier is required.", snapshot.ValidationRules[0].ErrorMessage);
         Assert.Equal(DestinationType.PostgreSql, snapshot.DestinationType);
+        Assert.NotNull(snapshot.PostgreSqlDestination);
+        Assert.Equal("WarehouseDb", snapshot.PostgreSqlDestination.ConnectionProfile);
+        Assert.Equal("customer_rows", snapshot.PostgreSqlDestination.Table);
+        Assert.Equal("customer_id", Assert.Single(snapshot.PostgreSqlDestination.ColumnMappings).DestinationColumn);
+        Assert.Equal("customer_id", snapshot.PostgreSqlDestination.UpsertKeyColumn);
         Assert.Equal("admitted_database", snapshot.DestinationDatabase);
         Assert.Equal("admitted_collection", snapshot.DestinationCollection);
         Assert.Equal("customer_id", snapshot.UpsertKeyField);
@@ -156,6 +178,18 @@ public sealed class EtlRunExecutionConfigurationTests
         var snapshot = EtlRunExecutionConfiguration.Capture(new PipelineDefinition
         {
             DestinationType = DestinationType.PostgreSql,
+            PostgreSqlDestination = new PostgreSqlDestinationOptions
+            {
+                ConnectionProfile = "WarehouseDb",
+                Database = "warehouse",
+                Schema = "import",
+                Table = "customer_rows",
+                ColumnMappings =
+                [
+                    new PostgreSqlDestinationColumnMapping { OutputField = "id", DestinationColumn = "customer_id" }
+                ],
+                UpsertKeyColumn = "customer_id"
+            },
             SourceOptions = new SourceOptions { CultureName = "tr-TR" },
             PostgreSqlSource = new PostgreSqlSourceOptions
             {
@@ -195,6 +229,7 @@ public sealed class EtlRunExecutionConfigurationTests
 
         var runtime = snapshot.ToPipelineDefinition();
         runtime.DestinationType = DestinationType.MongoDb;
+        runtime.PostgreSqlDestination!.ColumnMappings[0].DestinationColumn = "edited_customer_id";
         runtime.SourceOptions.CultureName = "en-US";
         runtime.PostgreSqlSource!.Table = "edited";
         runtime.MongoDbSource!.Collection = "edited";
@@ -205,6 +240,7 @@ public sealed class EtlRunExecutionConfigurationTests
 
         Assert.Equal("tr-TR", snapshot.SourceOptions.CultureName);
         Assert.Equal(DestinationType.PostgreSql, snapshot.DestinationType);
+        Assert.Equal("customer_id", snapshot.PostgreSqlDestination!.ColumnMappings[0].DestinationColumn);
         Assert.Equal("customers", snapshot.PostgreSqlSource!.Table);
         Assert.Equal("audit", snapshot.MongoDbSource!.Collection);
         Assert.Equal("Id", snapshot.ExpectedSchema[0].Name);
