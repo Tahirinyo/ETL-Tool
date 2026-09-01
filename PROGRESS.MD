@@ -7,6 +7,7 @@
 - Day 14 packaging, technical documentation, and demo assets were completed.
 - Day 15 final acceptance was completed. The demo configuration blocker was corrected in `01b4f1d`; fixture-backed acceptance verifies the documented clean and dirty row counters.
 - Task 15.3 reconciled released capability claims, intentional MVP exclusions, and known non-blocking limitations with implementation and acceptance evidence.
+- DB.13 added MongoDB source identity metadata and configured-connection database/collection discovery, including metadata/system-database exclusion and safe access failures. It does not include MongoDB schema inference, extraction, or UI integration.
 
 ## In Progress
 

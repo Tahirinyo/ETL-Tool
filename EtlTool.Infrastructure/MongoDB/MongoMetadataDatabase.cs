@@ -27,4 +27,8 @@ public sealed class MongoMetadataDatabase
 
     internal IMongoDatabase GetDatabase(string databaseName) =>
         _client.GetDatabase(databaseName);
+
+    internal Task<IAsyncCursor<string>> ListDatabaseNamesAsync(
+        CancellationToken cancellationToken) =>
+        _client.ListDatabaseNamesAsync(cancellationToken);
 }

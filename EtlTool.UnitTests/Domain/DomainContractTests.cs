@@ -12,7 +12,7 @@ public sealed class DomainContractTests
     public void EnumContracts_ExposeApprovedNamesAndStableValues()
     {
         Assert.Equal(
-            ["Unspecified:0", "Csv:1", "Xlsx:2", "PostgreSql:3"],
+            ["Unspecified:0", "Csv:1", "Xlsx:2", "PostgreSql:3", "MongoDb:4"],
             GetEnumContract<SourceType>());
         Assert.Equal(
             ["Comma:1", "Semicolon:2", "Tab:3"],
@@ -83,6 +83,7 @@ public sealed class DomainContractTests
         Assert.Empty(first.ValidationRules);
         Assert.True(first.SourceOptions.FirstRowIsHeader);
         Assert.Null(first.PostgreSqlSource);
+        Assert.Null(first.MongoDbSource);
 
         Assert.NotSame(first.SourceOptions, second.SourceOptions);
         Assert.NotSame(first.ExpectedSchema, second.ExpectedSchema);
@@ -110,6 +111,14 @@ public sealed class DomainContractTests
     }
 
     [Fact]
+    public void MongoDbSourceOptions_ContainsOnlySourceIdentityMetadata()
+    {
+        Assert.Equal(
+            ["Database", "Collection"],
+            typeof(MongoDbSourceOptions).GetProperties().Select(property => property.Name));
+    }
+
+    [Fact]
     public void PostgreSqlSourceMetadata_SerializesWithoutCredentialOrConnectionStringFields()
     {
         var pipeline = new PipelineDefinition
@@ -129,6 +138,32 @@ public sealed class DomainContractTests
 
         Assert.Contains("ConnectionProfile", pipelineJson, StringComparison.Ordinal);
         Assert.Contains("ConnectionProfile", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionString", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password", snapshotJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Secret", pipelineJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Secret", snapshotJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MongoDbSourceMetadata_SerializesWithoutCredentialOrConnectionStringFields()
+    {
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.MongoDb,
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "reporting",
+                Collection = "customers"
+            }
+        };
+
+        var pipelineJson = JsonSerializer.Serialize(pipeline);
+        var snapshotJson = JsonSerializer.Serialize(EtlRunExecutionConfiguration.Capture(pipeline));
+
+        Assert.Contains("MongoDbSource", pipelineJson, StringComparison.Ordinal);
+        Assert.Contains("MongoDbSource", snapshotJson, StringComparison.Ordinal);
         Assert.DoesNotContain("ConnectionString", pipelineJson, StringComparison.Ordinal);
         Assert.DoesNotContain("ConnectionString", snapshotJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Password", pipelineJson, StringComparison.Ordinal);

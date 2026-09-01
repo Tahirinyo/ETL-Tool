@@ -11,6 +11,8 @@ public sealed class EtlRunExecutionConfiguration
 
     public PostgreSqlSourceOptions? PostgreSqlSource { get; set; }
 
+    public MongoDbSourceOptions? MongoDbSource { get; set; }
+
     public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
 
     public List<FieldMapping> FieldMappings { get; set; } = [];
@@ -34,6 +36,7 @@ public sealed class EtlRunExecutionConfiguration
             SourceType = pipeline.SourceType,
             SourceOptions = Copy(pipeline.SourceOptions),
             PostgreSqlSource = Copy(pipeline.PostgreSqlSource),
+            MongoDbSource = Copy(pipeline.MongoDbSource),
             ExpectedSchema = pipeline.ExpectedSchema.Select(Copy).ToList(),
             FieldMappings = pipeline.FieldMappings.Select(Copy).ToList(),
             TransformationRules = pipeline.TransformationRules.Select(Copy).ToList(),
@@ -49,6 +52,7 @@ public sealed class EtlRunExecutionConfiguration
         SourceType = SourceType,
         SourceOptions = Copy(SourceOptions),
         PostgreSqlSource = Copy(PostgreSqlSource),
+        MongoDbSource = Copy(MongoDbSource),
         ExpectedSchema = ExpectedSchema.Select(Copy).ToList(),
         FieldMappings = FieldMappings.Select(Copy).ToList(),
         TransformationRules = TransformationRules.Select(Copy).ToList(),
@@ -75,6 +79,14 @@ public sealed class EtlRunExecutionConfiguration
             Database = value.Database,
             Schema = value.Schema,
             Table = value.Table
+        };
+
+    private static MongoDbSourceOptions? Copy(MongoDbSourceOptions? value) => value is null
+        ? null
+        : new MongoDbSourceOptions
+        {
+            Database = value.Database,
+            Collection = value.Collection
         };
 
     private static SourceFieldDefinition Copy(SourceFieldDefinition value) => new()

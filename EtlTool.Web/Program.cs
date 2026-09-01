@@ -109,6 +109,7 @@ builder.Services.AddSingleton<PostgreSqlSourceSchemaConverter>();
 builder.Services.AddSingleton<PostgreSqlDeterministicOrderingResolver>();
 builder.Services.AddSingleton<MongoMetadataDatabase>();
 builder.Services.AddSingleton<IMongoTargetAccessService, MongoTargetAccessService>();
+builder.Services.AddSingleton<IMongoSourceMetadataDiscoveryService, MongoSourceMetadataDiscoveryService>();
 builder.Services.AddSingleton<IPipelineDefinitionRepository, MongoPipelineDefinitionRepository>();
 builder.Services.AddSingleton<IEtlRunRepository, MongoEtlRunRepository>();
 builder.Services.AddSingleton<IDataLoader, MongoBulkUpsertLoader>();

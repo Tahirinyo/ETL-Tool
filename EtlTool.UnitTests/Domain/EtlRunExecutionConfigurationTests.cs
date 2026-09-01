@@ -32,6 +32,11 @@ public sealed class EtlRunExecutionConfigurationTests
                 Schema = "public",
                 Table = "customers"
             },
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "events",
+                Collection = "audit"
+            },
             ExpectedSchema =
             [
                 new SourceFieldDefinition { Name = "CustomerId", DataType = SourceFieldType.Integer }
@@ -93,6 +98,8 @@ public sealed class EtlRunExecutionConfigurationTests
         pipeline.PostgreSqlSource.Database = "edited_database";
         pipeline.PostgreSqlSource.Schema = "edited_schema";
         pipeline.PostgreSqlSource.Table = "edited_table";
+        pipeline.MongoDbSource.Database = "edited_events";
+        pipeline.MongoDbSource.Collection = "edited_audit";
         pipeline.ExpectedSchema[0].Name = "EditedId";
         pipeline.FieldMappings[0].TargetField = "edited_id";
         pipeline.TransformationRules[0].Order = 99;
@@ -115,6 +122,9 @@ public sealed class EtlRunExecutionConfigurationTests
         Assert.Equal("reporting", snapshot.PostgreSqlSource.Database);
         Assert.Equal("public", snapshot.PostgreSqlSource.Schema);
         Assert.Equal("customers", snapshot.PostgreSqlSource.Table);
+        Assert.NotNull(snapshot.MongoDbSource);
+        Assert.Equal("events", snapshot.MongoDbSource.Database);
+        Assert.Equal("audit", snapshot.MongoDbSource.Collection);
         Assert.Equal("CustomerId", Assert.Single(snapshot.ExpectedSchema).Name);
         Assert.Equal(SourceFieldType.Integer, snapshot.ExpectedSchema[0].DataType);
         Assert.Equal("customer_id", Assert.Single(snapshot.FieldMappings).TargetField);
@@ -150,6 +160,11 @@ public sealed class EtlRunExecutionConfigurationTests
                 Schema = "public",
                 Table = "customers"
             },
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                Database = "events",
+                Collection = "audit"
+            },
             ExpectedSchema = [new SourceFieldDefinition { Name = "Id" }],
             FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id" }],
             TransformationRules =
@@ -177,6 +192,7 @@ public sealed class EtlRunExecutionConfigurationTests
         var runtime = snapshot.ToPipelineDefinition();
         runtime.SourceOptions.CultureName = "en-US";
         runtime.PostgreSqlSource!.Table = "edited";
+        runtime.MongoDbSource!.Collection = "edited";
         runtime.ExpectedSchema[0].Name = "Edited";
         runtime.FieldMappings[0].TargetField = "edited";
         runtime.TransformationRules[0].Configuration["Value"] = "edited";
@@ -184,6 +200,7 @@ public sealed class EtlRunExecutionConfigurationTests
 
         Assert.Equal("tr-TR", snapshot.SourceOptions.CultureName);
         Assert.Equal("customers", snapshot.PostgreSqlSource!.Table);
+        Assert.Equal("audit", snapshot.MongoDbSource!.Collection);
         Assert.Equal("Id", snapshot.ExpectedSchema[0].Name);
         Assert.Equal("id", snapshot.FieldMappings[0].TargetField);
         Assert.Equal("admitted", snapshot.TransformationRules[0].Configuration["Value"]);

@@ -17,6 +17,8 @@ public sealed class PipelineDefinition
 
     public PostgreSqlSourceOptions? PostgreSqlSource { get; set; }
 
+    public MongoDbSourceOptions? MongoDbSource { get; set; }
+
     public List<SourceFieldDefinition> ExpectedSchema { get; set; } = [];
 
     public List<FieldMapping> FieldMappings { get; set; } = [];

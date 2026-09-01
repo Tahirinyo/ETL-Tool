@@ -74,6 +74,38 @@ public sealed class MongoPipelineDefinitionRepositoryTests(MongoDbFixture fixtur
     }
 
     [Fact]
+    public async Task AddAndGetAsync_RoundTripsMongoDbSourceMetadataWithoutCredentials()
+    {
+        await using var testDatabase = fixture.CreateDatabase();
+        var pipeline = CreateMinimalPipeline("MongoDB source");
+        pipeline.SourceType = SourceType.MongoDb;
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            Database = "reporting",
+            Collection = "customers"
+        };
+
+        await testDatabase.Repository.AddAsync(pipeline, CancellationToken.None);
+
+        var persisted = await testDatabase.Repository.GetByIdAsync(
+            pipeline.Id,
+            CancellationToken.None);
+        var document = await testDatabase.Database
+            .GetCollection<BsonDocument>(MongoMetadataCollectionNames.PipelineDefinitions)
+            .Find(FilterDefinition<BsonDocument>.Empty)
+            .SingleAsync();
+
+        Assert.NotNull(persisted);
+        Assert.Equal(SourceType.MongoDb, persisted.SourceType);
+        Assert.NotNull(persisted.MongoDbSource);
+        Assert.Equal("reporting", persisted.MongoDbSource.Database);
+        Assert.Equal("customers", persisted.MongoDbSource.Collection);
+        Assert.DoesNotContain("ConnectionString", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ListAsync_ReturnsEmptyThenMaterializesAllPipelinesWithoutOrderingContract()
     {
         await using var testDatabase = fixture.CreateDatabase();
