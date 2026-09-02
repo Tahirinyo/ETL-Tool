@@ -2,6 +2,7 @@
 
 ## Completed
 
+- Fixed saved PostgreSQL and MongoDB source Preview and background-execution reconstruction: both resolve the admitted safe saved-connection reference through the runtime provider context, while pipeline/run persistence retains only safe logical metadata.
 - The MVP implementation is complete: CSV and modern XLSX ingestion, reusable pipelines, schema inference/mapping/remapping, ordered transformations, validation, preview, background batch execution, MongoDB bulk upserts, counters/statuses, error CSV, run history, and Docker Compose packaging.
 - Day 13 release-candidate acceptance, including 100K execution acceptance and MongoDB resilience coverage, was completed.
 - Day 14 packaging, technical documentation, and demo assets were completed.
@@ -17,6 +18,8 @@
 - DB.24 updated the README, technical documentation, and demo guide for the accepted database-to-database matrix: CSV/XLSX/PostgreSQL to MongoDB and MongoDB to PostgreSQL. It adds repeatable PostgreSQL-to-MongoDB and MongoDB-to-PostgreSQL demo scenarios using placeholder local configuration only; no production or test code changed.
 - UX.1 polished the MVC pipeline workflow: destination saves return to the destination section, configuration actions now express forward/back hierarchy, and run progress/details provide direct routes to Preview, pipeline configuration, and Run History without changing execution admission semantics.
 - CONN.2 blocking fixes enforce the database-source routing matrix for both saved and legacy-shaped source POSTs, and reject missing saved destination IDs in the current saved-connection workflow without mutating persisted pipeline state. Legacy runtime resolution remains covered.
+- Fixed the MongoDB saved-source discovery regression: Configure Source now displays the existing safe metadata-discovery error rather than silently leaving dependent selectors disabled, and collection requests are bound to the selected database to avoid stale responses.
+- Fixed the live saved-PostgreSQL destination persistence blocker: Edit POST now ignores fully blank browser-generated mapping placeholders while preserving validation for incomplete mappings; a Docker-backed HTTP-to-MongoDB reload regression verifies the persisted destination and Preview readiness.
 
 ## In Progress
 

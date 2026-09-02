@@ -265,4 +265,70 @@ public sealed class MongoBsonMappingsTests
         Assert.DoesNotContain("Password", document.ToJson(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Secret", document.ToJson(), StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void PipelineMapping_RoundTripsSavedMongoDbSourceAndPostgreSqlDestination()
+    {
+        _ = new MongoMetadataDatabase(new MongoDbOptions
+        {
+            ConnectionString = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=100",
+            MetadataDatabaseName = "etl_tool_bson_mapping_tests"
+        });
+        var sourceConnectionId = Guid.NewGuid();
+        var destinationConnectionId = Guid.NewGuid();
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.MongoDb,
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                SavedConnectionId = sourceConnectionId,
+                Database = "etl_demo",
+                Collection = "customers"
+            },
+            ExpectedSchema =
+            [
+                new SourceFieldDefinition { Name = "_id", DataType = SourceFieldType.String },
+                new SourceFieldDefinition { Name = "fullName", DataType = SourceFieldType.String },
+                new SourceFieldDefinition { Name = "email", DataType = SourceFieldType.String },
+                new SourceFieldDefinition { Name = "balance", DataType = SourceFieldType.Decimal }
+            ],
+            FieldMappings =
+            [
+                new FieldMapping { SourceField = "_id", TargetField = "CustomerId", IsIncluded = true },
+                new FieldMapping { SourceField = "fullName", TargetField = "FullName", IsIncluded = true },
+                new FieldMapping { SourceField = "email", TargetField = "Email", IsIncluded = true },
+                new FieldMapping { SourceField = "balance", TargetField = "Balance", IsIncluded = true }
+            ],
+            DestinationType = DestinationType.PostgreSql,
+            PostgreSqlDestination = new PostgreSqlDestinationOptions
+            {
+                SavedConnectionId = destinationConnectionId,
+                Database = "etl_demo",
+                Schema = "etl_demo",
+                Table = "mongo_customers",
+                ColumnMappings =
+                [
+                    new PostgreSqlDestinationColumnMapping { OutputField = "CustomerId", DestinationColumn = "source_id" },
+                    new PostgreSqlDestinationColumnMapping { OutputField = "FullName", DestinationColumn = "customer_name" },
+                    new PostgreSqlDestinationColumnMapping { OutputField = "Email", DestinationColumn = "email" },
+                    new PostgreSqlDestinationColumnMapping { OutputField = "Balance", DestinationColumn = "balance" }
+                ],
+                UpsertKeyColumn = "source_id"
+            },
+            UpsertKeyField = "CustomerId"
+        };
+
+        var roundTripped = BsonSerializer.Deserialize<PipelineDefinition>(pipeline.ToBsonDocument());
+
+        Assert.Equal(sourceConnectionId, roundTripped.MongoDbSource!.SavedConnectionId);
+        var destination = Assert.IsType<PostgreSqlDestinationOptions>(roundTripped.PostgreSqlDestination);
+        Assert.Equal(destinationConnectionId, destination.SavedConnectionId);
+        Assert.Equal(("etl_demo", "etl_demo", "mongo_customers"),
+            (destination.Database, destination.Schema, destination.Table));
+        Assert.Equal("source_id", destination.UpsertKeyColumn);
+        Assert.Equal(
+            [("CustomerId", "source_id"), ("FullName", "customer_name"), ("Email", "email"), ("Balance", "balance")],
+            destination.ColumnMappings.Select(mapping => (mapping.OutputField, mapping.DestinationColumn)));
+        Assert.Equal("CustomerId", roundTripped.UpsertKeyField);
+    }
 }

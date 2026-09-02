@@ -27,7 +27,7 @@ public sealed class RunSourceStore : IRunSourceStore
     private readonly MongoMetadataDatabase _mongoMetadataDatabase;
     private readonly IMongoSourceSchemaInferenceService _mongoSchemaInferenceService;
     private readonly MongoDbOptions _mongoDbOptions;
-    private readonly SavedConnectionProviderFactory? _savedConnectionProviderFactory;
+    private readonly ISavedConnectionRuntimeContextFactory? _savedConnectionRuntimeContextFactory;
 
     public RunSourceStore(
         LocalRunSourceFileStore fileSourceStore,
@@ -39,7 +39,7 @@ public sealed class RunSourceStore : IRunSourceStore
         MongoMetadataDatabase mongoMetadataDatabase,
         IMongoSourceSchemaInferenceService mongoSchemaInferenceService,
         MongoDbOptions mongoDbOptions,
-        SavedConnectionProviderFactory? savedConnectionProviderFactory = null)
+        ISavedConnectionRuntimeContextFactory? savedConnectionRuntimeContextFactory = null)
     {
         ArgumentNullException.ThrowIfNull(fileSourceStore);
         ArgumentNullException.ThrowIfNull(postgreSqlConnectionFactory);
@@ -60,7 +60,7 @@ public sealed class RunSourceStore : IRunSourceStore
         _mongoMetadataDatabase = mongoMetadataDatabase;
         _mongoSchemaInferenceService = mongoSchemaInferenceService;
         _mongoDbOptions = mongoDbOptions;
-        _savedConnectionProviderFactory = savedConnectionProviderFactory;
+        _savedConnectionRuntimeContextFactory = savedConnectionRuntimeContextFactory;
     }
 
     public async Task<IEtlSource> OpenAsync(EtlRun run, CancellationToken cancellationToken)
@@ -97,17 +97,31 @@ public sealed class RunSourceStore : IRunSourceStore
         var mongoOptions = _mongoDbOptions;
         if (sourceOptions.SavedConnectionId.HasValue)
         {
-            var runtimeFactory = _savedConnectionProviderFactory
+            var reference = ResolveSavedSourceReference(
+                configuration,
+                sourceOptions.SavedConnectionId.Value,
+                DatabaseProviderType.MongoDb);
+            var runtimeFactory = _savedConnectionRuntimeContextFactory
                 ?? throw new SavedConnectionResolutionException();
             var context = await runtimeFactory.CreateMongoDbAsync(
-                    sourceOptions.SavedConnectionId.Value,
-                    sourceOptions.SavedConnectionRevision
-                        ?? throw new SavedConnectionResolutionException(),
+                    reference.ConnectionId,
+                    reference.Revision,
                     cancellationToken)
                 .ConfigureAwait(false);
             metadataDatabase = context.MetadataDatabase;
             schemaInferenceService = context.SchemaInference;
             mongoOptions = context.Options;
+            sourceOptions = new MongoDbSourceOptions
+            {
+                SavedConnectionId = reference.ConnectionId,
+                SavedConnectionRevision = reference.Revision,
+                Database = sourceOptions.Database,
+                Collection = sourceOptions.Collection
+            };
+        }
+        else if (configuration.SourceConnection is not null)
+        {
+            throw new SavedConnectionResolutionException();
         }
 
         IReadOnlyList<SourceFieldDefinition> liveSchema;
@@ -150,25 +164,32 @@ public sealed class RunSourceStore : IRunSourceStore
         var effectiveSourceOptions = sourceOptions;
         if (sourceOptions.SavedConnectionId.HasValue)
         {
-            var runtimeFactory = _savedConnectionProviderFactory
+            var reference = ResolveSavedSourceReference(
+                configuration,
+                sourceOptions.SavedConnectionId.Value,
+                DatabaseProviderType.PostgreSql);
+            var runtimeFactory = _savedConnectionRuntimeContextFactory
                 ?? throw new SavedConnectionResolutionException();
             var context = await runtimeFactory.CreatePostgreSqlAsync(
-                    sourceOptions.SavedConnectionId.Value,
-                    sourceOptions.SavedConnectionRevision
-                        ?? throw new SavedConnectionResolutionException(),
+                    reference.ConnectionId,
+                    reference.Revision,
                     cancellationToken)
                 .ConfigureAwait(false);
             connectionFactory = context.ConnectionFactory;
             metadataDiscoveryService = context.MetadataDiscovery;
             effectiveSourceOptions = new PostgreSqlSourceOptions
             {
-                SavedConnectionId = sourceOptions.SavedConnectionId,
-                SavedConnectionRevision = sourceOptions.SavedConnectionRevision,
+                SavedConnectionId = reference.ConnectionId,
+                SavedConnectionRevision = reference.Revision,
                 ConnectionProfile = SavedConnectionProviderFactory.RuntimePostgreSqlProfile,
                 Database = sourceOptions.Database,
                 Schema = sourceOptions.Schema,
                 Table = sourceOptions.Table
             };
+        }
+        else if (configuration.SourceConnection is not null)
+        {
+            throw new SavedConnectionResolutionException();
         }
 
         var columns = await metadataDiscoveryService.DiscoverColumnsAsync(
@@ -226,5 +247,22 @@ public sealed class RunSourceStore : IRunSourceStore
             _ => throw new InvalidOperationException(
                 $"The admitted source type '{configuration.SourceType}' is not supported for execution.")
         };
+    }
+
+    private static SavedConnectionReference ResolveSavedSourceReference(
+        EtlRunExecutionConfiguration configuration,
+        Guid sourceConnectionId,
+        DatabaseProviderType expectedProviderType)
+    {
+        var reference = configuration.SourceConnection;
+        if (reference is null
+            || reference.ConnectionId != sourceConnectionId
+            || reference.ProviderType != expectedProviderType
+            || reference.Revision < 1)
+        {
+            throw new SavedConnectionResolutionException();
+        }
+
+        return reference;
     }
 }

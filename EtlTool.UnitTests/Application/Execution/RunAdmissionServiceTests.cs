@@ -43,6 +43,48 @@ public sealed class RunAdmissionServiceTests
         Assert.Equal(4, Assert.Single(secondRepository.Runs).ExecutionConfiguration!.DestinationConnection!.Revision);
         Assert.Equal(connectionId, firstRepository.Runs[0].ExecutionConfiguration!.DestinationConnection!.ConnectionId);
     }
+
+    [Theory]
+    [InlineData(SourceType.PostgreSql)]
+    [InlineData(SourceType.MongoDb)]
+    public async Task AdmitAsync_SavedDatabaseSourceFreezesReferenceForRuntimeResolution(
+        SourceType sourceType)
+    {
+        var connectionId = Guid.NewGuid();
+        var pipeline = sourceType == SourceType.PostgreSql
+            ? PostgreSqlPipeline()
+            : MongoDbPipeline();
+        if (pipeline.PostgreSqlSource is not null)
+        {
+            pipeline.PostgreSqlSource.SavedConnectionId = connectionId;
+            pipeline.PostgreSqlSource.ConnectionProfile = string.Empty;
+        }
+        if (pipeline.MongoDbSource is not null)
+        {
+            pipeline.MongoDbSource.SavedConnectionId = connectionId;
+        }
+
+        var repository = new RecordingRunRepository();
+        var result = await Service(
+                pipeline,
+                new RecordingSourceStore(pipeline.Id),
+                repository,
+                new RecordingQueue(),
+                connectionRevisionResolver: new StubConnectionRevisionResolver { Revision = 6 })
+            .AdmitAsync(pipeline.Id, CancellationToken.None);
+
+        Assert.Equal(RunAdmissionStatus.Admitted, result.Status);
+        var configuration = Assert.Single(repository.Runs).ExecutionConfiguration!;
+        var reference = Assert.IsType<SavedConnectionReference>(configuration.SourceConnection);
+        Assert.Equal((connectionId, 6), (reference.ConnectionId, reference.Revision));
+        Assert.Equal(
+            sourceType == SourceType.PostgreSql ? DatabaseProviderType.PostgreSql : DatabaseProviderType.MongoDb,
+            reference.ProviderType);
+        var rehydrated = configuration.ToPipelineDefinition();
+        Assert.Equal(6, sourceType == SourceType.PostgreSql
+            ? rehydrated.PostgreSqlSource!.SavedConnectionRevision
+            : rehydrated.MongoDbSource!.SavedConnectionRevision);
+    }
     [Fact]
     public void Options_DefaultToFiveSecondsAndRejectOutOfRangeTimeouts()
     {

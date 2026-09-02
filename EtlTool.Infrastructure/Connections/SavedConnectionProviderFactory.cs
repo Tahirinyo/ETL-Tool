@@ -1,4 +1,6 @@
 using EtlTool.Application.Connections;
+using EtlTool.Application.MongoDB;
+using EtlTool.Application.PostgreSql;
 using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.MongoDB;
@@ -7,7 +9,20 @@ using System.Collections.Concurrent;
 
 namespace EtlTool.Infrastructure.Connections;
 
-public sealed class SavedConnectionProviderFactory
+public interface ISavedConnectionRuntimeContextFactory
+{
+    Task<PostgreSqlRuntimeConnectionContext> CreatePostgreSqlAsync(
+        Guid connectionId,
+        int revision,
+        CancellationToken cancellationToken);
+
+    Task<MongoRuntimeConnectionContext> CreateMongoDbAsync(
+        Guid connectionId,
+        int revision,
+        CancellationToken cancellationToken);
+}
+
+public sealed class SavedConnectionProviderFactory : ISavedConnectionRuntimeContextFactory
 {
     public const string RuntimePostgreSqlProfile = "__saved_connection_runtime";
 
@@ -148,11 +163,11 @@ public sealed class SavedConnectionProviderFactory
 }
 
 public sealed record PostgreSqlRuntimeConnectionContext(
-    PostgreSqlConnectionFactory ConnectionFactory,
-    PostgreSqlMetadataDiscoveryService MetadataDiscovery);
+    IPostgreSqlConnectionFactory ConnectionFactory,
+    IPostgreSqlRuntimeMetadataDiscoveryService MetadataDiscovery);
 
 public sealed record MongoRuntimeConnectionContext(
     MongoMetadataDatabase MetadataDatabase,
     MongoTargetAccessService TargetAccess,
-    MongoSourceSchemaInferenceService SchemaInference,
+    IMongoSourceSchemaInferenceService SchemaInference,
     MongoDbOptions Options);

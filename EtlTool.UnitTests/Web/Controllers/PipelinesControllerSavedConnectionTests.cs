@@ -20,7 +20,8 @@ public sealed class PipelinesControllerSavedConnectionTests
         var pipeline = Pipeline();
         var service = new PipelineService(pipeline);
         var connectionId = Guid.NewGuid();
-        var result = await new PipelinesController(service, savedMetadataDiscoveryService: new Metadata())
+        var controller = new PipelinesController(service, savedMetadataDiscoveryService: new Metadata());
+        var result = await controller
             .InspectSource(pipeline.Id, new SourceUploadViewModel
             {
                 SourceType = SourceType.PostgreSql,
@@ -32,8 +33,26 @@ public sealed class PipelinesControllerSavedConnectionTests
 
         Assert.Equal(nameof(PipelinesController.Mapping), Assert.IsType<RedirectToActionResult>(result).ActionName);
         Assert.Equal(connectionId, service.Updated!.PostgreSqlSource!.SavedConnectionId);
+        Assert.True(string.IsNullOrEmpty(service.Updated.PostgreSqlSource.ConnectionProfile));
         Assert.Equal(DestinationType.MongoDb, service.Updated.DestinationType);
         Assert.Null(service.Updated.PostgreSqlDestination);
+
+        controller.ModelState.Clear(); // Mapping is a separate browser POST from source inspection.
+        var mapping = await controller.Mapping(pipeline.Id, new FieldMappingViewModel
+        {
+            Fields = [new FieldMappingFieldViewModel { SourceField = "id", TargetField = "id", IsIncluded = true }]
+        }, CancellationToken.None);
+
+        Assert.True(
+            Assert.IsType<FieldMappingViewModel>(Assert.IsType<ViewResult>(mapping).Model).IsSaved,
+            string.Join(" | ", controller.ModelState.Values
+                .SelectMany(value => value.Errors)
+                .Select(error => error.ErrorMessage)));
+        var persisted = Assert.IsType<PostgreSqlSourceOptions>(service.Updated.PostgreSqlSource);
+        Assert.Equal(connectionId, persisted.SavedConnectionId);
+        var serialized = JsonSerializer.Serialize(service.Updated);
+        Assert.DoesNotContain("connectionstring", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", serialized, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -189,6 +208,37 @@ public sealed class PipelinesControllerSavedConnectionTests
     }
 
     [Fact]
+    public async Task MongoDbDiscovery_UsesSavedConnectionForDatabasesAndTheSelectedDatabaseForCollections()
+    {
+        var connectionId = Guid.NewGuid();
+        var metadata = new Metadata();
+        var controller = new PipelinesController(new PipelineService(Pipeline()),
+            savedMetadataDiscoveryService: metadata);
+
+        var databases = await controller.MongoDbDatabases(connectionId, CancellationToken.None);
+        var collections = await controller.MongoDbCollections(connectionId, "reporting", CancellationToken.None);
+
+        Assert.Contains("reporting", JsonSerializer.Serialize(Assert.IsType<JsonResult>(databases).Value));
+        Assert.Contains("customers", JsonSerializer.Serialize(Assert.IsType<JsonResult>(collections).Value));
+        Assert.Equal(connectionId, metadata.MongoDatabaseConnectionId);
+        Assert.Equal((connectionId, "reporting"), metadata.MongoCollectionRequest);
+    }
+
+    [Fact]
+    public async Task MongoDbDatabases_SavedConnectionAccessFailureReturnsSafeError()
+    {
+        var result = await new PipelinesController(new PipelineService(Pipeline()),
+                savedMetadataDiscoveryService: new Metadata { Failure = new MongoSourceAccessException() })
+            .MongoDbDatabases(Guid.NewGuid(), CancellationToken.None);
+
+        var error = Assert.IsType<BadRequestObjectResult>(result);
+        var payload = JsonSerializer.Serialize(error.Value);
+        Assert.Contains("unavailable", payload, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("mongodb://", payload, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", payload, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task MongoDbCollections_RejectsMissingConnectionIdSafely()
     {
         var result = await new PipelinesController(new PipelineService(Pipeline()),
@@ -209,9 +259,16 @@ public sealed class PipelinesControllerSavedConnectionTests
 
     private sealed class PipelineService(PipelineDefinition pipeline) : IPipelineService
     {
+        private PipelineDefinition _pipeline = pipeline;
+
         public PipelineDefinition? Updated { get; private set; }
-        public Task<PipelineDefinition?> GetByIdAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineDefinition?>(id == pipeline.Id ? pipeline : null);
-        public Task<bool> UpdateAsync(Guid id, PipelineDefinition value, CancellationToken cancellationToken) { Updated = value; return Task.FromResult(true); }
+        public Task<PipelineDefinition?> GetByIdAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult<PipelineDefinition?>(id == _pipeline.Id ? _pipeline : null);
+        public Task<bool> UpdateAsync(Guid id, PipelineDefinition value, CancellationToken cancellationToken)
+        {
+            Updated = value;
+            _pipeline = value;
+            return Task.FromResult(true);
+        }
         public Task<PipelineDefinition> CreateAsync(PipelineDefinition value, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<PipelineDefinition>> ListAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -220,6 +277,8 @@ public sealed class PipelinesControllerSavedConnectionTests
     private sealed class Metadata : ISavedConnectionMetadataDiscoveryService
     {
         public Exception? Failure { get; init; }
+        public Guid? MongoDatabaseConnectionId { get; private set; }
+        public (Guid ConnectionId, string Database)? MongoCollectionRequest { get; private set; }
 
         public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverPostgreSqlDatabasesAsync(Guid id, CancellationToken token) => Result<IReadOnlyList<PostgreSqlDatabaseMetadata>>([new("reporting")]);
         public Task<IReadOnlyList<PostgreSqlSchemaMetadata>> DiscoverPostgreSqlSchemasAsync(Guid id, string database, CancellationToken token) => Result<IReadOnlyList<PostgreSqlSchemaMetadata>>([new("public")]);
@@ -227,8 +286,17 @@ public sealed class PipelinesControllerSavedConnectionTests
         public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverPostgreSqlColumnsAsync(Guid id, string database, string schema, string table, CancellationToken token) => Result<IReadOnlyList<PostgreSqlColumnMetadata>>([new("id", "integer", false, 1)]);
         public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverPostgreSqlKeyConstraintsAsync(Guid id, string database, string schema, string table, CancellationToken token) => Result<IReadOnlyList<PostgreSqlKeyConstraintMetadata>>([]);
         public Task EnsurePostgreSqlDestinationAccessibleAsync(Guid id, string database, string schema, string table, CancellationToken token) => Failure is null ? Task.CompletedTask : Task.FromException(Failure);
-        public Task<IReadOnlyList<MongoDatabaseMetadata>> DiscoverMongoDatabasesAsync(Guid id, CancellationToken token) => Result<IReadOnlyList<MongoDatabaseMetadata>>([new("reporting")]);
-        public Task<IReadOnlyList<MongoCollectionMetadata>> DiscoverMongoCollectionsAsync(Guid id, string database, CancellationToken token) => Result<IReadOnlyList<MongoCollectionMetadata>>([new("customers")]);
+        public Task<IReadOnlyList<MongoDatabaseMetadata>> DiscoverMongoDatabasesAsync(Guid id, CancellationToken token)
+        {
+            MongoDatabaseConnectionId = id;
+            return Result<IReadOnlyList<MongoDatabaseMetadata>>([new("reporting")]);
+        }
+
+        public Task<IReadOnlyList<MongoCollectionMetadata>> DiscoverMongoCollectionsAsync(Guid id, string database, CancellationToken token)
+        {
+            MongoCollectionRequest = (id, database);
+            return Result<IReadOnlyList<MongoCollectionMetadata>>([new("customers")]);
+        }
         public Task<IReadOnlyList<SourceFieldDefinition>> InferMongoSchemaAsync(Guid id, string database, string collection, CancellationToken token) => Result<IReadOnlyList<SourceFieldDefinition>>([new() { Name = "id", DataType = SourceFieldType.Integer }]);
 
         private Task<T> Result<T>(T value) => Failure is null

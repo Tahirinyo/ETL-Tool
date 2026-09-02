@@ -1,5 +1,6 @@
 using System.Data.Common;
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Connections;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.PostgreSql;
 using EtlTool.Application.Sources;
@@ -8,6 +9,7 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.Execution;
 using EtlTool.Infrastructure.Extraction;
+using EtlTool.Infrastructure.Connections;
 using EtlTool.Infrastructure.MongoDB;
 using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.Uploads;
@@ -99,6 +101,160 @@ public sealed class RunSourceStoreTests : IDisposable
         Assert.Equal(("ReportingDb", "reporting"), connectionFactory.LastRequest);
 
         await store.ReleaseAsync(run, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task OpenAsync_SavedPostgreSqlRunUsesFrozenReferenceAndLogicalIdentity()
+    {
+        var connectionId = Guid.NewGuid();
+        var runtimeMetadata = new RecordingMetadataDiscoveryService();
+        var runtimeConnectionFactory = new RecordingConnectionFactory();
+        var runtimeFactory = new RecordingSavedRuntimeContextFactory
+        {
+            PostgreSqlContext = new PostgreSqlRuntimeConnectionContext(
+                runtimeConnectionFactory,
+                runtimeMetadata)
+        };
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.PostgreSql,
+            ExpectedSchema = [Field("Id", SourceFieldType.Integer)],
+            FieldMappings = [Mapping("Id", "id")],
+            PostgreSqlSource = new PostgreSqlSourceOptions
+            {
+                SavedConnectionId = connectionId,
+                ConnectionProfile = "must-not-be-used",
+                Database = "etl_demo",
+                Schema = "public",
+                Table = "customers_csv_clean"
+            }
+        };
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(
+                pipeline,
+                SavedReference(connectionId, DatabaseProviderType.PostgreSql, revision: 6))
+        };
+
+        await using var source = await CreateStore(
+                savedConnectionRuntimeContextFactory: runtimeFactory)
+            .OpenAsync(run, CancellationToken.None);
+
+        Assert.IsType<PostgreSqlEtlSource>(source);
+        Assert.Equal(
+            (connectionId, DatabaseProviderType.PostgreSql, 6),
+            Assert.Single(runtimeFactory.PostgreSqlRequests));
+        Assert.Equal(
+            (SavedConnectionProviderFactory.RuntimePostgreSqlProfile, "etl_demo", "public", "customers_csv_clean"),
+            runtimeMetadata.LastColumnRequest);
+        Assert.Null(run.ExecutionConfiguration!.PostgreSqlSource!.SavedConnectionRevision);
+        var serialized = System.Text.Json.JsonSerializer.Serialize(run.ExecutionConfiguration);
+        Assert.DoesNotContain("ConnectionString", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", serialized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task OpenAsync_SavedMongoDbRunUsesFrozenReferenceAndLogicalIdentity()
+    {
+        var connectionId = Guid.NewGuid();
+        var runtimeOptions = MongoOptions();
+        var runtimeMetadata = new MongoMetadataDatabase(runtimeOptions);
+        var runtimeInference = new RecordingMongoSchemaInferenceService();
+        var runtimeFactory = new RecordingSavedRuntimeContextFactory
+        {
+            MongoDbContext = new MongoRuntimeConnectionContext(
+                runtimeMetadata,
+                new MongoTargetAccessService(runtimeMetadata, runtimeOptions),
+                runtimeInference,
+                runtimeOptions)
+        };
+        var pipeline = new PipelineDefinition
+        {
+            SourceType = SourceType.MongoDb,
+            ExpectedSchema = [Field("Id", SourceFieldType.Integer)],
+            FieldMappings = [Mapping("Id", "id")],
+            MongoDbSource = new MongoDbSourceOptions
+            {
+                SavedConnectionId = connectionId,
+                Database = "etl_demo",
+                Collection = "customers_csv_clean"
+            }
+        };
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(
+                pipeline,
+                SavedReference(connectionId, DatabaseProviderType.MongoDb, revision: 9))
+        };
+
+        await using var source = await CreateStore(
+                savedConnectionRuntimeContextFactory: runtimeFactory)
+            .OpenAsync(run, CancellationToken.None);
+
+        Assert.IsType<MongoDbEtlSource>(source);
+        Assert.Equal(
+            (connectionId, DatabaseProviderType.MongoDb, 9),
+            Assert.Single(runtimeFactory.MongoDbRequests));
+        Assert.Equal(("etl_demo", "customers_csv_clean"), runtimeInference.LastRequest);
+        Assert.Null(run.ExecutionConfiguration!.MongoDbSource!.SavedConnectionRevision);
+    }
+
+    [Theory]
+    [InlineData(SourceType.PostgreSql)]
+    [InlineData(SourceType.MongoDb)]
+    public async Task OpenAsync_SavedSourceUnavailableAtExecutionFailsWithoutLegacyFallback(
+        SourceType sourceType)
+    {
+        var connectionId = Guid.NewGuid();
+        var pipeline = sourceType == SourceType.PostgreSql
+            ? new PipelineDefinition
+            {
+                SourceType = sourceType,
+                ExpectedSchema = [Field("Id", SourceFieldType.Integer)],
+                FieldMappings = [Mapping("Id", "id")],
+                PostgreSqlSource = new PostgreSqlSourceOptions
+                {
+                    SavedConnectionId = connectionId,
+                    ConnectionProfile = "must-not-be-used",
+                    Database = "etl_demo",
+                    Schema = "public",
+                    Table = "customers_csv_clean"
+                }
+            }
+            : new PipelineDefinition
+            {
+                SourceType = sourceType,
+                ExpectedSchema = [Field("Id", SourceFieldType.Integer)],
+                FieldMappings = [Mapping("Id", "id")],
+                MongoDbSource = new MongoDbSourceOptions
+                {
+                    SavedConnectionId = connectionId,
+                    Database = "etl_demo",
+                    Collection = "customers_csv_clean"
+                }
+            };
+        var providerType = sourceType == SourceType.PostgreSql
+            ? DatabaseProviderType.PostgreSql
+            : DatabaseProviderType.MongoDb;
+        var runtimeFactory = new RecordingSavedRuntimeContextFactory
+        {
+            Failure = new SavedConnectionResolutionException()
+        };
+        var run = new EtlRun
+        {
+            Id = Guid.NewGuid(),
+            ExecutionConfiguration = EtlRunExecutionConfiguration.Capture(
+                pipeline,
+                SavedReference(connectionId, providerType, revision: 2))
+        };
+
+        await Assert.ThrowsAsync<SavedConnectionResolutionException>(() =>
+            CreateStore(savedConnectionRuntimeContextFactory: runtimeFactory)
+                .OpenAsync(run, CancellationToken.None));
+
+        Assert.Equal(1, runtimeFactory.RequestCount);
     }
 
     [Fact]
@@ -282,7 +438,8 @@ public sealed class RunSourceStoreTests : IDisposable
     private RunSourceStore CreateStore(
         IPostgreSqlConnectionFactory? connectionFactory = null,
         IPostgreSqlMetadataDiscoveryService? metadataDiscoveryService = null,
-        IMongoSourceSchemaInferenceService? mongoInferenceService = null)
+        IMongoSourceSchemaInferenceService? mongoInferenceService = null,
+        ISavedConnectionRuntimeContextFactory? savedConnectionRuntimeContextFactory = null)
     {
         var uploadOptions = new UploadStorageOptions { RootPath = _rootPath };
         var fileStore = new LocalRunSourceFileStore(
@@ -307,7 +464,8 @@ public sealed class RunSourceStoreTests : IDisposable
                 mongoMetadata,
                 mongoDiscovery,
                 mongoOptions),
-            mongoOptions);
+            mongoOptions,
+            savedConnectionRuntimeContextFactory);
     }
 
     private static MongoDbOptions MongoOptions() => new()
@@ -365,6 +523,16 @@ public sealed class RunSourceStoreTests : IDisposable
         IsIncluded = true
     };
 
+    private static SavedConnectionReference SavedReference(
+        Guid connectionId,
+        DatabaseProviderType providerType,
+        int revision) => new()
+    {
+        ConnectionId = connectionId,
+        ProviderType = providerType,
+        Revision = revision
+    };
+
     private sealed class RecordingConnectionFactory : IPostgreSqlConnectionFactory
     {
         public (string Profile, string Database)? LastRequest { get; private set; }
@@ -383,7 +551,7 @@ public sealed class RunSourceStoreTests : IDisposable
         }
     }
 
-    private sealed class RecordingMetadataDiscoveryService : IPostgreSqlMetadataDiscoveryService
+    private sealed class RecordingMetadataDiscoveryService : IPostgreSqlRuntimeMetadataDiscoveryService
     {
         public (string Profile, string Database, string Schema, string Table)? LastRequest { get; private set; }
 
@@ -434,6 +602,13 @@ public sealed class RunSourceStoreTests : IDisposable
             LastColumnRequest = (connectionProfile, database, schema, table);
             return Task.FromResult(Columns);
         }
+
+        public Task EnsureDestinationAccessibleAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class TestConnectionException : Exception
@@ -458,6 +633,45 @@ public sealed class RunSourceStoreTests : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             LastRequest = (source.Database, source.Collection);
             return Task.FromResult(Schema);
+        }
+    }
+
+    private sealed class RecordingSavedRuntimeContextFactory : ISavedConnectionRuntimeContextFactory
+    {
+        public PostgreSqlRuntimeConnectionContext? PostgreSqlContext { get; init; }
+
+        public MongoRuntimeConnectionContext? MongoDbContext { get; init; }
+
+        public Exception? Failure { get; init; }
+
+        public List<(Guid ConnectionId, DatabaseProviderType ProviderType, int Revision)> PostgreSqlRequests { get; } = [];
+
+        public List<(Guid ConnectionId, DatabaseProviderType ProviderType, int Revision)> MongoDbRequests { get; } = [];
+
+        public int RequestCount => PostgreSqlRequests.Count + MongoDbRequests.Count;
+
+        public Task<PostgreSqlRuntimeConnectionContext> CreatePostgreSqlAsync(
+            Guid connectionId,
+            int revision,
+            CancellationToken cancellationToken)
+        {
+            PostgreSqlRequests.Add((connectionId, DatabaseProviderType.PostgreSql, revision));
+            return Failure is null
+                ? Task.FromResult(PostgreSqlContext
+                    ?? throw new InvalidOperationException("PostgreSQL runtime context was not configured."))
+                : Task.FromException<PostgreSqlRuntimeConnectionContext>(Failure);
+        }
+
+        public Task<MongoRuntimeConnectionContext> CreateMongoDbAsync(
+            Guid connectionId,
+            int revision,
+            CancellationToken cancellationToken)
+        {
+            MongoDbRequests.Add((connectionId, DatabaseProviderType.MongoDb, revision));
+            return Failure is null
+                ? Task.FromResult(MongoDbContext
+                    ?? throw new InvalidOperationException("MongoDB runtime context was not configured."))
+                : Task.FromException<MongoRuntimeConnectionContext>(Failure);
         }
     }
 }

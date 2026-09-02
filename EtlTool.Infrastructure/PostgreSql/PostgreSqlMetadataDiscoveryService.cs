@@ -6,8 +6,7 @@ namespace EtlTool.Infrastructure.PostgreSql;
 
 public sealed class PostgreSqlMetadataDiscoveryService(
     IPostgreSqlConnectionFactory connectionFactory) :
-    IPostgreSqlMetadataDiscoveryService,
-    IPostgreSqlDestinationAccessService
+    IPostgreSqlRuntimeMetadataDiscoveryService
 {
     private const string DatabasesQuery = """
         SELECT datname

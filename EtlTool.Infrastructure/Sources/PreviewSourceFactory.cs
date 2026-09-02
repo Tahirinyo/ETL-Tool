@@ -1,4 +1,5 @@
 using EtlTool.Application.Extraction;
+using EtlTool.Application.Connections;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 using EtlTool.Application.PostgreSql;
@@ -8,6 +9,7 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.MongoDB;
+using EtlTool.Infrastructure.Connections;
 
 namespace EtlTool.Infrastructure.Sources;
 
@@ -22,6 +24,8 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
     private readonly MongoDbOptions _mongoDbOptions;
     private readonly IMongoSourceSchemaInferenceService _mongoSourceSchemaInferenceService;
     private readonly SourceSchemaComparisonService _schemaComparisonService;
+    private readonly ISavedConnectionRevisionResolver? _savedConnectionRevisionResolver;
+    private readonly ISavedConnectionRuntimeContextFactory? _savedConnectionRuntimeContextFactory;
 
     public PreviewSourceFactory(
         IWizardSourceStore wizardSourceStore,
@@ -32,7 +36,9 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         MongoMetadataDatabase mongoMetadataDatabase,
         MongoDbOptions mongoDbOptions,
         IMongoSourceSchemaInferenceService mongoSourceSchemaInferenceService,
-        SourceSchemaComparisonService schemaComparisonService)
+        SourceSchemaComparisonService schemaComparisonService,
+        ISavedConnectionRevisionResolver? savedConnectionRevisionResolver = null,
+        ISavedConnectionRuntimeContextFactory? savedConnectionRuntimeContextFactory = null)
     {
         ArgumentNullException.ThrowIfNull(wizardSourceStore);
         ArgumentNullException.ThrowIfNull(postgreSqlConnectionFactory);
@@ -53,6 +59,8 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         _mongoDbOptions = mongoDbOptions;
         _mongoSourceSchemaInferenceService = mongoSourceSchemaInferenceService;
         _schemaComparisonService = schemaComparisonService;
+        _savedConnectionRevisionResolver = savedConnectionRevisionResolver;
+        _savedConnectionRuntimeContextFactory = savedConnectionRuntimeContextFactory;
     }
 
     public async Task<IEtlSource?> AcquireAsync(
@@ -88,11 +96,37 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
     {
         var source = pipeline.PostgreSqlSource
             ?? throw new InvalidOperationException("The PostgreSQL source configuration is missing.");
-        var columns = await _postgreSqlMetadataDiscoveryService.DiscoverColumnsAsync(
-                source.ConnectionProfile,
-                source.Database,
-                source.Schema,
-                source.Table,
+        var connectionFactory = _postgreSqlConnectionFactory;
+        var metadataDiscoveryService = _postgreSqlMetadataDiscoveryService;
+        var effectiveSource = source;
+        if (source.SavedConnectionId.HasValue)
+        {
+            var reference = await ResolveSavedConnectionAsync(
+                    source.SavedConnectionId.Value,
+                    DatabaseProviderType.PostgreSql,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var context = await SavedRuntimeContextFactory()
+                .CreatePostgreSqlAsync(reference.ConnectionId, reference.Revision, cancellationToken)
+                .ConfigureAwait(false);
+            connectionFactory = context.ConnectionFactory;
+            metadataDiscoveryService = context.MetadataDiscovery;
+            effectiveSource = new PostgreSqlSourceOptions
+            {
+                SavedConnectionId = reference.ConnectionId,
+                SavedConnectionRevision = reference.Revision,
+                ConnectionProfile = SavedConnectionProviderFactory.RuntimePostgreSqlProfile,
+                Database = source.Database,
+                Schema = source.Schema,
+                Table = source.Table
+            };
+        }
+
+        var columns = await metadataDiscoveryService.DiscoverColumnsAsync(
+                effectiveSource.ConnectionProfile,
+                effectiveSource.Database,
+                effectiveSource.Schema,
+                effectiveSource.Table,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -116,10 +150,10 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         }
 
         return new PostgreSqlEtlSource(
-            _postgreSqlConnectionFactory,
-            _postgreSqlMetadataDiscoveryService,
+            connectionFactory,
+            metadataDiscoveryService,
             _postgreSqlOrderingResolver,
-            source);
+            effectiveSource);
     }
 
     private async Task<MongoDbEtlSource> CreateMongoDbSourceAsync(
@@ -128,10 +162,28 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
     {
         var source = pipeline.MongoDbSource
             ?? throw new InvalidOperationException("The MongoDB source configuration is missing.");
+        var metadataDatabase = _mongoMetadataDatabase;
+        var mongoDbOptions = _mongoDbOptions;
+        var schemaInferenceService = _mongoSourceSchemaInferenceService;
+        if (source.SavedConnectionId.HasValue)
+        {
+            var reference = await ResolveSavedConnectionAsync(
+                    source.SavedConnectionId.Value,
+                    DatabaseProviderType.MongoDb,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var context = await SavedRuntimeContextFactory()
+                .CreateMongoDbAsync(reference.ConnectionId, reference.Revision, cancellationToken)
+                .ConfigureAwait(false);
+            metadataDatabase = context.MetadataDatabase;
+            mongoDbOptions = context.Options;
+            schemaInferenceService = context.SchemaInference;
+        }
+
         IReadOnlyList<SourceFieldDefinition> liveSchema;
         try
         {
-            liveSchema = await _mongoSourceSchemaInferenceService
+            liveSchema = await schemaInferenceService
                 .InferAsync(source, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -149,9 +201,23 @@ public sealed class PreviewSourceFactory : IPreviewSourceFactory
         }
 
         return new MongoDbEtlSource(
-            _mongoMetadataDatabase,
-            _mongoDbOptions,
+            metadataDatabase,
+            mongoDbOptions,
             source,
             pipeline.ExpectedSchema);
     }
+
+    private async Task<SavedConnectionReference> ResolveSavedConnectionAsync(
+        Guid connectionId,
+        DatabaseProviderType providerType,
+        CancellationToken cancellationToken)
+    {
+        var resolver = _savedConnectionRevisionResolver
+            ?? throw new SavedConnectionResolutionException();
+        return await resolver.ResolveCurrentAsync(connectionId, providerType, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private ISavedConnectionRuntimeContextFactory SavedRuntimeContextFactory() =>
+        _savedConnectionRuntimeContextFactory ?? throw new SavedConnectionResolutionException();
 }

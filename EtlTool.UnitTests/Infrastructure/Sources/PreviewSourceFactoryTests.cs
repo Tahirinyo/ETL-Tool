@@ -8,7 +8,9 @@ using EtlTool.Domain.Enums;
 using EtlTool.Domain.ValueObjects;
 using EtlTool.Infrastructure.PostgreSql;
 using EtlTool.Infrastructure.MongoDB;
+using EtlTool.Infrastructure.Connections;
 using EtlTool.Infrastructure.Sources;
+using EtlTool.Application.Connections;
 using EtlTool.Application.MongoDB;
 using EtlTool.Application.Pipelines;
 
@@ -65,6 +67,45 @@ public sealed class PreviewSourceFactoryTests
     }
 
     [Fact]
+    public async Task AcquireAsync_SavedPostgreSqlSourceUsesResolvedRuntimeConnectionContext()
+    {
+        var connectionId = Guid.NewGuid();
+        var fallbackMetadata = new RecordingPostgreSqlMetadataDiscoveryService();
+        var savedMetadata = new RecordingPostgreSqlMetadataDiscoveryService();
+        var resolver = new RecordingSavedConnectionRevisionResolver(connectionId, DatabaseProviderType.PostgreSql, 4);
+        var contexts = new RecordingSavedConnectionRuntimeContextFactory
+        {
+            PostgreSqlContext = new PostgreSqlRuntimeConnectionContext(
+                new ThrowingConnectionFactory(),
+                savedMetadata)
+        };
+        var factory = CreateFactory(
+            new RecordingWizardSourceStore(),
+            postgreSqlMetadata: fallbackMetadata,
+            savedConnectionRevisionResolver: resolver,
+            savedConnectionRuntimeContextFactory: contexts);
+        var pipeline = Pipeline(SourceType.PostgreSql);
+        pipeline.PostgreSqlSource = new PostgreSqlSourceOptions
+        {
+            SavedConnectionId = connectionId,
+            Database = "reporting",
+            Schema = "public",
+            Table = "customers"
+        };
+        pipeline.ExpectedSchema = [Field("Id", SourceFieldType.Integer)];
+        pipeline.FieldMappings = [new FieldMapping { SourceField = "Id", TargetField = "id", IsIncluded = true }];
+
+        await using var source = await factory.AcquireAsync(pipeline, CancellationToken.None);
+
+        Assert.IsType<PostgreSqlEtlSource>(source);
+        Assert.Equal((connectionId, 4, DatabaseProviderType.PostgreSql), resolver.Request);
+        Assert.Equal((connectionId, 4), contexts.PostgreSqlRequest);
+        Assert.Equal(SavedConnectionProviderFactory.RuntimePostgreSqlProfile, savedMetadata.ConnectionProfile);
+        Assert.Equal(0, fallbackMetadata.DiscoverColumnsCallCount);
+        Assert.Equal(1, savedMetadata.DiscoverColumnsCallCount);
+    }
+
+    [Fact]
     public Task AcquireAsync_PostgreSqlAddedColumnRequiresRemappingBeforePreview() =>
         AssertPostgreSqlSchemaChangedAsync(
             [Field("Id", SourceFieldType.Integer)],
@@ -105,6 +146,46 @@ public sealed class PreviewSourceFactoryTests
 
         Assert.IsType<MongoDbEtlSource>(source);
         Assert.Equal(0, store.AcquireCallCount);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_SavedMongoDbSourceUsesResolvedRuntimeConnectionContext()
+    {
+        var connectionId = Guid.NewGuid();
+        var fallbackInference = new RecordingMongoSchemaInferenceService();
+        var savedInference = new RecordingMongoSchemaInferenceService();
+        var resolver = new RecordingSavedConnectionRevisionResolver(connectionId, DatabaseProviderType.MongoDb, 7);
+        var options = MongoOptions();
+        var metadata = new MongoMetadataDatabase(options);
+        var contexts = new RecordingSavedConnectionRuntimeContextFactory
+        {
+            MongoDbContext = new MongoRuntimeConnectionContext(
+                metadata,
+                new MongoTargetAccessService(metadata, options),
+                savedInference,
+                options)
+        };
+        var factory = CreateFactory(
+            new RecordingWizardSourceStore(),
+            mongoInference: fallbackInference,
+            savedConnectionRevisionResolver: resolver,
+            savedConnectionRuntimeContextFactory: contexts);
+        var pipeline = Pipeline(SourceType.MongoDb);
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            SavedConnectionId = connectionId,
+            Database = "reporting",
+            Collection = "customers"
+        };
+        pipeline.ExpectedSchema = [Field("Id", SourceFieldType.Integer)];
+
+        await using var source = await factory.AcquireAsync(pipeline, CancellationToken.None);
+
+        Assert.IsType<MongoDbEtlSource>(source);
+        Assert.Equal((connectionId, 7, DatabaseProviderType.MongoDb), resolver.Request);
+        Assert.Equal((connectionId, 7), contexts.MongoDbRequest);
+        Assert.Equal(0, fallbackInference.CallCount);
+        Assert.Equal(1, savedInference.CallCount);
     }
 
     [Fact]
@@ -174,7 +255,9 @@ public sealed class PreviewSourceFactoryTests
     private static PreviewSourceFactory CreateFactory(
         RecordingWizardSourceStore store,
         IMongoSourceSchemaInferenceService? mongoInference = null,
-        IPostgreSqlMetadataDiscoveryService? postgreSqlMetadata = null) => new(
+        IPostgreSqlMetadataDiscoveryService? postgreSqlMetadata = null,
+        ISavedConnectionRevisionResolver? savedConnectionRevisionResolver = null,
+        ISavedConnectionRuntimeContextFactory? savedConnectionRuntimeContextFactory = null) => new(
         store,
         new ThrowingConnectionFactory(),
         postgreSqlMetadata ?? new RecordingPostgreSqlMetadataDiscoveryService(),
@@ -183,7 +266,9 @@ public sealed class PreviewSourceFactoryTests
         new MongoMetadataDatabase(MongoOptions()),
         MongoOptions(),
         mongoInference ?? new RecordingMongoSchemaInferenceService(),
-        new SourceSchemaComparisonService());
+        new SourceSchemaComparisonService(),
+        savedConnectionRevisionResolver,
+        savedConnectionRuntimeContextFactory);
 
     private static async Task AssertPostgreSqlSchemaChangedAsync(
         IReadOnlyList<SourceFieldDefinition> expectedSchema,
@@ -297,12 +382,14 @@ public sealed class PreviewSourceFactoryTests
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class RecordingPostgreSqlMetadataDiscoveryService : IPostgreSqlMetadataDiscoveryService
+    private sealed class RecordingPostgreSqlMetadataDiscoveryService : IPostgreSqlRuntimeMetadataDiscoveryService
     {
         public IReadOnlyList<PostgreSqlColumnMetadata> Columns { get; init; } =
             [new PostgreSqlColumnMetadata("Id", "integer", false, 1)];
 
         public int DiscoverColumnsCallCount { get; private set; }
+
+        public string? ConnectionProfile { get; private set; }
 
         public Task<IReadOnlyList<PostgreSqlDatabaseMetadata>> DiscoverDatabasesAsync(string connectionProfile, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -316,22 +403,87 @@ public sealed class PreviewSourceFactoryTests
         public Task<IReadOnlyList<PostgreSqlColumnMetadata>> DiscoverColumnsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken)
         {
             DiscoverColumnsCallCount++;
+            ConnectionProfile = connectionProfile;
             return Task.FromResult(Columns);
         }
 
         public Task<IReadOnlyList<PostgreSqlKeyConstraintMetadata>> DiscoverKeyConstraintsAsync(string connectionProfile, string database, string schema, string table, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task EnsureDestinationAccessibleAsync(
+            string connectionProfile,
+            string database,
+            string schema,
+            string table,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class RecordingMongoSchemaInferenceService : IMongoSourceSchemaInferenceService
     {
         public Exception? Failure { get; init; }
 
+        public int CallCount { get; private set; }
+
         public Task<IReadOnlyList<SourceFieldDefinition>> InferAsync(
             MongoDbSourceOptions source,
-            CancellationToken cancellationToken) => Failure is null
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Failure is null
                 ? Task.FromResult<IReadOnlyList<SourceFieldDefinition>>
                     ([new SourceFieldDefinition { Name = "Id", DataType = SourceFieldType.Integer }])
                 : Task.FromException<IReadOnlyList<SourceFieldDefinition>>(Failure);
+        }
+    }
+
+    private sealed class RecordingSavedConnectionRevisionResolver(
+        Guid connectionId,
+        DatabaseProviderType providerType,
+        int revision) : ISavedConnectionRevisionResolver
+    {
+        public (Guid ConnectionId, int Revision, DatabaseProviderType ProviderType)? Request { get; private set; }
+
+        public Task<SavedConnectionReference> ResolveCurrentAsync(
+            Guid requestedConnectionId,
+            DatabaseProviderType requestedProviderType,
+            CancellationToken cancellationToken)
+        {
+            Request = (requestedConnectionId, revision, requestedProviderType);
+            return Task.FromResult(new SavedConnectionReference
+            {
+                ConnectionId = connectionId,
+                ProviderType = providerType,
+                Revision = revision
+            });
+        }
+    }
+
+    private sealed class RecordingSavedConnectionRuntimeContextFactory : ISavedConnectionRuntimeContextFactory
+    {
+        public PostgreSqlRuntimeConnectionContext? PostgreSqlContext { get; init; }
+
+        public MongoRuntimeConnectionContext? MongoDbContext { get; init; }
+
+        public (Guid ConnectionId, int Revision)? PostgreSqlRequest { get; private set; }
+
+        public (Guid ConnectionId, int Revision)? MongoDbRequest { get; private set; }
+
+        public Task<PostgreSqlRuntimeConnectionContext> CreatePostgreSqlAsync(
+            Guid connectionId,
+            int revision,
+            CancellationToken cancellationToken)
+        {
+            PostgreSqlRequest = (connectionId, revision);
+            return Task.FromResult(PostgreSqlContext ?? throw new InvalidOperationException());
+        }
+
+        public Task<MongoRuntimeConnectionContext> CreateMongoDbAsync(
+            Guid connectionId,
+            int revision,
+            CancellationToken cancellationToken)
+        {
+            MongoDbRequest = (connectionId, revision);
+            return Task.FromResult(MongoDbContext ?? throw new InvalidOperationException());
+        }
     }
 }
