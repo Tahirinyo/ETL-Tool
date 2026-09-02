@@ -13,6 +13,7 @@
 <div class="row"><div class="col-lg-8">
     <form asp-action="InspectSource" asp-route-id="@pipelineId" method="post" enctype="multipart/form-data">
         <div asp-validation-summary="ModelOnly" class="text-danger" role="alert"></div>
+        <div id="source-metadata-error" class="alert alert-danger d-none" role="alert"></div>
         <div class="mb-3">
             <label asp-for="SourceType" class="form-label">Source type</label>
             <select asp-for="SourceType" class="form-select" id="source-type">
@@ -195,20 +196,35 @@
         type.addEventListener('change', sync); sync();
 
         const escapeHtml = value => String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+        const metadataError = document.getElementById('source-metadata-error');
+        const showMetadataError = message => {
+            metadataError.textContent = message;
+            metadataError.classList.remove('d-none');
+        };
         const request = async (url, select, parent, clear) => {
             clear.forEach(item => { item.innerHTML = '<option value="">Select an option</option>'; item.disabled = true; });
-            if (!parent.value) return;
+            metadataError.classList.add('d-none');
+            const selectedValue = parent.value;
+            if (!selectedValue) return;
             const controller = new AbortController();
             select._request?.abort(); select._request = controller;
             select.disabled = true;
             try {
                 const response = await fetch(url, { signal: controller.signal });
                 const data = await response.json();
-                if (controller.signal.aborted || !response.ok || parent.value !== new URL(url, location.origin).searchParams.get('connectionId')) return;
+                if (controller.signal.aborted || parent.value !== selectedValue) return;
+                if (!response.ok || !Array.isArray(data)) {
+                    select.innerHTML = '<option value="">Metadata is unavailable</option>';
+                    showMetadataError(data?.error ?? 'Metadata is unavailable. Check the selected connection and try again.');
+                    return;
+                }
                 select.innerHTML = '<option value="">Select an option</option>' + data.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
                 select.disabled = false;
             } catch (error) {
-                if (error.name !== 'AbortError') select.innerHTML = '<option value="">Metadata is unavailable</option>';
+                if (error.name !== 'AbortError') {
+                    select.innerHTML = '<option value="">Metadata is unavailable</option>';
+                    showMetadataError('Metadata is unavailable. Check the selected connection and try again.');
+                }
             }
         };
         const pgConnection = document.getElementById('postgresql-connection');
@@ -222,6 +238,6 @@
         const mongoDatabase = document.getElementById('mongodb-database');
         const mongoCollection = document.getElementById('mongodb-collection');
         mongoConnection.addEventListener('change', () => request(`/Pipelines/Discovery/MongoDb/Databases?connectionId=${encodeURIComponent(mongoConnection.value)}`, mongoDatabase, mongoConnection, [mongoCollection]));
-        mongoDatabase.addEventListener('change', () => request(`/Pipelines/Discovery/MongoDb/Collections?connectionId=${encodeURIComponent(mongoConnection.value)}&database=${encodeURIComponent(mongoDatabase.value)}`, mongoCollection, mongoConnection, []));
+        mongoDatabase.addEventListener('change', () => request(`/Pipelines/Discovery/MongoDb/Collections?connectionId=${encodeURIComponent(mongoConnection.value)}&database=${encodeURIComponent(mongoDatabase.value)}`, mongoCollection, mongoDatabase, []));
     </script>
 }

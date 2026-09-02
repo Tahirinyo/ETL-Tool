@@ -9,6 +9,7 @@
 # Local uploaded source files
 /EtlTool.Web/App_Data/uploads/
 /EtlTool.Web/App_Data/data-protection-keys/
+/EtlTool.Web/App_Data/error-reports/
 
 # User-specific files
 *.rsuser

@@ -590,6 +590,7 @@ public sealed class MongoEtlRunRepositoryTests(MongoDbFixture fixture)
         run.Status = EtlRunStatus.Queued;
         run.StartedAt = null;
         run.CompletedAt = null;
+        run.TotalRows = 0;
         run.ProcessedRows = 0;
         run.ValidRows = 0;
         run.InvalidRows = 0;

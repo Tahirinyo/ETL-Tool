@@ -48,7 +48,9 @@ public sealed class RunAdmissionMvcIntegrationTests
         Assert.Equal(EtlRunStatus.Queued, run.Status);
         Assert.Equal(pipeline.Id, run.PipelineId);
         Assert.Equal("customers.csv", run.OriginalFileName);
-        Assert.Equal($"/Runs/{run.Id}", response.Headers.Location?.OriginalString);
+        Assert.Equal(
+            $"/Runs/{run.Id}?pipelineId={pipeline.Id}",
+            response.Headers.Location?.OriginalString);
         Assert.Equal([run.Id], host.QueueJobs.Select(job => job.RunId));
         Assert.False(host.Executor.Completed.Task.IsCompleted);
 
@@ -88,7 +90,9 @@ public sealed class RunAdmissionMvcIntegrationTests
         Assert.Equal(0, host.SourceStore.ReservationCount);
         Assert.True(host.SourceStore.HasActiveSource);
         Assert.Equal(run.Id, Assert.Single(host.QueueJobs).RunId);
-        Assert.Equal($"/Runs/{run.Id}", response.Headers.Location?.OriginalString);
+        Assert.Equal(
+            $"/Runs/{run.Id}?pipelineId={pipeline.Id}",
+            response.Headers.Location?.OriginalString);
     }
 
     [Fact]

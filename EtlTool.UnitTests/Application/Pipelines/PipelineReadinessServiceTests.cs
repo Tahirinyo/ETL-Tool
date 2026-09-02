@@ -243,6 +243,68 @@ public sealed class PipelineReadinessServiceTests
     }
 
     [Fact]
+    public void EvaluateForPreview_SavedMongoDbToPostgreSqlDestinationUsesMappedDestinationUpsertColumn()
+    {
+        var pipeline = ReadyPipeline();
+        pipeline.SourceType = SourceType.MongoDb;
+        pipeline.MongoDbSource = new MongoDbSourceOptions
+        {
+            SavedConnectionId = Guid.NewGuid(),
+            Database = "etl_demo",
+            Collection = "customers"
+        };
+        pipeline.ExpectedSchema =
+        [
+            new SourceFieldDefinition { Name = "_id", DataType = SourceFieldType.String },
+            new SourceFieldDefinition { Name = "fullName", DataType = SourceFieldType.String },
+            new SourceFieldDefinition { Name = "email", DataType = SourceFieldType.String },
+            new SourceFieldDefinition { Name = "balance", DataType = SourceFieldType.Decimal }
+        ];
+        pipeline.FieldMappings =
+        [
+            new FieldMapping { SourceField = "_id", TargetField = "CustomerId", IsIncluded = true },
+            new FieldMapping { SourceField = "fullName", TargetField = "FullName", IsIncluded = true },
+            new FieldMapping { SourceField = "email", TargetField = "Email", IsIncluded = true },
+            new FieldMapping { SourceField = "balance", TargetField = "Balance", IsIncluded = true }
+        ];
+        pipeline.DestinationType = DestinationType.PostgreSql;
+        pipeline.DestinationDatabase = string.Empty;
+        pipeline.DestinationCollection = string.Empty;
+        pipeline.PostgreSqlDestination = new PostgreSqlDestinationOptions
+        {
+            SavedConnectionId = Guid.NewGuid(),
+            Database = "etl_demo",
+            Schema = "etl_demo",
+            Table = "mongo_customers",
+            ColumnMappings =
+            [
+                new PostgreSqlDestinationColumnMapping { OutputField = "CustomerId", DestinationColumn = "source_id" },
+                new PostgreSqlDestinationColumnMapping { OutputField = "FullName", DestinationColumn = "customer_name" },
+                new PostgreSqlDestinationColumnMapping { OutputField = "Email", DestinationColumn = "email" },
+                new PostgreSqlDestinationColumnMapping { OutputField = "Balance", DestinationColumn = "balance" }
+            ],
+            UpsertKeyColumn = "source_id"
+        };
+        pipeline.UpsertKeyField = "CustomerId";
+        var service = new PipelineReadinessService(
+            new Repository(_ => throw new InvalidOperationException("Repository must not be called.")),
+            new FieldMappingService(),
+            AllowedTargetAccessService.Instance);
+
+        var result = service.EvaluateForPreview(pipeline);
+
+        Assert.True(result.IsReady);
+        Assert.Empty(result.Problems);
+
+        pipeline.PostgreSqlDestination.UpsertKeyColumn = "unmapped_source_id";
+        var unmapped = service.EvaluateForPreview(pipeline);
+
+        Assert.False(unmapped.IsReady);
+        Assert.Contains(unmapped.Problems, problem => problem.Component == "Destination"
+            && problem.Message.Contains("upsert-key column must be mapped", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void EvaluateForPreview_AndExecutionShareConfiguredPostgreSqlReadiness()
     {
         var pipeline = ReadyPipeline();

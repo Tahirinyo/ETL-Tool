@@ -349,8 +349,9 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
             await testDatabase.EtlRunRepository.AddAsync(run, CancellationToken.None);
             var executor = CreateExecutor(testDatabase, factory, temporaryRoot, batchSize: 1);
 
-            await Assert.ThrowsAsync<PostgreSqlDeterministicOrderingUnavailableException>(() =>
+            var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
                 executor.ExecuteAsync(new BackgroundJob(run.Id), CancellationToken.None));
+            Assert.IsType<PostgreSqlDeterministicOrderingUnavailableException>(failure.ExecutionFailure);
 
             var failed = Assert.IsType<EtlRun>(await testDatabase.EtlRunRepository.GetByIdAsync(
                 run.Id,
@@ -479,8 +480,9 @@ public sealed class PostgreSqlMongoExecutionIntegrationTests(
                 batchSize: 1,
                 sourceStore: sourceStore);
 
-            await Assert.ThrowsAsync<IOException>(() =>
+            var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
                 executor.ExecuteAsync(new BackgroundJob(run.Id), CancellationToken.None));
+            Assert.IsType<IOException>(failure.ExecutionFailure);
 
             var partial = Assert.IsType<EtlRun>(await testDatabase.EtlRunRepository.GetByIdAsync(
                 run.Id,

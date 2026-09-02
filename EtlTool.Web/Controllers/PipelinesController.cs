@@ -1536,6 +1536,17 @@ public sealed class PipelinesController : Controller
             UpsertKeyColumn = options.UpsertKeyColumn
         };
 
+    private static List<PostgreSqlDestinationColumnMapping> CreatePostgreSqlDestinationMappings(
+        IEnumerable<PostgreSqlDestinationMappingViewModel>? mappings) => (mappings ?? [])
+        .Where(mapping => !string.IsNullOrWhiteSpace(mapping.OutputField)
+            || !string.IsNullOrWhiteSpace(mapping.DestinationColumn))
+        .Select(mapping => new PostgreSqlDestinationColumnMapping
+        {
+            OutputField = mapping.OutputField ?? string.Empty,
+            DestinationColumn = mapping.DestinationColumn ?? string.Empty
+        })
+        .ToList();
+
     private static List<FieldMapping> ReconcileMappings(
         PipelineDefinition pipeline,
         IReadOnlyList<SourceFieldDefinition> inspectedSchema)
@@ -2140,12 +2151,7 @@ public sealed class PipelinesController : Controller
                 Database = model.PostgreSqlDatabase!,
                 Schema = model.PostgreSqlSchema!,
                 Table = model.PostgreSqlTable!,
-                ColumnMappings = (model.PostgreSqlColumnMappings ?? [])
-                    .Select(mapping => new PostgreSqlDestinationColumnMapping
-                    {
-                        OutputField = mapping.OutputField ?? string.Empty,
-                        DestinationColumn = mapping.DestinationColumn ?? string.Empty
-                    }).ToList(),
+                ColumnMappings = CreatePostgreSqlDestinationMappings(model.PostgreSqlColumnMappings),
                 UpsertKeyColumn = model.PostgreSqlUpsertKeyColumn ?? string.Empty
             };
 
@@ -2270,8 +2276,7 @@ public sealed class PipelinesController : Controller
                 Database = model.PostgreSqlDatabase,
                 Schema = model.PostgreSqlSchema,
                 Table = model.PostgreSqlTable,
-                ColumnMappings = (model.PostgreSqlColumnMappings ?? []).Select(mapping => new PostgreSqlDestinationColumnMapping
-                { OutputField = mapping.OutputField ?? string.Empty, DestinationColumn = mapping.DestinationColumn ?? string.Empty }).ToList(),
+                ColumnMappings = CreatePostgreSqlDestinationMappings(model.PostgreSqlColumnMappings),
                 UpsertKeyColumn = model.PostgreSqlUpsertKeyColumn ?? string.Empty
             };
             PostgreSqlDestinationConfigurationValidator.Validate(destination,

@@ -1,233 +1,264 @@
-# ETL Tool MVP — Kesinleşmiş Proje Planı
+# ETL Tool MVP - Updated Project Plan
 
-## 1. Proje özeti
+## 1. Project Summary
 
-Bu proje, yazılımcıların ve veri personelinin CSV veya Excel dosyalarındaki verileri görsel bir arayüz üzerinden temizleyip doğrulayarak MongoDB'ye aktarabilmesini sağlayan, ASP.NET Core MVC tabanlı bir ETL aracıdır.
+This project is an ASP.NET Core MVC based ETL tool that allows developers and data personnel to clean, transform, validate, preview, and import data from CSV, modern Excel, PostgreSQL, or MongoDB through a visual interface. The accepted release matrix is CSV/XLSX/PostgreSQL to MongoDB and MongoDB to PostgreSQL.
 
-MVP'nin temel değer önerisi:
+The core MVP value proposition is:
 
-> Kullanıcı, tekrar kod yazmadan aynı yapıya sahip farklı CSV/Excel dosyalarına kaydedilmiş veri temizleme kurallarını uygulayabilir; geçerli kayıtları MongoDB'ye güvenli biçimde aktarabilir ve hatalı kayıtları ayrıntılı rapor olarak alabilir.
+> A user can save reusable mapping, transformation, and validation rules, apply them to compatible uploaded files or saved database sources, safely batch-upsert valid records into an accepted MongoDB or PostgreSQL destination, and receive detailed reports for invalid records.
 
-Proje iki geliştirici tarafından, Codex benzeri kodlama araçlarıyla ortak geliştirme yaklaşımı kullanılarak 15 iş gününde tamamlanacaktır.
+The project is designed as a portfolio-quality MVP developed by two developers over 15 working days with AI coding tools such as Codex used as implementation assistants rather than autonomous owners of the codebase.
 
----
+Current planning status:
 
-## 2. Hedef kullanıcı
-
-İlk sürümün hedef kitlesi:
-
-- Yazılımcılar
-- Veri personeli
-- Sistem entegrasyonu veya veri aktarımı yapan teknik çalışanlar
-
-Teknik olmayan son kullanıcı deneyimi, çok kullanıcılı kullanım ve müşteri tarafına açılan SaaS deneyimi MVP kapsamında değildir.
+- Days 1-15 record the original file-to-MongoDB MVP plan and completed release foundation.
+- Later accepted database work added saved connections, PostgreSQL and MongoDB logical sources, PostgreSQL loading, frozen connection revisions, and the documented cross-database flows.
+- Implementation, test, packaging, configuration, and documentation reconciliation are complete; final local closeout remains a separate stage.
 
 ---
 
-## 3. Ana demo senaryosu
+## 2. Target Users
 
-1. Kullanıcı yeni bir pipeline oluşturur.
-2. Örnek bir `.csv` veya `.xlsx` dosyası yükler.
-3. Sistem dosyanın kolonlarını ve temel şemasını algılar.
-4. Kullanıcı kaynak kolonları hedef MongoDB alanlarıyla eşleştirir.
-5. Kullanıcı dönüşüm kuralları ekler ve dönüşümleri sürükleyerek sıralar.
-6. Kullanıcı doğrulama kurallarını tanımlar.
-7. Kullanıcı MongoDB database ve collection hedefini seçer.
-8. Kullanıcı upsert için benzersiz alanı belirler.
-9. Sistem dönüştürülmüş örnek veriyi ve örnek hata özetini gösterir.
-10. Kullanıcı pipeline'ı kaydeder ve çalıştırır.
-11. Sistem dosyanın tamamını arka planda batch olarak işler.
-12. Geçerli kayıtlar MongoDB'ye upsert edilir.
-13. Hatalı kayıtlar yüklenmez ve indirilebilir CSV raporuna yazılır.
-14. Kullanıcı çalışma geçmişinden süreyi ve işlem sayılarını inceler.
-15. Kullanıcı aynı pipeline'ı daha sonra yeni bir dosyayla tekrar çalıştırabilir.
+The first release targets:
+
+- Developers
+- Data personnel
+- Technical staff responsible for system integration or data migration
+
+A non-technical end-user experience, multi-user operation, and a customer-facing SaaS experience are outside the MVP scope.
 
 ---
 
-## 4. Kesinleşmiş ürün kararları
+## 3. Primary Demo Scenario
 
-| Konu | Karar |
+1. The user creates a new pipeline.
+2. The user uploads a sample `.csv`/`.xlsx` file or selects a saved PostgreSQL/MongoDB source.
+3. The system detects or infers the source columns and basic schema.
+4. The user maps source columns to output fields.
+5. The user adds transformation rules and orders them through the visual editor.
+6. The user defines validation rules.
+7. The user selects an accepted saved MongoDB or PostgreSQL destination and target object.
+8. The user selects the output/upsert-key mapping required by that destination.
+9. The system shows transformed preview rows and a sample error summary.
+10. The user saves and runs the pipeline.
+11. The system processes the admitted file or logical database source in background batches.
+12. Valid records are upserted into the configured destination.
+13. Invalid records are excluded from the target and written to a downloadable CSV report.
+14. The user reviews duration, status, counters, and errors in run history.
+15. The user later reuses the same pipeline with a compatible file or the saved logical database source.
+16. If the source schema changed, the system requires remapping before execution.
+
+---
+
+## 4. Finalized Product Decisions
+
+| Topic | Decision |
 | --- | --- |
-| Ürün hedefi | Dengeli ve portföylük MVP |
-| Mimari hedef | Sonradan genişletilebilir modüler temel |
-| Kaynaklar | CSV ve modern Excel (`.xlsx`) |
-| Hedef | MongoDB |
-| Veri kapasitesi | 100.000 satıra kadar güvenilir batch işleme |
-| Pipeline akışı | Sabit `Extract → Map → Transform → Validate → Load` |
-| Görsel düzenleme | Sürüklenerek sıralanabilen dönüşüm listesi |
-| Mongo bağlantısı | Tek sunucu bağlantısı sistem ayarlarında |
-| Hedef seçimi | Kullanıcı database ve collection seçer |
-| Yükleme yöntemi | Kullanıcının seçtiği benzersiz alana göre upsert |
-| Hatalı satırlar | Geçerliler yüklenir, hatalılar raporlanır |
-| Önizleme | Dönüştürülmüş örnek ve örnek hata özeti |
-| Tekrar kullanım | Pipeline kaydedilir, her çalışmada yeni dosya seçilir |
-| Şema değişikliği | Fark gösterilir ve kullanıcıdan yeniden eşleştirme istenir |
-| Geçmiş | Özet, süre, hatalar ve indirilebilir hata CSV'si |
-| Kullanıcı sistemi | Yok; yalnızca yerel veya güvenilen ortam |
-| Ekip ve süre | 2 geliştirici, 15 iş günü |
-| AI kodlama araçları | Tasarım ve kod geliştiricilerle ortak ilerler |
+| Product target | Balanced, portfolio-quality MVP |
+| Architecture target | Modular foundation that can be extended later |
+| Sources | CSV, modern Excel (`.xlsx`), PostgreSQL, and MongoDB |
+| Destinations | MongoDB and PostgreSQL within the accepted matrix |
+| Accepted matrix | CSV/XLSX/PostgreSQL to MongoDB; MongoDB to PostgreSQL |
+| Data capacity | Reliable batch processing up to 100,000 rows |
+| Pipeline order | Fixed `Extract -> Map -> Transform -> Validate -> Load` |
+| Visual editing | Ordered transformation list with drag-and-drop when available |
+| Application metadata | One MongoDB connection supplied through application configuration |
+| Pipeline connections | Multiple named MongoDB/PostgreSQL connections stored as protected, revisioned saved connections |
+| Target selection | User selects a saved connection and MongoDB database/collection or PostgreSQL database/schema/table |
+| Load strategy | MongoDB BulkWrite-style or transactional PostgreSQL batch upsert by the configured unique key |
+| Invalid rows | Valid rows load; invalid rows are reported |
+| Preview | Transformed sample data plus sample error summary |
+| Reuse | Pipeline is saved; file pipelines accept compatible replacement files and database pipelines retain logical source identity |
+| Run isolation | Admission freezes the active saved-connection revisions in the execution snapshot |
+| Schema changes | Differences are shown and remapping is required |
+| History | Run summary, duration, counters, errors, downloadable error CSV |
+| User system | None; local or trusted environment only |
+| Team and duration | 2 developers, 15 working days |
+| AI coding tools | Used jointly with developer review and repository-grounded verification |
 
 ---
 
-## 5. MVP kapsamına dahil özellikler
+## 5. MVP Scope
 
-### 5.1 Dosya alma
+### 5.1 Source Ingestion
 
-- `.csv` yükleme
-- `.xlsx` yükleme
-- CSV delimiter seçimi: virgül, noktalı virgül veya tab
-- Kaynak kültür/yerel biçim seçimi: örneğin `tr-TR` veya `en-US`
-- Excel çalışma sayfası seçimi
-- İlk satırın kolon başlığı kabul edilmesi
-- Dosya uzantısı, boyutu ve satır sayısı kontrolü
-- Dosyayı tamamıyla belleğe almadan parçalı okuma
+- `.csv` upload
+- `.xlsx` upload
+- CSV delimiter selection: comma, semicolon, or tab
+- Source culture/locale selection such as `tr-TR` or `en-US`
+- Excel worksheet selection
+- First row treated as column headers
+- File extension, size, and row-count validation
+- Incremental reading without loading the complete source file into memory
+- Saved PostgreSQL source selection by connection, database, schema, and table
+- Saved MongoDB source selection by connection, database, and collection
+- Incremental PostgreSQL and MongoDB reading with deterministic source ordering
+- Database schema inference/comparison and execution-time drift rejection
 
-Eski `.xls` formatı MVP'ye dahil değildir.
+Legacy `.xls` support is outside the MVP.
 
-### 5.2 Şema algılama ve alan eşleştirme
+### 5.2 Schema Detection and Field Mapping
 
-- Kolon isimlerini algılama
-- Örnek değerlerden temel veri tipi önerisi
-- Kolon tutma veya silme
-- Kaynak alanı hedef alana yeniden adlandırma
-- Kaynak alan ile MongoDB alanını eşleştirme
-- Kaydedilen kaynak şemanın pipeline içinde tutulması
-- Yeni dosyanın şemasını kaydedilmiş şemayla karşılaştırma
-- Eksik, yeni ve eşleşmeyen alanları kullanıcıya gösterme
-- Pipeline çalıştırılmadan önce eksik eşleştirmeleri düzeltme zorunluluğu
+- Detect source column names
+- Suggest basic data types from sample values
+- Keep or drop columns
+- Rename source fields into output fields
+- Map source fields to destination-neutral output fields
+- Persist the expected source schema in the pipeline definition
+- Compare a new source schema with the saved schema
+- Show missing, new, and unmatched fields
+- Require missing mappings to be corrected before execution
 
-Benzer kolonları yapay zekâyla veya fuzzy matching ile otomatik eşleştirmek MVP kapsamında değildir.
+AI or fuzzy automatic schema matching is outside the MVP.
 
-### 5.3 Dönüşüm kuralları
+### 5.3 Transformation Rules
 
-MVP'de aşağıdaki dönüşümler bulunacaktır:
+The MVP includes:
 
 1. Trim
-2. Büyük harfe dönüştürme
-3. Küçük harfe dönüştürme
-4. String veri tipine dönüştürme
-5. Integer/decimal veri tipine dönüştürme
-6. Tarih veri tipine dönüştürme
-7. Boş değere varsayılan değer atama
-8. Koşula göre satır filtreleme
-9. Metin içinde bul ve değiştir
-10. Tekrarlanan satırları seçilen alanlara göre kaldırma
+2. Uppercase
+3. Lowercase
+4. Convert to string
+5. Convert to integer/decimal
+6. Convert to date
+7. Assign a default value to empty input
+8. Filter rows by condition
+9. Find and replace text
+10. Remove duplicates by selected fields
 
-Dönüşüm kuralları eklenebilir, düzenlenebilir, silinebilir ve sürüklenerek sıralanabilir. Çalıştırma sırası pipeline tanımında açık bir `order` değeriyle saklanacaktır.
+Transformation rules can be created, edited, deleted, and reordered. Execution order is stored explicitly with an `Order` value.
 
-Alanları birleştirip yeni alan oluşturma MVP kapsamında değildir.
+Creating new fields by combining multiple fields is outside the MVP.
 
-### 5.4 Doğrulama kuralları
+### 5.4 Validation Rules
 
-MVP'de aşağıdaki doğrulamalar bulunacaktır:
+The MVP includes:
 
-- Zorunlu alan
-- E-posta formatı
-- Sayısal minimum ve maksimum
-- Metin minimum/maksimum uzunluğu
-- Tarih minimum ve maksimum aralığı
-- Upsert alanı boş olamaz
+- Required field
+- Email format
+- Numeric minimum/maximum
+- Text minimum/maximum length
+- Date minimum/maximum range
+- Upsert field must not be empty
 
-Doğrulamalar dönüşümlerden sonra çalışacaktır. Böylece örneğin önce boşluk temizleme ve sayı dönüşümü, ardından sayısal aralık kontrolü uygulanacaktır.
+Validation runs after mapping and transformation. For example, trimming and numeric conversion occur before numeric range validation.
 
-Regex ile kullanıcı tanımlı özel doğrulama MVP kapsamında değildir.
+User-defined regex validation is outside the MVP.
 
-### 5.5 Önizleme
+### 5.5 Preview
 
-- İlk 100 satır üzerinde dönüşüm ve doğrulama önizlemesi
-- Dönüştürülmüş alanların tablo görünümü
-- Önizleme örneğindeki geçerli, hatalı ve filtrelenmiş kayıt sayıları
-- Satır bazında kısa hata açıklaması
-- Pipeline çalıştırılmadan önce ayar hatalarının gösterilmesi
+- Preview the first 100 source rows
+- Show transformed output fields in a table
+- Show valid, invalid, and filtered counts for the preview sample
+- Show concise row-level validation or transformation errors
+- Show readiness/configuration errors before execution
 
-Önizleme tam dosyada dry-run değildir. Tam dosyanın gerçek sonuçları yalnızca çalıştırma sırasında hesaplanacaktır.
+Preview is not a full-file dry run. Full-file results are calculated only during execution.
 
-### 5.6 MongoDB'ye yükleme
+### 5.6 Destination Loading
 
-- Tek MongoDB sunucusuna uygulama ayarları üzerinden bağlantı
-- Kullanıcının izin verilen database ve collection'ı seçmesi
-- Upsert anahtarı olacak çıktı alanının seçilmesi
-- Upsert alanının boş olamayacağının doğrulanması
-- Kayıtların toplu `BulkWrite` işlemleriyle yazılması
-- Insert edilen ve güncellenen kayıt sayılarının ayrı tutulması
-- Tekrar çalıştırmada aynı benzersiz anahtarlı kayıtların çoğalmaması
+The accepted product matrix is deliberately narrower than the available source and destination type abstractions:
 
-Metadata için ayrılmış sistem database'i hedef olarak seçilemeyecektir. MongoDB connection string pipeline dokümanlarında saklanmayacak, ortam değişkeninden veya secret yapılandırmasından okunacaktır.
+| Source | MongoDB destination | PostgreSQL destination |
+| --- | --- | --- |
+| CSV | Supported | Outside the accepted matrix |
+| XLSX | Supported | Outside the accepted matrix |
+| PostgreSQL | Supported | Outside the accepted matrix |
+| MongoDB | Outside the accepted matrix | Supported |
 
-### 5.7 Arka plan çalıştırma ve ilerleme
+- Select destinations through a saved provider-compatible connection.
+- For MongoDB, select an allowed database/collection and an output-field upsert key, then write configured batches through BulkWrite-style upserts.
+- For PostgreSQL, select a database/schema/table, map output fields to destination columns, select an eligible single-column primary/unique key, and use transactional `INSERT ... ON CONFLICT ... DO UPDATE` batches.
+- Reject empty upsert keys, track confirmed inserted and updated records separately, and preserve idempotent reruns.
+- Apply bounded retry only to eligible provider failures; cancellation is not retried.
 
-- Web isteğinden bağımsız arka plan işi
-- Durumlar: `Queued`, `Running`, `Completed`, `PartiallyCompleted`, `Failed`
-- Her batch sonunda işlenen satır ve ilerleme bilgisinin güncellenmesi
-- MVC ekranının belirli aralıklarla durum endpoint'ini sorgulaması
-- Aynı uygulama örneği içinde çalışan basit iş kuyruğu
-- Sistem yeniden başlarsa yarım kalan işin açıkça `Interrupted/Failed` olarak işaretlenmesi
+The configured MongoDB connection is reserved for application metadata and compatibility behavior. Current pipeline destinations use protected saved connections. Metadata/system databases must not be selectable as MongoDB targets, and no database connection string or secret may be stored inside a pipeline or run snapshot.
 
-Dağıtık kuyruk, RabbitMQ, Kafka ve birden fazla worker instance'ı MVP kapsamında değildir.
+### 5.7 Background Execution and Progress
 
-### 5.8 Çalışma geçmişi ve hata raporu
+- Run independently of the initiating HTTP request
+- Support run states such as `Queued`, `Running`, `Completed`, `PartiallyCompleted`, and `Failed`
+- Update processed-row and outcome counters as execution advances
+- Expose status through polling-friendly MVC/application endpoints
+- Use a simple in-process queue for the MVP
+- Treat interrupted in-process execution clearly rather than silently reporting success
+- Preserve cancellation behavior through asynchronous execution boundaries
 
-Her çalıştırma için şunlar saklanacaktır:
+Distributed queues, RabbitMQ, Kafka, and multi-instance worker coordination are outside the MVP.
 
-- Pipeline kimliği ve pipeline adı
-- Kaynak dosyanın güvenli adı
-- Başlangıç ve bitiş zamanı
-- Toplam süre
-- Durum
-- Toplam satır
-- Başarılı satır
-- Hatalı satır
-- Filtrelenmiş satır
-- Yinelenen olduğu için kaldırılan satır
-- Insert sayısı
-- Update sayısı
-- Sistemsel hata özeti
-- İndirilebilir hata raporunun konumu
+### 5.8 Run History and Error Reporting
 
-Hata CSV'sinde en az şu alanlar olacaktır:
+For each run, persist or expose the applicable information:
 
-- Kaynak satır numarası
-- Upsert anahtarı varsa değeri
-- Hatalı alanlar
-- Hata nedenleri
-- Orijinal satır verisi
+- Pipeline ID and name
+- Safe source filename/reference
+- Start and completion timestamps
+- Total duration
+- Status
+- Total rows
+- Processed rows
+- Valid rows
+- Invalid rows
+- Filtered rows
+- Deduplicated rows
+- Inserted rows
+- Updated rows
+- System error summary
+- Error report location when present
 
-Her başarılı satır için ayrıntılı log tutulmayacaktır; bu, veri hacmini gereksiz büyütür.
+The downloadable error CSV must include at least:
 
----
+- Source row number
+- Upsert key value when available
+- Invalid fields
+- Error reasons
+- Original row data
 
-## 6. Kapsam dışı özellikler
+Successful rows should not receive verbose per-row logging because that would create unnecessary storage volume.
 
-Aşağıdakiler MVP'ye eklenmeyecektir:
+### 5.9 Saved Connections
 
-- Serbest node canvas ve node bağlantıları
-- Zamanlanmış veya periyodik pipeline çalıştırma
-- SQL, REST API, JSON, XML veya FTP kaynağı
-- MongoDB dışında hedef sistem
-- Birden fazla MongoDB bağlantı profili
-- Kullanıcı girişi, roller ve yetkilendirme
-- Çok kiracılı SaaS yapısı
-- Milyonlarca satır veya dağıtık veri işleme
-- RabbitMQ, Kafka veya dağıtık worker
-- Yapay zekâyla kolon eşleştirme
-- Alan birleştirme ve özel kod çalıştırma
-- Regex tabanlı kullanıcı doğrulaması
-- Tam dosyada yüklemesiz dry-run
-- Undo/redo destekli gelişmiş görsel editör
-- Veri soy ağacı/data lineage
-- Cloud deployment ve production SLA
-
-Bu maddelerden biri ancak zorunlu kapsam eksiksiz tamamlanırsa sonraki sürüm adayı olarak ele alınabilir.
+- Create and manage multiple named MongoDB and PostgreSQL connections through the Connections UI.
+- Protect connection configurations with ASP.NET Core Data Protection before saving them in application metadata.
+- Keep revision history when credentials/configuration are replaced.
+- Persist only saved-connection IDs and logical database object identities in pipeline definitions.
+- Resolve the current revision for discovery and database-source Preview; freeze source and destination revisions when a run is admitted.
+- Refuse deletion while a pipeline or active run references the saved connection.
 
 ---
 
-## 7. Önerilen teknik mimari
+## 6. Out of Scope
 
-### 7.1 Mimari yaklaşım
+The MVP will not include:
 
-Uygulama bir **modüler monolith** olacaktır. Tek deploy edilebilir uygulama olarak hızlı geliştirilecek; ancak ETL motoru MVC arayüzünden ayrılarak daha sonra yeni extractor, dönüşüm ve loader eklenebilmesine izin verecektir.
+- Free-form node canvas or node connections
+- Scheduled or periodic pipeline execution
+- REST API, JSON, XML, FTP, or database providers other than PostgreSQL and MongoDB
+- Source/destination combinations outside the accepted matrix
+- Authentication, roles, or authorization
+- Multi-tenant SaaS architecture
+- Million-row or distributed data processing
+- RabbitMQ, Kafka, or distributed workers
+- AI/fuzzy schema matching
+- Field-combination expressions or user-defined code execution
+- Regex-based user-defined validation
+- Full-file loadless dry runs
+- Undo/redo visual editing
+- Data lineage
+- Cloud deployment or production SLA infrastructure
 
-Önerilen solution yapısı:
+These may be considered only after the mandatory MVP scope is complete.
+
+---
+
+## 7. Technical Architecture
+
+### 7.1 Architecture Approach
+
+The application uses a pragmatic **modular monolith**. It remains a single deployable application for fast delivery, while ETL responsibilities stay separated from MVC so additional extractors, transformations, validations, and loaders can be introduced later without rewriting the UI layer.
+
+Target solution structure:
 
 ```text
 EtlTool.sln
@@ -249,37 +280,47 @@ EtlTool.sln
 ├── EtlTool.Infrastructure
 │   ├── FileExtraction
 │   ├── MongoDB
+│   ├── PostgreSql
+│   ├── Sources
+│   ├── Connections
 │   ├── BackgroundJobs
 │   └── Reports
 ├── EtlTool.UnitTests
 └── EtlTool.IntegrationTests
 ```
 
-Bu yapı Clean Architecture'ın bütün törenlerini uygulamak yerine sorumlulukları net ayıran sade bir katmanlama kullanacaktır.
+The goal is clear separation of responsibilities, not unnecessary Clean Architecture ceremony.
 
-### 7.2 MVC sorumlulukları
+### 7.2 MVC Responsibilities
 
-- **Model:** Pipeline tanımları, kurallar, şema ve çalışma geçmişi
-- **View:** Razor Views ile pipeline oluşturma, önizleme, durum ve geçmiş ekranları
-- **Controller:** HTTP isteğini doğrulayıp Application servislerine yönlendiren ince controller'lar
+- **Model:** pipeline definitions, rules, schema, and run history
+- **View:** Razor Views for pipeline configuration, preview, execution status, history, and remapping
+- **Controller:** thin HTTP boundary that validates input, calls Application services, and returns responses
 
-ETL iş mantığı controller içinde yazılmayacaktır.
+ETL processing logic must not be implemented inside controllers or Razor Views.
 
-### 7.3 Arayüz teknolojisi
+### 7.3 UI Technology
 
 - ASP.NET Core MVC
 - Razor Views
 - Bootstrap
-- Dönüşüm sıralaması için küçük bir drag-and-drop JavaScript kütüphanesi
-- İlerleme ekranı için JavaScript polling
+- Small drag-and-drop JavaScript support for transformation ordering
+- JavaScript polling for execution status
 
-React, Vue, Angular ve serbest canvas kütüphanesi MVP kapsamında kullanılmayacaktır.
+React, Vue, Angular, and free-form canvas libraries are outside the MVP.
 
-### 7.4 Temel arayüzler
+### 7.4 Core Interfaces
 
 ```csharp
 public interface IFileExtractor
 {
+    SourceType SourceType { get; }
+
+    Task<IReadOnlyList<string>> ReadHeadersAsync(
+        Stream stream,
+        SourceOptions options,
+        CancellationToken cancellationToken);
+
     IAsyncEnumerable<DataRow> ReadAsync(
         Stream stream,
         SourceOptions options,
@@ -300,37 +341,42 @@ public interface IValidationHandler
 
 public interface IDataLoader
 {
-    Task<LoadResult> UpsertBatchAsync(
-        IReadOnlyCollection<DataRow> rows,
-        DestinationConfig destination,
-        string keyField,
+    DestinationType DestinationType { get; }
+
+    Task PrepareAsync(
+        PipelineDefinition pipeline,
+        CancellationToken cancellationToken);
+
+    Task<BatchLoadResult> UpsertBatchAsync(
+        IReadOnlyList<DataRow> rows,
+        PipelineDefinition pipeline,
         CancellationToken cancellationToken);
 }
 ```
 
-`EtlOrchestrator`, extractor'dan gelen satırları sırayla dönüştürür, doğrular, batch'ler ve loader'a gönderir.
+The execution/orchestration layer reads rows from the extractor, applies mapping, transformations, validation, batching, and loading in the fixed ETL order.
 
-### 7.5 Veri işleme akışı
+### 7.5 Data Processing Flow
 
 ```text
-Upload
-  → File validation
-  → Extract rows
-  → Apply field mapping
-  → Apply ordered transformations
-  → Validate transformed row
-  → Invalid: error report
-  → Filtered: counter only
-  → Valid: add to batch
-  → Batch full: MongoDB bulk upsert
-  → Update run progress
+Source selection/inspection
+  -> File validation or database metadata/schema validation
+  -> Stream source rows
+  -> Apply field mapping
+  -> Apply ordered transformations
+  -> Validate transformed row
+  -> Invalid: error report
+  -> Filtered: counter only
+  -> Valid: add to batch
+  -> Batch full: resolve destination loader and upsert
+  -> Update run progress
 ```
 
-Başlangıç batch boyutu yapılandırılabilir şekilde 1.000 kayıt olabilir. Performans testine göre değiştirilebilir; sabit kodlanmamalıdır.
+The batch size must remain configurable. A value such as 1,000 rows may be used as a starting configuration but must not be hard-coded into the ETL algorithm.
 
 ---
 
-## 8. Temel veri modelleri
+## 8. Core Data Models
 
 ### PipelineDefinition
 
@@ -339,12 +385,14 @@ Başlangıç batch boyutu yapılandırılabilir şekilde 1.000 kayıt olabilir. 
 - `Description`
 - `SourceType`
 - `SourceOptions`
+- `PostgreSqlSource` / `MongoDbSource`
 - `ExpectedSchema`
 - `FieldMappings`
 - `TransformationRules`
 - `ValidationRules`
-- `DestinationDatabase`
-- `DestinationCollection`
+- `DestinationType`
+- MongoDB or PostgreSQL destination identity/mapping
+- Saved source/destination connection IDs (without credentials)
 - `UpsertKeyField`
 - `CreatedAt`
 - `UpdatedAt`
@@ -357,7 +405,7 @@ Başlangıç batch boyutu yapılandırılabilir şekilde 1.000 kayıt olabilir. 
 - `SourceField`
 - `Configuration`
 
-Her transform tipi için büyük bir controller koşul bloğu oluşturmak yerine `Type → Handler` eşleştirmesi kullanılacaktır.
+Prefer `Type -> Handler` dispatch rather than large controller condition blocks for each transformation type.
 
 ### ValidationRule
 
@@ -386,457 +434,804 @@ Her transform tipi için büyük bir controller koşul bloğu oluşturmak yerine
 - `UpdatedRows`
 - `SystemError`
 - `ErrorReportPath`
+- `ExecutionConfiguration` with immutable source/destination snapshots and frozen saved-connection references
+
+These names describe the intended product contract. The repository implementation remains the source of truth for exact current type names and storage representation.
 
 ---
 
-## 9. Hata ve tutarlılık politikası
+## 9. Error and Consistency Policy
 
-### Satır seviyesindeki hatalar
+### Row-Level Errors
 
-Dönüşüm veya doğrulama hatası alan satır hedefe yazılmaz. İşlem diğer satırlarla devam eder. Satır, hata raporuna nedeni ile birlikte eklenir.
+A row with a transformation or validation failure must not be written to the target. Processing continues for other rows, and the failed row is included in the error report with its reasons.
 
-### Sistem seviyesindeki hatalar
+### System-Level Errors
 
-Aşağıdaki durumlar run'ı başarısız yapar:
+The following are run-level failures:
 
-- Dosyanın okunamaması
-- Geçersiz veya tamamlanmamış pipeline tanımı
-- MongoDB bağlantısının kurulamaması
-- Hedef database/collection'a erişilememesi
-- Batch yazımının belirlenen retry sayısından sonra başarısız olması
+- Unreadable file or inaccessible logical database source
+- Invalid or incomplete pipeline definition
+- Saved-connection resolution or provider connection failure
+- Inaccessible or invalid MongoDB/PostgreSQL target
+- Batch write failure after the configured retry limit is exhausted
 
-Önceki batch'ler yazılmış, sonraki batch başarısız olmuşsa durum `PartiallyCompleted` olacaktır. Upsert kullanıldığı için aynı dosya güvenli biçimde yeniden çalıştırılabilir.
+If earlier batches were committed before a later system-level failure, the run must preserve `PartiallyCompleted` semantics. Upsert behavior must allow a safe rerun without creating duplicate logical records.
 
-### Duplicate politikası
+### Duplicate Policy
 
-- Pipeline'daki deduplication kuralı seçilen alanlara göre çalışır.
-- Aynı dosyada aynı upsert anahtarı birden fazla kez gelirse deterministik olarak ilk geçerli kayıt korunur; sonraki kayıtlar duplicate sayacına eklenir.
-- Hedef collection'da aynı anahtar varsa kayıt güncellenir.
+- Explicit deduplication rules operate on their configured selected fields.
+- If the same upsert key appears multiple times in one input, the first valid occurrence is kept deterministically and later occurrences are counted as duplicates.
+- If the target already contains the same upsert key, the corresponding document/row is updated rather than duplicated.
 
-### Geçici dosyalar
+### Temporary Files
 
-- Dosyalar tahmin edilemeyen, run kimliğine bağlı güvenli adlarla saklanır.
-- Kaynak dosya başarılı veya başarısız çalışma tamamlandıktan sonra temizlenir.
-- Hata CSV'si çalışma geçmişi silinene kadar saklanır.
-- Uygulama başlangıcında sahipsiz kalmış geçici dosyalar temizlenir.
+- Uploaded source files are stored under unpredictable run-specific names.
+- Source files are removed after successful or failed execution according to the run lifecycle.
+- Error reports are retained according to run-history behavior.
+- Orphaned temporary source files are cleaned up safely.
+- Streams and other I/O resources are disposed on success, failure, and cancellation.
 
 ---
 
-## 10. Çözülmesi gereken önemli problemler
+## 10. Important Problems and Chosen Solutions
 
-| Problem | Kararlaştırılan çözüm |
+| Problem | Chosen solution |
 | --- | --- |
-| 100 bin satırda RAM tüketimi | Satır bazlı okuma ve yapılandırılabilir batch işleme |
-| Uzun HTTP isteği ve timeout | Arka plan kuyruğu, run kimliği ve polling |
-| Kolonların sonraki dosyada değişmesi | Şema fark ekranı ve zorunlu yeniden eşleştirme |
-| Dönüşüm sırasının sonucu değiştirmesi | Açık `order` alanı, drag-and-drop ve çalıştırma öncesi referans kontrolü |
-| Kirli satırların bütün işi durdurması | Satır karantinası ve indirilebilir hata CSV'si |
-| Aynı dosyanın tekrar yüklenmesi | Kullanıcı seçimli benzersiz alan ve idempotent upsert |
-| MongoDB bağlantı bilgisinin sızması | Ortam değişkeni/secret; pipeline içinde bağlantı dizesi yok |
-| Tarih ve decimal biçim farkları | Pipeline düzeyinde kültür ve tarih biçimi ayarı |
-| Batch sırasında MongoDB hatası | Sınırlı retry, `PartiallyCompleted` durumu ve güvenli yeniden çalıştırma |
-| Eski pipeline'ın yeni dosyada yanlış alan kullanması | Şema karşılaştırması ve çalıştırma öncesi kural referansı doğrulaması |
-| Aşırı ayrıntılı logların büyümesi | Özet metrikler ve yalnızca hatalı satırlar için rapor |
+| RAM usage at 100,000 rows | Incremental row reading and configurable batch processing |
+| Long HTTP requests/timeouts | In-process background queue, run ID, and polling |
+| Columns change in a later file | Schema-difference flow plus mandatory remapping |
+| Transformation order changes results | Explicit `Order`, UI ordering, and pre-run reference validation |
+| Dirty rows stop the full import | Row quarantine plus downloadable error CSV |
+| Rerunning the same logical data | User-selected unique field and idempotent upsert |
+| Database secret leakage | Protected saved connections plus environment/secret configuration for application metadata; never store connection strings in pipeline or run data |
+| Connection edited after run admission | Freeze the active source/destination revisions in the immutable run snapshot |
+| Date/decimal format differences | Explicit pipeline source culture and date-format behavior |
+| Destination batch failure | Provider-specific limited retry, correct run-level failure, `PartiallyCompleted` after committed batches |
+| Old pipeline refers to changed source fields | Schema comparison plus rule-reference revalidation before execution |
+| Verbose logs grow without value | Summary metrics and detailed reporting only for failed rows |
 
 ---
 
-## 11. Ekranlar
+## 11. MVP Screens
 
-MVP'de aşağıdaki ekranlar bulunacaktır:
+1. **Dashboard / Pipeline List**
+   - Pipeline name, source type, target, and latest run state
+2. **Create/Edit Pipeline Wizard**
+   - Source -> schema/mapping -> transformations -> validations -> target
+3. **Transformation Editor**
+   - Add, edit, delete, and reorder rules
+4. **Preview**
+   - First 100 transformed rows and sample error summary
+5. **Run Screen**
+   - Status, progress, and core counters
+6. **Run History**
+   - Pipeline runs and durations
+7. **Run Detail**
+   - Counters, system error, and error CSV download
+8. **Schema Difference and Remapping**
+   - Old/new column comparison and mapping correction
+9. **Saved Connections**
+   - Create, edit, and delete protected MongoDB/PostgreSQL endpoints and select them in database source/destination workflows
 
-1. **Dashboard/Pipeline listesi**
-   - Pipeline adı, kaynak türü, hedef ve son çalışma durumu
-2. **Yeni pipeline / düzenleme sihirbazı**
-   - Kaynak → şema ve mapping → dönüşümler → doğrulamalar → hedef
-3. **Dönüşüm editörü**
-   - Kural ekleme, düzenleme, silme ve sürükleyerek sıralama
-4. **Önizleme**
-   - Dönüştürülmüş ilk 100 satır ve örnek hata özeti
-5. **Çalıştırma ekranı**
-   - Durum, ilerleme ve temel sayaçlar
-6. **Çalışma geçmişi**
-   - Pipeline çalışmaları ve süreleri
-7. **Çalışma detayı**
-   - Tüm sayaçlar, sistem hatası ve hata CSV'si indirme
-8. **Şema farkı ve yeniden eşleştirme**
-   - Eski/yeni kolon karşılaştırması ve mapping düzeltme
-
-Ayrı bir gösterişli dashboard ilk hedef değildir; pipeline listesi gerekli özetleri gösterecektir.
+A separate decorative analytics dashboard is not a priority. The pipeline list should provide the useful summary information required for the MVP.
 
 ---
 
-## 12. 15 iş günlük geliştirme planı
+## 12. 15-Working-Day Development Plan
 
-### Rol dağılımı
+### 12.1 Role Distribution
 
-**Geliştirici A — ETL Engine ağırlıklı**
+**Developer A - ETL Engine focus**
 
-- Extractor'lar
+- Extractors
 - Transformation engine
 - Validation engine
-- Batch orchestrator
+- Batch orchestration
 - MongoDB loader/upsert
-- Performans ve unit testleri
+- Performance and core unit/integration verification
 
-**Geliştirici B — MVC ve uygulama akışı ağırlıklı**
+**Developer B - MVC and application-flow focus**
 
-- Pipeline CRUD ve repository
-- Razor Views ve ViewModel'ler
-- Upload, mapping ve drag-and-drop ekranları
-- Background job yönetimi ve durum ekranı
-- Run history ve CSV raporu
-- Docker ve entegrasyon testleri
+- Pipeline CRUD and repository flows
+- Razor Views and ViewModels
+- Upload, mapping, and transformation configuration UI
+- Background job/status UI
+- Run history and CSV report delivery
+- Docker packaging and integration-facing work
 
-İki geliştirici ilk iki gün veri sözleşmelerini birlikte belirleyecek ve her gün birbirlerinin pull request'lerini inceleyecektir.
+The plan is task-based rather than ceremony-based. Not every task requires a full Plan -> Implementation -> Test -> Review -> Git chain.
 
-### Gün 1 — Kapsam, sözleşmeler ve iskelet
+### 12.2 Workflow Notation
 
-Ortak:
+The remaining backlog uses:
 
-- Bu planın onaylanması ve backlog'a çevrilmesi
-- Örnek temiz/kirli CSV ve XLSX dosyalarının hazırlanması
-- 100 bin satırlık performans test dosyasının hazırlanması
-- Solution ve proje katmanlarının oluşturulması
-- Git düzeni, PR kontrol listesi ve CI başlangıcı
-- Pipeline, rule ve run sözleşmelerinin belirlenmesi
+- `P` = Planning
+- `I` = Implementation
+- `T` = Test and validation
+- `R` = Code review
+- `G` = Local Git closeout
+- `H` = High reasoning
+- `M` = Medium reasoning
+- `L` = Low reasoning
 
-Çıktı: Derlenen solution, MongoDB bağlantı testi ve kabul edilmiş domain modelleri.
+Assigned model families:
 
-### Gün 2 — Persistence ve extractor sözleşmesi
+- `Sol` is reserved for the highest-value shared-core, persistence, security, and release-review work.
+- `Terra` is the default for substantial planning, implementation, and validation work.
+- `Luna` is used for mechanical, low-risk, documentation, demo-data, and local Git closeout work where appropriate.
 
-Geliştirici A:
+### Days 1-9 - Completed Foundation
 
-- `IFileExtractor`, `DataRow` ve source options tasarımı
-- CSV extractor başlangıcı
+The pre-Day-10 backlog is intentionally not repeated task by task. The completed foundation covers the work required to reach the MongoDB persistence boundary:
 
-Geliştirici B:
+- **Day 1:** solution/project skeleton, initial contracts, repository conventions, and project baseline
+- **Day 2:** metadata persistence/pipeline CRUD foundation and extractor contracts
+- **Day 3:** secure source upload plus CSV/XLSX extraction paths and source options
+- **Day 4:** schema detection, field mapping, persistence of mappings, and related UI flow
+- **Day 5:** ordered transformation engine foundation and initial transformation handlers/UI
+- **Day 6:** remaining MVP transformations, culture-aware conversions, filtering, and deduplication behavior
+- **Day 7:** validation engine, MVP validators, multi-error row behavior, and pipeline readiness rules
+- **Day 8:** preview orchestration, transformed-row/error presentation, and end-to-end wizard integration around preview
+- **Day 9:** batch execution orchestration, cancellation/progress contracts, in-process background execution, run status persistence, polling, and run progress UI
 
-- MongoDB metadata repository'leri
-- Pipeline CRUD servisleri ve temel MVC sayfaları
+**Day 9 exit state:** the application can prepare and execute valid rows through the shared ETL path in background batches and report progress. The remaining critical persistence boundary begins on Day 10.
 
-Çıktı: Pipeline kaydedilip listelenebilir; basit CSV satırları okunabilir.
+### Day 10 - MongoDB Bulk Upsert
 
-### Gün 3 — CSV/XLSX ve upload
+Day 10 completes the MongoDB persistence boundary. The critical task is the `BulkWrite` loader.
 
-Geliştirici A:
+#### Developer A - Task 10A.1: MongoDB Target Security and Access Controls
 
-- CSV delimiter/culture desteği
-- XLSX extractor ve worksheet seçimi
-- 100 bin satır için bellek kontrollü okuma deneyi
+Scope:
 
-Geliştirici B:
+- Validate allowed database and collection targets.
+- Prevent metadata/system database selection as a user data target.
+- Treat invalid or inaccessible targets as run-level failures.
+- Ensure connection strings or secret values cannot leak into persisted pipeline data.
 
-- Güvenli dosya upload servisi
-- Dosya/uzantı/limit kontrolleri
-- Upload ve worksheet/delimiter seçim ekranı
+Workflow:
 
-Çıktı: Her iki dosya türü yüklenip kolonları ve örnek satırları okunabilir.
+`I: Terra H | T: Terra H | R: Sol H | G: Luna L`
 
-### Gün 4 — Şema ve mapping
+No separate planning stage. The problem boundary is already sufficiently defined by the project contracts.
 
-Geliştirici A:
+#### Developer A - Task 10A.2: MongoDB BulkWrite Upsert Loader, Counters, and Limited Retry
 
-- Şema algılama ve temel tip önerisi
-- Mapping uygulama servisi
+This combines the previous loader, insert/update counter, and retry tasks.
 
-Geliştirici B:
+Scope:
 
-- Alan seçme, silme ve yeniden adlandırma arayüzü
-- Mapping'in pipeline tanımına kaydedilmesi
+- Write configured batches with MongoDB `BulkWrite` operations.
+- Use the user-selected upsert output field.
+- Prevent duplicate target documents when the same logical data is rerun.
+- Produce correct inserted and updated counters.
+- Apply bounded retry to eligible MongoDB batch-write failures.
+- Convert retry exhaustion into a run-level failure.
+- Preserve partial-completion semantics if earlier batches were already committed.
+- Keep cancellation behavior consistent with the existing execution/orchestration contract.
 
-Çıktı: Kaynak kolonlar MongoDB çıktı alanlarına eşlenebilir.
+Workflow:
 
-### Gün 5 — Transformation engine temeli
+`P: Terra H | I: Sol H | T: Terra H | R: Sol H | G: Luna L`
 
-Geliştirici A:
+This is one of the remaining tasks where Sol usage is intentionally protected.
 
-- Handler registry ve sıralı transformation engine
-- Trim, upper/lower, default ve find/replace handler'ları
+#### Developer B - Task 10B.1: MongoDB Target and Upsert-Key Configuration UI
 
-Geliştirici B:
+This combines database selection, collection selection, upsert-key selection, and user-facing connection/access errors.
 
-- Transformation rule CRUD ViewModel/controller akışı
-- Kural kartları ve drag-and-drop sıralama
+Scope:
 
-Çıktı: Kaydedilen dönüşümler doğru sırayla örnek satıra uygulanabilir.
+- Database selection
+- Collection selection
+- Upsert output-field selection
+- Prevent invalid targets from being saved
+- Present backend connection/access failures in understandable user-facing form
 
-### Gün 6 — Kalan dönüşümler
+Workflow:
 
-Geliştirici A:
+`I: Terra H | T: Terra M | G: Luna L`
 
-- String/integer/decimal/date conversion
-- Koşullu filter
-- Seçilen alanlara göre deduplication
-- Culture/date parsing hata davranışı
+No separate review stage is required.
 
-Geliştirici B:
+**Day 10 output:** valid records can be written to MongoDB in batches with idempotent upsert behavior, accurate insert/update counters, and correct batch-failure semantics.
 
-- Her kural tipi için form kontrolleri
-- Kural referanslarının istemci ve sunucu doğrulaması
-- Düzenleme ve silme deneyimi
+### Day 11 - Run History and Safe Error CSV
 
-Çıktı: Seçilen bütün MVP dönüşümleri uçtan uca yapılandırılabilir.
+#### Developer A - Task 11A.1: Safe Error CSV Generation
 
-### Gün 7 — Validation engine
+This combines row-error contract review, CSV generation, and spreadsheet formula-injection protection.
 
-Geliştirici A:
+Scope:
 
-- Required, email, numeric range, text length, date range ve upsert-key validator'ları
-- Bir satırda birden fazla hatanın toplanması
+- Inspect the existing row-error model before introducing any new model.
+- Reuse the current model if it already supports the required behavior.
+- Include required run/row information in the error CSV.
+- Write original row data safely.
+- Prevent spreadsheet formula injection in generated cells.
+- Preserve correct UTF-8 and CSV escaping behavior.
+- Avoid unnecessary whole-file memory buffering for large error sets.
 
-Geliştirici B:
+Workflow:
 
-- Validation rule oluşturma ve düzenleme ekranları
-- Pipeline readiness kontrolleri
+`I: Terra H | T: Terra H | R: Sol H | G: Luna L`
 
-Çıktı: Dönüşümden geçen satırlar kurallara göre geçerli/hatalı ayrılabilir.
+#### Developer B - Task 11B.1: Run History and Run Detail UI
 
-### Gün 8 — Önizleme ve hata özeti
+This combines the previous run-history and run-detail tasks.
 
-Geliştirici A:
+Scope:
 
-- İlk 100 satır için preview orchestration
-- Geçerli/hatalı/filtrelenmiş sayaçları
+- List pipeline runs.
+- Show run status and duration.
+- Show total, processed, valid, invalid, filtered, and duplicate counters.
+- Show inserted and updated counters.
+- Show the system-error summary.
+- Show a download action when an error report exists.
 
-Geliştirici B:
+Workflow:
 
-- Dönüştürülmüş preview tablosu
-- Satır/alan bazlı hata gösterimi
-- Pipeline sihirbazının uçtan uca bağlanması
+`I: Terra M | G: Luna L`
 
-Çıktı: Kullanıcı gerçek yükleme öncesinde beklenen sonucu görebilir.
+No separate Plan, Test, or Review round is required. The implementation step should include only the focused MVC tests materially needed for the changed behavior.
 
-### Gün 9 — Background run ve progress
+#### Developer B - Task 11B.2: Error CSV Download Endpoint and Temporary-File Lifecycle
 
-Geliştirici A:
+This combines error-report download and temporary-file cleanup.
 
-- Batch orchestrator ve cancellation altyapısı
-- Run progress callback'i
+Scope:
 
-Geliştirici B:
+- Allow only the error report belonging to the requested run to be downloaded.
+- Prevent path traversal and arbitrary-file download.
+- Remove uploaded source files after completed or failed execution.
+- Retain error reports according to the run-history policy.
+- Support orphaned temporary-source cleanup.
+- Dispose file and stream resources correctly.
 
-- Uygulama içi job queue/background worker
-- Run durum repository'si
-- Polling endpoint'i ve çalışma ekranı
+Workflow:
 
-Çıktı: Pipeline HTTP isteğini bloklamadan arka planda çalışır ve ilerleme gösterir.
+`P: Terra M | I: Terra H | T: Terra H | R: Sol H | G: Luna L`
 
-### Gün 10 — MongoDB bulk upsert
+The review stage is retained because this task crosses file/path security and resource-lifecycle boundaries.
 
-Geliştirici A:
+**Day 11 output:** complete run results are visible and invalid records can be downloaded as a safely generated and safely served CSV report.
 
-- Database/collection güvenlik kontrolleri
-- `BulkWrite` ile upsert loader
-- Insert/update sayaçları ve sınırlı retry
+### Day 12 - Schema Difference and Remapping
 
-Geliştirici B:
+Day 12 is data-integrity critical and is kept as two larger shared tasks.
 
-- Hedef database/collection ve upsert anahtarı ekranı
-- Bağlantı/erişim hata mesajları
+#### Developers A + B - Task 12.1: Schema Difference and Remapping Flow
 
-Çıktı: Geçerli kayıtlar batch halinde hedef collection'a idempotent biçimde yazılır.
+This combines schema comparison, schema-difference UI, and remapping.
 
-### Gün 11 — Geçmiş ve hata CSV'si
+Scope:
 
-Geliştirici A:
+- Compare the saved source schema with the new file schema.
+- Identify missing fields.
+- Identify new fields.
+- Identify unmatched fields.
+- Allow the user to repair the mapping.
+- Persist the corrected mapping back to the pipeline.
+- Do not add fuzzy or AI schema matching.
 
-- Satır hata modelinin kesinleştirilmesi
-- CSV rapor yazıcısı ve formül enjeksiyonuna karşı güvenli çıktı
+Workflow:
 
-Geliştirici B:
+`P: Terra H | I: Terra H | T: Terra H | R: Sol H | G: Luna L`
 
-- Run history ve run detail ekranları
-- Hata CSV'si indirme endpoint'i
-- Geçici dosya temizliği
+#### Developers A + B - Task 12.2: Rule-Reference Revalidation and Execution Guard
 
-Çıktı: Tam çalışma sonuçları görülebilir ve hatalı satırlar indirilebilir.
+This combines rule-reference revalidation with the guard that prevents execution before remapping is complete.
 
-### Gün 12 — Şema farkı ve yeniden eşleştirme
+Scope:
 
-Geliştirici A:
+- Revalidate transformation-rule field references after mapping changes.
+- Revalidate validation-rule field references after mapping changes.
+- Revalidate the upsert-field reference.
+- Prevent pipeline execution when required references are missing or invalid.
+- Tell the user which references are invalid.
+- Never silently run rules that still refer to the old schema.
 
-- Eski/yeni şema karşılaştırma servisi
-- Mapping sonrası kural referanslarını yeniden doğrulama
+Workflow:
 
-Geliştirici B:
+`P: Terra H | I: Terra H | T: Terra H | R: Sol H | G: Luna L`
 
-- Şema fark ekranı
-- Eksik/yeni alanların yeniden eşleştirilmesi
-- Düzeltilmeden çalıştırmayı engelleme
+**Day 12 output:** a saved pipeline can run against a changed-schema file only after the required remapping and reference repair are complete.
 
-Çıktı: Kaydedilmiş pipeline değişmiş şemalı yeni dosyayla kontrollü kullanılabilir.
+### Day 13 - Release Candidate Validation
 
-### Gün 13 — Test, performans ve dayanıklılık
+Day 13 is no longer a feature-development day. Its purpose is to identify real verification gaps and produce a release candidate.
 
-Geliştirici A:
+#### Shared - Task 13.1: Transformation, Validation, and Critical Application Coverage-Gap Audit
 
-- Bütün transformation/validation unit testleri
-- 100 bin satırlık performans ve bellek testi
-- Upsert idempotency ve partial failure testleri
+Replaces the old blanket requirement to rewrite or rerun every transformation and validation test.
 
-Geliştirici B:
+Scope:
 
-- MVC/API entegrasyon testleri
-- Upload güvenlik testleri
-- Schema remap ve hata raporu uçtan uca testleri
+- Inspect existing test coverage first.
+- Do not rewrite behavior that is already credibly tested.
+- Identify missing boundary, failure, and regression cases.
+- Add tests only for real coverage gaps.
+- Check shared transformation/validation regression protection.
 
-Ortak:
+Workflow:
 
-- Bulunan darboğazların ve kritik hataların düzeltilmesi
+`T: Terra H`
 
-Çıktı: Kabul testlerinden geçen release candidate.
+If files change:
 
-### Gün 14 — Paketleme ve dokümantasyon
+`G: Luna L`
 
-Geliştirici A:
+#### Shared - Task 13.2: 100,000-Row Performance and Memory Acceptance Test
 
-- Teknik mimari ve ETL engine dokümantasyonu
-- Extension guide: yeni extractor/transform/loader nasıl eklenir
+Combines the former performance and memory tasks.
 
-Geliştirici B:
+Scope:
 
-- Dockerfile ve Docker Compose
-- Kurulum README'si
-- Demo ekranlarının son düzenlemesi
+- Use the 100K acceptance dataset.
+- Validate streaming/incremental processing.
+- Validate batch processing behavior.
+- Verify memory does not grow uncontrollably with file size.
+- Verify the HTTP request is not held open for the execution duration.
+- Report real measurements rather than unmeasured performance claims.
 
-Ortak:
+Workflow:
 
-- Temiz ortamda kurulum testi
-- Demo veri setleri ve demo script'i
+`T: Terra H`
 
-Çıktı: Başka bir geliştiricinin kurup çalıştırabileceği paket.
+If the test harness or files change:
 
-### Gün 15 — Tampon, final kabul ve sunum
+`G: Luna L`
 
-- Kalan kritik hataların düzeltilmesi
-- Uçtan uca demo provası
-- 100 bin satırlık son test
-- Kapsam dışı maddelerin tekrar doğrulanması
-- Bilinen sınırlamaların yazılması
-- Release etiketi oluşturulması
-- Teknik sunum ve kısa kullanım videosu hazırlanması
+#### Shared - Task 13.3: MongoDB Resilience Acceptance Tests
 
-Çıktı: Çalışan, test edilmiş ve sunulabilir MVP.
+Combines upsert-idempotency and partial-failure acceptance work.
+
+Scope:
+
+- Same logical data processed twice does not create duplicates.
+- Insert -> rerun -> update behavior is correct.
+- Batch failure is observable.
+- Eligible transient failure can succeed after retry.
+- Retry exhaustion fails correctly.
+- A failure after an earlier committed batch preserves partial-completion semantics.
+- `PartiallyCompleted` versus `Failed` is correct.
+- Counters remain consistent with committed batches.
+
+Workflow:
+
+`T: Terra H`
+
+#### Shared - Task 13.4: Critical MVP End-to-End Acceptance Tests
+
+Scope:
+
+- Clean CSV
+- Dirty CSV
+- Schema remap
+- Error report
+- Background execution/status
+- Critical preview/run consistency paths
+- Critical MVC/API integration boundaries
+
+Do not add new tests where current tests already provide credible evidence.
+
+Workflow:
+
+`T: Terra H`
+
+#### Shared - Task 13.5: Release Candidate Final Review
+
+Scope:
+
+- Day 10-13 changes
+- Critical MVP acceptance criteria
+- MongoDB persistence
+- Error-report and file lifecycle
+- Schema remapping
+- Run statuses and counters
+- Security-sensitive behavior
+- Any open regression or release blocker
+
+Workflow:
+
+`R: Sol H`
+
+If successful:
+
+`G: Luna L`
+
+#### Conditional Task 13.X: Acceptance Blocker or Bottleneck Fix
+
+This task is created only if acceptance testing identifies a real blocker or bottleneck.
+
+Model selection depends on the defect:
+
+- Simple/local bug: `I: Terra H | T: Terra H`
+- Shared-core, persistence, security, or data-loss bug: `P: Terra H | I: Sol H | T: Terra H | R: Sol H`
+- After successful resolution: `G: Luna L`
+
+**Day 13 output:** a release candidate that has passed the critical acceptance scenarios with any real blockers resolved or explicitly documented.
+
+### Day 14 - Packaging and Documentation
+
+#### Developer B - Task 14.1: Docker Packaging and Clean-Environment Installation
+
+Combines Dockerfile, Docker Compose, installation README, and clean-install validation.
+
+Scope:
+
+- Application Dockerfile
+- MongoDB + application Docker Compose
+- Secret/configuration behavior
+- No connection string embedded in the image or repository
+- Required volumes, network, and configuration
+- Clean-environment startup
+- README installation/run instructions that match the real setup
+
+Workflow:
+
+`P: Terra M | I: Terra H | T: Terra H | R: Terra H | G: Luna L`
+
+Sol is not required for this stage.
+
+#### Developer A - Task 14.2: Technical Documentation Package
+
+Combines architecture documentation, ETL engine documentation, and extension guidance.
+
+Scope:
+
+- Architecture overview based on the actual implementation
+- `Extract -> Map -> Transform -> Validate -> Load`
+- Preview/full-run relationship
+- Background execution
+- MongoDB loader
+- Error report behavior
+- How to add a new extractor
+- How to add a new transformation
+- How to add a new loader
+
+Documentation must describe repository reality. Planned but unimplemented features must not be presented as completed capabilities.
+
+Workflow:
+
+`I: Terra M | G: Luna L`
+
+No separate Test or Review stage is required.
+
+#### Shared - Task 14.3: Demo Dataset and Demo Flow
+
+Combines demo datasets and the demo script.
+
+Scope:
+
+- Clean sample dataset
+- Dataset containing invalid rows
+- Schema-change sample when useful
+- Short, repeatable demo sequence
+- Scenario that demonstrates the core MVP capabilities
+
+Workflow:
+
+`I: Luna M | G: Luna L`
+
+#### Optional Task 14.4: Demo UI Polish
+
+Open this task only if the actual demo flow exposes screens that look poor enough to harm usability or presentation.
+
+Scope:
+
+- Small layout adjustments
+- Labels/text
+- Visual consistency
+- Demo usability
+
+No new product feature may be introduced.
+
+Workflow:
+
+`I: Terra M | G: Luna L`
+
+**Day 14 output:** a documented package with demo data that another developer can start and use in a clean environment.
+
+### Day 15 - Final Acceptance and Release
+
+#### Shared - Task 15.1: Final Acceptance and End-to-End Demo Rehearsal
+
+Run the primary demo scenario against the real application from start to finish:
+
+- Pipeline creation
+- File upload
+- Schema/mapping
+- Transformation
+- Validation
+- Preview
+- MongoDB target/upsert configuration
+- Background run
+- Progress/result
+- MongoDB persistence
+- Error CSV
+- Run history
+- Pipeline reuse
+- Schema change/remapping
+
+If performance-sensitive ETL code has not changed since Day 13, do not rerun the 100K acceptance test. If such code changed, include the 100K acceptance test in this task.
+
+Workflow:
+
+`T: Terra H | R: Sol H`
+
+#### Conditional Task 15.2: Final Release Blocker Fix
+
+Create only if Task 15.1 exposes a defect that actually blocks release.
+
+For low/medium-risk defects:
+
+`I: Terra H | T: Terra H | G: Luna L`
+
+For persistence, security, data-loss, or shared-core defects:
+
+`P: Terra H | I: Sol H | T: Terra H | R: Sol H | G: Luna L`
+
+#### Shared - Task 15.3: MVP Scope and Known-Limitations Closeout
+
+Combines scope verification and known-limitations documentation.
+
+Scope:
+
+- Confirm unimplemented features are outside the approved MVP scope rather than silently missing commitments.
+- Record known environment/runtime limitations.
+- Record known technical limitations that do not block release.
+- Ensure README/docs do not claim capabilities the implementation does not provide.
+
+Workflow:
+
+`I: Terra M | G: Luna L`
+
+#### Shared - Task 15.4: Final Local Git/Release Closeout
+
+Scope:
+
+- Inspect final repository state.
+- Ensure the working tree is clean.
+- Run required final lightweight Git checks.
+- Perform local release commit/tag operations as appropriate.
+- Keep remote GitHub operations separate.
+
+Workflow:
+
+`G: Luna L`
+
+Do not spend Sol on release/Git mechanics.
+
+**Day 15 output:** a working, tested, packaged, documented, and presentation-ready ETL Tool MVP.
+
+### 12.3 Accepted Database Expansion After the Original 15-Day Plan
+
+The original day-by-day backlog above records the file-to-MongoDB foundation. Subsequent approved packages extended that foundation without changing the shared `Extract -> Map -> Transform -> Validate -> Load` semantics:
+
+- PostgreSQL and MongoDB became streaming logical sources with metadata discovery, schema inference/comparison, deterministic ordering, Preview, and background execution.
+- PostgreSQL became a transactional batch-upsert destination with explicit output-to-column mappings and primary/unique-key admission.
+- The accepted cross-database flows are PostgreSQL to MongoDB and MongoDB to PostgreSQL; CSV/XLSX to MongoDB remains the accepted file path.
+- The Connections workflow added multiple named PostgreSQL/MongoDB connections, protected configurations, revision history, safe pipeline references, and execution-time revision freezing.
+- Cross-database and real-provider acceptance verified mapping, ordered transformations, validation, filtering, deduplication, insert/update counters, idempotent reruns, error reports, status transitions, and failure/cancellation behavior for the accepted matrix.
+
+This expansion supersedes earlier scope statements that described SQL sources, PostgreSQL destinations, or multiple MongoDB endpoints as future work. The historical task descriptions remain useful evidence of sequencing, but the final scope sections and repository implementation define the released product.
 
 ---
 
-## 13. Codex ile çalışma yöntemi
+## 13. Codex Working Method
 
-Codex tek seferde tüm uygulamayı üretmeye çalışmayacaktır. Her görev küçük, doğrulanabilir bir iş paketi olarak verilecektir.
+Codex should not attempt to build or rewrite the entire application in one pass. Work remains split into small, reviewable tasks with verification proportional to actual regression risk.
 
-Her iş paketinde şu bilgiler bulunmalıdır:
+### 13.1 Source-of-Truth Order
 
-- Amaç
-- İlgili proje/katman
-- Kullanılacak interface ve domain modeli
-- Kabul kriterleri
-- Kapsam dışı davranışlar
-- Yazılması gereken testler
-- Değiştirilmemesi gereken dosyalar
+Before consequential work, use this order:
 
-Önerilen akış:
+1. `AGENTS.md`
+2. This project plan
+3. `PROGRESS.md`, when present
+4. Current repository, tests, configuration, Git status, and relevant diff/history
+5. Current user-approved task and task-specific plan
 
-1. Geliştirici iş paketini ve sözleşmeyi tanımlar.
-2. Codex mevcut kodu inceleyip küçük bir uygulama planı çıkarır.
-3. Codex implementasyonu ve testleri üretir.
-4. Geliştirici diff'i okuyup mimari ve davranış açısından inceler.
-5. Testler ve örnek veri çalıştırılır.
-6. Diğer geliştirici pull request incelemesi yapar.
-7. Kabul kriterleri sağlanınca merge edilir.
+The repository is the final source of truth for what is actually implemented. Documentation or progress tracking alone does not prove completion.
 
-Codex çıktısı incelemeden birleştirilmeyecektir. Özellikle veri tipi dönüşümü, MongoDB upsert filtresi, dosya temizliği ve hata raporu manuel olarak gözden geçirilecektir.
+### 13.2 Task Workflow
+
+Use only the stages assigned to the task in Section 12.
+
+- Do not force a Planning stage when the scope is already clear and localized.
+- Do not create a separate Test round for low-risk UI/documentation tasks when focused verification can be performed during implementation.
+- Do not create a separate Review round where the backlog explicitly omits it.
+- Preserve dedicated Review for persistence, security, file/path lifecycle, schema integrity, shared-core behavior, and release-critical work.
+- Keep local Git closeout mechanical and low-cost after implementation, validation, and required review are complete.
+
+For tasks that do use separate stages:
+
+1. **Planning:** inspect repository reality and produce a repository-grounded implementation plan without editing code.
+2. **Implementation:** implement only the approved scope and the smallest necessary tests.
+3. **Test/Validation:** verify observable behavior with a risk-based test scope and do not fix production defects unless explicitly instructed.
+4. **Review:** inspect task, plan, implementation, diff, tests, and repository rules; report only concrete evidence-backed findings.
+5. **Local Git closeout:** confirm the intended diff, run lightweight closeout checks, create the focused local commit, and keep remote GitHub operations separate.
+
+### 13.3 AI Model Budgeting Principle
+
+Model selection is part of the execution plan:
+
+- Preserve Sol for the few tasks where deep reasoning materially reduces data-integrity, persistence, security, or release risk.
+- Prefer Terra for most implementation, validation, and planning work.
+- Prefer Luna for mechanical closeout, straightforward documentation/demo work, and other low-risk tasks.
+- Do not upgrade model/reasoning level merely because a task has many files or because a full suite exists.
 
 ---
 
-## 14. Test stratejisi
+## 14. Test and Validation Strategy
 
-### Unit testler
+Testing is risk-based. Every behavior change should have the smallest appropriate automated verification, but the full repository test suite should not run automatically after every task.
 
-- Her transformation handler
-- Her validation handler
-- Culture-aware sayı/tarih dönüşümü
-- Mapping ve şema karşılaştırması
-- Deduplication davranışı
-- Pipeline readiness kontrolü
+### 14.1 Per-Task Verification
 
-### Integration testler
+Always when applicable:
 
-- CSV/XLSX extractor
-- MongoDB repository
-- Bulk upsert
-- Background job durumu
-- Error CSV üretimi
+- Run task-specific focused tests.
+- Run `dotnet build EtlTool.sln --no-restore` after production-code changes.
+- Run `git diff --check` before task closeout.
 
-### Uçtan uca kabul testleri
+Risk levels:
 
-1. Temiz CSV → bütün satırlar MongoDB'ye gider.
-2. Kirli CSV → geçerliler gider, hatalılar raporlanır.
-3. Aynı dosya iki kere → duplicate document oluşmaz.
-4. Değişmiş kolonlu dosya → schema remap ekranı açılır.
-5. 100 bin satır → bellek taşması ve HTTP timeout olmadan tamamlanır.
-6. MongoDB kesintisi → doğru run durumu ve anlaşılır hata oluşur.
-7. Dönüşüm sırası değiştirilince preview ve gerçek run aynı sonucu verir.
-8. CSV ve XLSX aynı mantıksal veride aynı hedef dokümanları üretir.
+**Low risk**
+
+Examples: localized UI, ViewModel, small controller, documentation, navigation, presentation-only behavior, or narrowly isolated changes.
+
+Default scope:
+
+- Focused task tests
+- Build after production-code changes
+- No full unit suite unless repository evidence shows broader impact
+
+**Medium risk**
+
+Examples: application-service behavior, CRUD/update flows, mapping/rule configuration, or a contained MVC feature boundary.
+
+Default scope:
+
+- Focused task tests
+- Directly affected feature/regression tests
+- Build
+- No full unit suite unless the actual change reaches shared behavior
+
+**High risk / shared core**
+
+Examples: shared parsers/contracts, transformation or validation engines, orchestration, persistence/upsert semantics, shared domain models, resource lifecycle, security-sensitive behavior, or broad call-site changes.
+
+Default scope:
+
+- Focused task tests
+- Directly affected regression suites
+- Full unit suite
+- Relevant integration tests when an integration boundary changed
+- Build
+
+### 14.2 Integration-Test Focus
+
+Run integration tests only when the task materially changes the corresponding boundary, including:
+
+- CSV/XLSX extraction
+- PostgreSQL/MongoDB logical-source extraction and schema drift
+- MongoDB repository or bulk upsert
+- PostgreSQL batch upsert
+- Saved-connection protection and revision resolution
+- Accepted cross-database execution
+- Idempotent reruns
+- Background execution/status transitions
+- MVC/API binding when materially changed
+- Error CSV generation and download
+- Temporary-file cleanup/lifecycle
+- Packaging, startup, Docker, or configuration
+
+Do not repeatedly run unrelated integration suites just because they exist.
+
+### 14.3 Full-Suite and Checkpoint Verification
+
+Broader verification is justified at:
+
+- End-of-day checkpoints when useful
+- High-risk/shared-core tasks
+- Day 13 release-candidate validation
+- Major feature boundaries
+- Final acceptance/release
+
+Known environment-blocked suites should not be rerun after unrelated changes unless the current task could affect the blocked boundary.
+
+Run `dotnet restore EtlTool.sln` when dependencies/project references changed, restore state is uncertain, or a broader checkpoint requires it. Do not require restore after every small task.
+
+### 14.4 Release-Candidate Acceptance Scenarios
+
+The release candidate must provide credible evidence for:
+
+1. Clean CSV -> all valid rows are processed and loaded.
+2. Dirty CSV -> valid rows load while invalid rows are reported.
+3. Same logical data rerun -> no duplicate target records.
+4. Insert followed by rerun -> expected update behavior and counters.
+5. Changed source schema -> remapping is required before execution.
+6. 100,000 rows -> incremental/batch behavior is measured without uncontrolled memory growth or HTTP-bound execution.
+7. MongoDB/PostgreSQL batch failures -> provider-specific retry, exhaustion, `Failed`, and `PartiallyCompleted` semantics are correct.
+8. Transformation ordering -> preview and full run remain consistent.
+9. CSV and XLSX -> equivalent logical input follows the same ETL semantics.
+10. Error CSV -> safe generation, escaping/formula protection, correct download authorization/path handling, and file lifecycle.
+11. Background run -> status/progress/counters remain coherent through completion and failure paths.
+12. PostgreSQL source -> MongoDB destination preserves the shared processing, batching, counters, schema-drift, and idempotency rules.
+13. MongoDB source -> PostgreSQL destination preserves the shared processing, explicit column mapping, counters, error-report, and idempotency rules.
+14. Saved connection edit -> a queued/running execution continues to use its admitted source/destination revisions.
 
 ---
 
 ## 15. Definition of Done
 
-MVP tamamlanmış sayılmak için:
+The MVP is complete only when:
 
-- CSV ve XLSX kaynağı çalışmalıdır.
-- Pipeline oluşturma, düzenleme, silme ve tekrar kullanma çalışmalıdır.
-- Mapping, bütün seçilen dönüşümler ve doğrulamalar çalışmalıdır.
-- Drag-and-drop sonrası dönüşüm sırası kalıcı olmalıdır.
-- Preview ile gerçek run aynı kuralları kullanmalıdır.
-- 100 bin satırlık kabul testi geçmelidir.
-- MongoDB bulk upsert duplicate üretmemelidir.
-- Hatalı satırlar hedefe yazılmamalı ve CSV olarak indirilebilmelidir.
-- Şema değişikliğinde yeniden eşleştirme çalışmalıdır.
-- Run history ve progress doğru sayaçları göstermelidir.
-- Kritik servisler unit/integration testlere sahip olmalıdır.
-- Uygulama Docker Compose ile temiz ortamda başlatılabilmelidir.
-- README, mimari açıklama ve örnek demo verisi bulunmalıdır.
-- Connection string repository içinde bulunmamalıdır.
-- Bilinen sınırlamalar açıkça belgelenmelidir.
+- CSV, XLSX, PostgreSQL, and MongoDB sources work for the accepted matrix.
+- Pipeline creation, editing, deletion, and reuse work.
+- Mapping, all selected MVP transformations, and validations work.
+- Transformation ordering is persisted and honored.
+- Preview and full execution use the same mapping/transformation/validation semantics.
+- The 100,000-row acceptance test passes with measured evidence appropriate to the environment.
+- MongoDB and PostgreSQL batch upserts are idempotent for the defined logical key behavior.
+- Inserted and updated counters are accurate.
+- Invalid rows are not written to the destination and can be downloaded as a safe error CSV.
+- MongoDB/PostgreSQL target safety and secret-handling requirements are satisfied.
+- Saved connections are protected, pipelines retain no credentials, and admitted runs freeze provider-compatible source/destination revisions.
+- PostgreSQL-to-MongoDB and MongoDB-to-PostgreSQL flows have real-provider acceptance evidence.
+- Schema changes require remapping and invalid old rule references cannot execute silently.
+- Run history, progress, statuses, and counters are coherent.
+- Source temporary files and retained error reports follow the defined lifecycle safely.
+- Critical services have appropriate unit/integration coverage based on regression risk.
+- The application can start in a clean environment through the documented Docker Compose setup.
+- README and technical documentation describe only implemented behavior.
+- No connection string or secret is stored in the repository, pipeline data, or run snapshots.
+- Known non-blocking limitations are documented.
+- Final local Git/release closeout is complete and remote GitHub operations remain a separate step.
 
 ---
 
-## 16. Zaman daralırsa özellik kesme sırası
+## 16. Scope-Cut Order if Time Becomes Tight
 
-Öncelikle çekirdek veri doğruluğu korunacaktır. Zaman yetmezse şu sırayla sadeleştirme yapılır:
+Core data correctness must be protected first. If schedule pressure requires simplification, reduce scope in this order:
 
-1. Dashboard görselliği sadeleştirilir.
-2. Canlı yüzde yerine yalnızca run durumu ve işlenen satır sayısı gösterilir.
-3. Excel'de birden fazla worksheet seçimi kaldırılıp ilk worksheet kullanılır.
-4. Bul/değiştir ve date-range validation sonraki sürüme bırakılır.
-5. Drag-and-drop yerine yukarı/aşağı butonları geçici yedek olarak kullanılır.
+1. Simplify dashboard/pipeline-list visual polish.
+2. Show status and processed-row counts instead of a richer live percentage UI.
+3. Reduce Excel worksheet selection behavior if the real implementation still allows that simplification safely.
+4. Defer non-essential polish around find/replace or date-range validation only if release-candidate evidence shows they are incomplete and the approved MVP scope is explicitly revised.
+5. Replace drag-and-drop with a simpler ordering control only if necessary for demo reliability.
 
-Şunlar kesilmez:
+Do not cut:
 
-- CSV desteği
+- CSV support
 - Mapping
-- Temel dönüşüm ve validation motoru
+- Core transformation and validation engines
 - Batch processing
 - MongoDB upsert
-- Hatalı satır ayrımı
-- Run sonucu
-- En azından temel unit testler
+- PostgreSQL upsert and the accepted cross-database paths
+- Saved-connection protection and revision-safe execution
+- Invalid-row separation
+- Run result/status
+- Schema-remap execution guard
+- Safe error reporting
+- Minimum credible automated regression coverage
 
 ---
 
-## 17. Sonraki sürüm adayları
+## 17. Post-MVP Candidates
 
-MVP sonrasında mantıklı geliştirme sırası:
+A reasonable post-MVP progression is:
 
-1. REST API ve JSON kaynağı
-2. SQL kaynağı
-3. Zamanlanmış pipeline çalıştırma
-4. Çoklu MongoDB bağlantı profili
-5. Kullanıcı ve rol sistemi
-6. Yeni hedefler: PostgreSQL/SQL Server
-7. Dağıtık worker ve kalıcı job queue
-8. Gelişmiş node tabanlı görsel editör
+1. REST API and JSON sources
+2. Additional database providers
+3. Scheduled pipeline execution
+4. Source/destination combinations outside the accepted matrix
+5. User and role system
+6. Additional targets such as SQL Server
+7. Distributed workers and a durable job queue
+8. Advanced node-based visual editor
 
-Node canvas ancak pipeline'ın dallanması, birden fazla kaynak/hedef veya koşullu akış gerçekten gerektiğinde eklenmelidir.
-
+A node canvas should be introduced only when the product genuinely needs branching, multiple sources/targets, or conditional graph-style execution.

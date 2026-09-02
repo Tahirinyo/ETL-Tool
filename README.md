@@ -1,6 +1,10 @@
 # ETL Tool
 
-An ASP.NET Core MVC application for importing CSV, modern Excel (`.xlsx`), PostgreSQL, and MongoDB data through reusable ETL pipelines.
+An ASP.NET Core MVC application for importing CSV, modern Excel (`.xlsx`), PostgreSQL, and MongoDB data through reusable ETL pipelines. It detects and compares schemas, maps fields, applies ordered transformations and validation, previews the first 100 rows, and batch-upserts valid rows while reporting invalid rows separately.
+
+The accepted release flows are CSV/XLSX/PostgreSQL to MongoDB and MongoDB to PostgreSQL. PostgreSQL and MongoDB endpoints are managed as protected saved connections in the application; each admitted run freezes the active source and destination connection revisions so a later connection edit cannot change an already queued run.
+
+See the [technical documentation](docs/Technical_Documentation.md) for runtime details and the [demo guide](docs/Demo_Guide.md) for repeatable file and database-to-database scenarios.
 
 ## Run with Docker Compose
 
@@ -106,11 +110,24 @@ docker compose down --volumes
 ## Configuration notes
 
 Docker Compose maps the external `MONGODB_CONNECTION_STRING` value to `MongoDb__ConnectionString` for application
-metadata. PostgreSQL and MongoDB source/destination workflows use protected saved connections created in the
-**Connections** UI; pipelines retain only connection references and selected database objects, never connection
-strings. Legacy ASP.NET Core PostgreSQL profile configuration remains available for compatibility but is not the normal
-Compose demo workflow. The container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside
-this MVP packaging setup.
+metadata, including pipeline, run, and saved-connection records. PostgreSQL and MongoDB source/destination workflows
+use protected saved connections created in the **Connections** UI. Pipelines retain only saved-connection IDs and
+selected database objects; run admission resolves the current protected revision and records that safe reference in the
+immutable execution snapshot. Connection strings are never copied into pipeline or run data. Legacy ASP.NET Core
+PostgreSQL profile configuration remains available for compatibility but is not the normal Compose demo workflow. The
+container serves local HTTP on port `8080`; TLS and reverse-proxy deployment are outside this MVP packaging setup.
+
+## Build and test
+
+From the repository root:
+
+```powershell
+dotnet restore EtlTool.sln
+dotnet build EtlTool.sln --no-restore
+dotnet test EtlTool.sln --no-build
+```
+
+The integration project includes real-provider coverage through Testcontainers, so broader integration runs require a working Docker daemon.
 
 ## MVP scope and known limitations
 
@@ -120,21 +137,20 @@ The released MVP supports reusable pipelines for CSV, modern Excel (`.xlsx`), Po
 
 | Source | MongoDB destination | PostgreSQL destination |
 | --- | --- | --- |
-| CSV | Supported | Not advertised as supported |
-| XLSX | Supported | Not advertised as supported |
-| PostgreSQL | Supported | Not advertised as supported |
-| MongoDB | Not advertised as supported | Supported |
+| CSV | Supported | Outside the accepted matrix |
+| XLSX | Supported | Outside the accepted matrix |
+| PostgreSQL | Supported | Outside the accepted matrix |
+| MongoDB | Outside the accepted matrix | Supported |
 
-For a database source, the user selects a saved provider-compatible connection and then cascades through the available database objects. PostgreSQL uses connection, database, schema, and table; MongoDB uses connection, database, and collection. PostgreSQL sources route to MongoDB destinations and MongoDB sources route to PostgreSQL destinations; CSV/XLSX retain the destination choice. Saved connection credentials remain protected server-side, while pipelines retain only the connection reference and logical object identities. PostgreSQL and MongoDB sources stream incrementally. Preview reads the first 100 rows through the same mapping, transformation, validation, filtering, and deduplication path used for execution; it performs live schema comparison and requires remapping when the source schema has changed. Unsupported PostgreSQL column types and unsupported or incompatible MongoDB BSON values fail safely instead of being silently coerced.
+For a database source, the user selects a saved provider-compatible connection and then cascades through the available database objects. PostgreSQL uses connection, database, schema, and table; MongoDB uses connection, database, and collection. PostgreSQL sources route to MongoDB destinations, MongoDB sources route to PostgreSQL destinations, and accepted CSV/XLSX flows target MongoDB. Saved connection credentials remain protected server-side, while pipelines retain only the connection ID and logical object identities. Database-source Preview resolves the active revision; run admission freezes the active source and destination revisions for that run. PostgreSQL and MongoDB sources stream incrementally. Preview reads the first 100 rows through the same mapping, transformation, validation, filtering, and deduplication path used for execution; it performs live schema comparison and requires remapping when the source schema has changed. Unsupported PostgreSQL column types and unsupported or incompatible MongoDB BSON values fail safely instead of being silently coerced.
 
 Execution is admitted to an in-process background queue and incrementally loads valid rows in configured batches. MongoDB uses BulkWrite-style upserts; PostgreSQL uses batch upserts against the configured key column. In both supported destinations, confirmed inserts and updates are counted separately and a rerun with the same logical keys is idempotent. Empty upsert keys and later duplicates within an input are excluded. Run status/history and counters are retained; invalid rows are excluded from loading and available in a safely generated error CSV. The Compose stack includes health-gated MongoDB and PostgreSQL services for local/demo onboarding.
 
 ### Intentional MVP exclusions
 
-The MVP does not include authentication or multi-tenancy; legacy `.xls`; database providers other than PostgreSQL and MongoDB; source/destination combinations outside the accepted matrix above; scheduled or distributed workers; AI/fuzzy schema matching; user-defined code or regex validation; full-file dry runs; or cloud/production-SLA deployment infrastructure. The application has one configured MongoDB connection and can use explicitly configured PostgreSQL profiles; credentials are never stored in pipeline data.
+The MVP does not include authentication or multi-tenancy; legacy `.xls`; database providers other than PostgreSQL and MongoDB; source/destination combinations outside the accepted matrix above; scheduled or distributed workers; AI/fuzzy schema matching; user-defined code or regex validation; full-file dry runs; or cloud/production-SLA deployment infrastructure. A configured MongoDB connection remains required for application metadata, while pipeline sources and destinations use protected saved connections. Credentials are never stored in pipeline or run data.
 
 ### Known verification limitations
 
-- Four integration-test failures remain due to stale or incorrect test expectations, not demonstrated application defects: three tracked `MongoEtlRunRepositoryTests` expectations about monotonic `TotalRows`, and one untracked Days 1–5 checkpoint test with an incorrect source-lifecycle expectation.
 - Final acceptance did not include a live-browser rehearsal of compatible pipeline reuse or schema-change/remapping. Automated MVC and application coverage covers those behaviors.
 - Compose uses attached named volumes, but restart-based volume-retention was not explicitly confirmed during final acceptance.

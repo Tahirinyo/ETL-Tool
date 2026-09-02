@@ -22,11 +22,19 @@ EtlTool.IntegrationTests  -> Infrastructure, Web
 | `EtlTool.Infrastructure` | CSV/XLSX extractors, PostgreSQL and MongoDB streaming sources, MongoDB repositories, MongoDB and PostgreSQL loaders, local upload/run-source/error-report storage, and the in-process queue implementation. It references Application. |
 | `EtlTool.Web` | MVC controllers, Razor views/view models, service composition in `Program.cs`, and hosted workers. It references Application and Infrastructure. Controllers coordinate HTTP only; they do not perform row processing or destination loading. |
 | `EtlTool.UnitTests` | Isolated coverage of domain/application behavior and MVC coordination/view models. |
-| `EtlTool.IntegrationTests` | Extractor, MongoDB, reporting/storage, worker/queue, and selected MVC integration coverage. |
+| `EtlTool.IntegrationTests` | Extractor, PostgreSQL/MongoDB source and destination, saved-connection, cross-database, reporting/storage, worker/queue, and selected MVC integration coverage. |
 
-`PipelineDefinition` is the persisted definition of a pipeline: source options and expected schema, field mappings, transformation and validation rules, destination configuration, and the output-field upsert key. `EtlRun` persists a run snapshot, state, counters, timestamps, safe source metadata, system error summary, and an optional error-report reference. PostgreSQL profile names and MongoDB/PostgreSQL object identities may be persisted; connection strings are configuration-only and are never pipeline data.
+`PipelineDefinition` is the persisted definition of a pipeline: source options and expected schema, field mappings, transformation and validation rules, destination configuration, and the output-field upsert key. Database pipelines retain a saved-connection ID and logical PostgreSQL or MongoDB object identities, never a connection string. `EtlRun` persists an immutable execution snapshot, frozen saved-connection references, state, counters, timestamps, safe source metadata, system error summary, and an optional error-report reference.
 
 At composition time, `Program.cs` registers the concrete CSV and XLSX extractors, logical-source metadata services, MongoDB repositories, `MongoBulkUpsertLoader`, `PostgreSqlBatchUpsertLoader`, local report storage, handler registries, ETL services, and hosted background services. The principal runtime boundaries include `IEtlSource`, `IRunSourceStore`, `IFileExtractorResolver`, `IPipelineDefinitionRepository`, `IEtlRunRepository`, `IDataLoader`, `IErrorReportWriter`, `IErrorReportStore`, and `IBackgroundJobQueue`.
+
+### Saved connections and frozen revisions
+
+The **Connections** workflow stores multiple named MongoDB and PostgreSQL connections in the MongoDB metadata database. Each connection configuration is protected with ASP.NET Core Data Protection before persistence. Replacing a configuration creates a new numbered revision; changing only its display name does not. The Data Protection key ring is stored under `SavedConnectionProtection:KeyRingPath`, which Docker Compose maps into the persistent `app-data` volume.
+
+Pipelines store only the saved-connection ID and selected database/schema/table or database/collection identity. Metadata discovery and database-source Preview resolve the connection's current active revision. `RunAdmissionService` resolves the active source and destination revisions and copies `{ connection ID, provider, revision }` references into `EtlRunExecutionConfiguration`; `RunSourceStore` and the destination loaders then resolve those exact protected revisions. Editing a saved connection after admission therefore affects later previews and runs, but not an already queued or running execution. A saved connection cannot be deleted while a pipeline or active run references it.
+
+`SavedConnectionProviderFactory` creates provider-specific runtime contexts for resolved revisions. Its internal PostgreSQL runtime-profile name is an implementation detail, not a user-configured profile. Legacy configured PostgreSQL profiles and the configured MongoDB runtime path remain compatibility paths; the current MVC source and destination workflow uses saved connections.
 
 ## ETL processing
 
@@ -45,7 +53,7 @@ IEtlSource.ReadAsync
 
 All admitted runs are opened as an `IEtlSource` by `RunSourceStore` and yield `DataRow` values through `IAsyncEnumerable<DataRow>`. File-backed runs use `CsvFileExtractor` or `XlsxFileExtractor`; their extractor contract makes the caller responsible for the input stream. Legacy `.xls` remains unsupported.
 
-PostgreSQL and MongoDB are logical sources: admission captures an immutable database/schema/table or database/collection identity and expected-schema snapshot rather than a local source file. Before returning a logical source, `RunSourceStore` compares the live schema with the admitted snapshot and requires remapping if it changed.
+PostgreSQL and MongoDB are logical sources: admission captures an immutable database/schema/table or database/collection identity, expected-schema snapshot, and saved-connection revision rather than a local source file. Before returning a logical source, `RunSourceStore` resolves that frozen revision, compares the live schema with the admitted snapshot, and requires remapping if it changed.
 
 `MongoDbEtlSource` uses a deferred MongoDB cursor with an empty filter, deterministic ascending `_id` order, and configurable `MongoDb:SourceExecutionFetchSize` (default `1000`, valid range `1`-`10000`). It shapes each top-level document in expected-schema order, treating missing fields and BSON null as null. Supported conversions are string and ObjectId to string, Int32/Int64 to integer, exact numeric values to decimal, Boolean to Boolean, and BSON DateTime to UTC `DateTime`. Extra fields, incompatible or unsupported BSON types, and numeric values that cannot be represented exactly are run-level schema-change failures. Cancellation, early enumeration termination, and failures dispose the cursor; the shared MongoDB client is not disposed by the source.
 
@@ -79,7 +87,7 @@ Full execution processes the complete admitted source incrementally, checks targ
 
 The execute action calls `RunAdmissionService`; it does not run ETL in the HTTP request. Admission captures a ready pipeline/source snapshot, creates a `Queued` `EtlRun` containing `EtlRunExecutionConfiguration`, persists it through `IEtlRunRepository`, and enqueues `BackgroundJob(runId)`. CSV/XLSX admission transfers a reserved run-owned file, while PostgreSQL and MongoDB admission records only immutable logical-source metadata and creates no source path. The bounded in-process queue uses `BackgroundJobQueue:Capacity` (checked-in default `100`); admission waits only up to `RunAdmission:QueueAdmissionTimeoutMilliseconds` (default `5000`). If queue admission fails, the persisted run is marked `Interrupted`.
 
-`BackgroundJobWorker` is a hosted service with a single queue reader. It creates a scoped `IBackgroundJobExecutor` for each job; the registered executor is `EtlRunBackgroundJobExecutor`. The executor transitions an owned queued run to `Running`, opens the run-owned source, builds an error-report session, invokes `BatchOrchestrator`, persists monotonic progress through `MongoEtlRunRepository`, finalizes the report when applicable, and marks the run terminal. `RunsController` exposes a polling-friendly `GET /Runs/{runId}/Status` endpoint and run history/detail pages.
+`BackgroundJobWorker` is a hosted service with a single queue reader. It creates a scoped `IBackgroundJobExecutor` for each job; the registered executor is `EtlRunBackgroundJobExecutor`. The executor transitions an owned queued run to `Running`, reconstructs the source and destination from the immutable execution snapshot (including frozen saved-connection revisions), builds an error-report session, invokes `BatchOrchestrator`, persists monotonic progress through `MongoEtlRunRepository`, finalizes the report when applicable, and marks the run terminal. `RunsController` exposes a polling-friendly `GET /Runs/{runId}/Status` endpoint and run history/detail pages.
 
 The worker links host shutdown and the per-run token from `ExecutionCancellationRegistry`; cancellation propagates into extractors, batching, loading, and report generation. The registry supplies cancellation infrastructure, but the current MVC application has no user-facing cancel-run endpoint. On shutdown, queue admission closes and queued jobs are reconciled; `AbandonedRunRecoveryService` also reconciles stale queued/running records at worker startup. Interrupted execution is recorded as `Interrupted`, not `Completed`.
 
@@ -91,10 +99,10 @@ The accepted product support matrix is intentionally narrower than the type abst
 
 | Source | MongoDB destination | PostgreSQL destination |
 | --- | --- | --- |
-| CSV | Supported | Not advertised as supported |
-| XLSX | Supported | Not advertised as supported |
-| PostgreSQL | Supported | Not advertised as supported |
-| MongoDB | Not advertised as supported | Supported |
+| CSV | Supported | Outside the accepted matrix |
+| XLSX | Supported | Outside the accepted matrix |
+| PostgreSQL | Supported | Outside the accepted matrix |
+| MongoDB | Outside the accepted matrix | Supported |
 
 `DataLoaderResolver` selects the destination-specific loader from the immutable admitted run configuration. The batch orchestrator retains only confirmed inserted/updated results; a later system failure is `PartiallyCompleted` only when earlier writes were confirmed.
 
@@ -106,11 +114,11 @@ For each valid batch, `MongoBulkUpsertLoader` builds `ReplaceOneModel<BsonDocume
 
 Retries are deliberately narrow: `MongoDb:BulkWriteMaximumAttempts` and `MongoDb:BulkWriteRetryDelayMilliseconds` control retries only for MongoDB failures marked both `NoWritesPerformed` and `RetryableWriteError`. Cancellation is never retried. Other MongoDB or timeout failures become `BatchLoadException` with no confirmed result; the orchestrator carries confirmed counts into the failure progress, allowing the executor to distinguish `Failed` from `PartiallyCompleted`.
 
-The MongoDB connection string is validated from the `MongoDb` configuration section at startup and is expected through an environment variable, user secrets, or another secret configuration provider. It is not stored in a pipeline or documented here.
+The `MongoDb` configuration section supplies the required application metadata connection and MongoDB retry/source defaults. Current pipeline destinations select a protected saved MongoDB connection; an admitted run carries its frozen revision to the loader. Neither configured nor saved connection strings are copied into pipeline or run documents.
 
 ### PostgreSQL
 
-PostgreSQL uses configured, named profiles under `PostgreSql:Profiles`; only the selected profile name, database, schema, table, output-to-column mappings, and upsert-key column are retained in a pipeline. Destination configuration discovers databases, schemas, tables, columns, and eligible unique/primary-key constraints before saving. The batch loader uses transactional `INSERT ... ON CONFLICT ... DO UPDATE` operations against the selected key column and reports confirmed inserts and updates separately. A rerun using the same selected key updates existing rows rather than creating duplicates. PostgreSQL batch retries are limited by `PostgreSql:BatchWriteMaximumAttempts` and `PostgreSql:BatchWriteRetryDelayMilliseconds`; cancellation is not retried.
+Current PostgreSQL source and destination workflows select a protected saved connection. A pipeline retains its saved-connection ID, database, schema, table, explicit output-to-column mappings, and upsert-key column; admission freezes the active connection revision for execution. Destination configuration discovers databases, schemas, tables, columns, and eligible unique/primary-key constraints before saving. The batch loader uses transactional `INSERT ... ON CONFLICT ... DO UPDATE` operations against the selected key column and reports confirmed inserts and updates separately. A rerun using the same selected key updates existing rows rather than creating duplicates. PostgreSQL batch retries are limited by `PostgreSql:BatchWriteMaximumAttempts` and `PostgreSql:BatchWriteRetryDelayMilliseconds`; cancellation is not retried. Named `PostgreSql:Profiles` remain supported for legacy-shaped persisted configurations but are not the normal saved-connection workflow.
 
 ## Error reports and file lifecycle
 
@@ -146,10 +154,10 @@ The behaviors summarized above were checked against the concrete services and re
 
 ### Intentional MVP limits
 
-The product supports CSV, modern XLSX, PostgreSQL, and MongoDB sources, and MongoDB/PostgreSQL destinations only for the accepted matrix above. It deliberately excludes legacy XLS, other database providers, unaccepted source/destination combinations, multiple MongoDB connection profiles, authentication/multi-tenancy, scheduled or distributed jobs, AI/fuzzy matching, custom code or regex validation, full-file dry runs, and cloud/production-SLA infrastructure. MongoDB supports one configured application connection; PostgreSQL uses explicitly configured profiles. Background work is an in-process, single-reader queue; there is no user-facing run-cancellation endpoint.
+The product supports CSV, modern XLSX, PostgreSQL, and MongoDB sources, and MongoDB/PostgreSQL destinations only for the accepted matrix above. It deliberately excludes legacy XLS, other database providers, unaccepted source/destination combinations, authentication/multi-tenancy, scheduled or distributed jobs, AI/fuzzy matching, custom code or regex validation, full-file dry runs, and cloud/production-SLA infrastructure. The configured MongoDB connection is required for application metadata; users may create multiple protected saved MongoDB and PostgreSQL connections for pipeline endpoints. Background work is an in-process, single-reader queue; there is no user-facing run-cancellation endpoint.
 
 ### Non-blocking verification limitations
 
-- Three tracked `MongoEtlRunRepositoryTests` expectations around monotonic `TotalRows` and one untracked Days 1–5 checkpoint source-lifecycle expectation remain stale or incorrect. They are test-maintenance items, not known production defects.
+- Deterministic PostgreSQL commit-ambiguity behavior is covered through the explicit batch-executor seam because the real provider has no practical commit-fault injection point for the acceptance suite.
 - Compatible pipeline reuse and schema-change/remapping were not rehearsed in a live browser during final acceptance; automated MVC/application coverage provides the available evidence.
 - Docker Compose named volumes are attached and startup/connectivity were verified, but persistence across an explicit stack restart was not manually confirmed.

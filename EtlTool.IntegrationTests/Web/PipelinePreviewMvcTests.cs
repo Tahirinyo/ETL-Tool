@@ -80,7 +80,9 @@ public sealed class PipelinePreviewMvcTests
             content);
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal($"/Runs/{host.RunId}", response.Headers.Location?.OriginalString);
+        Assert.Equal(
+            $"/Runs/{host.RunId}?pipelineId={pipeline.Id}",
+            response.Headers.Location?.OriginalString);
         Assert.Equal(1, host.AdmissionCallCount);
     }
 

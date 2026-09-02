@@ -1,6 +1,6 @@
 # Contributing
 
-This MVP uses a lightweight, task-based workflow for one developer. Keep `main` stable and limit each branch to one approved task.
+This MVP was planned for two developers and uses a lightweight, task-based workflow. Keep `main` stable and limit each branch to one approved task.
 
 ## Task workflow
 
@@ -21,4 +21,4 @@ This MVP uses a lightweight, task-based workflow for one developer. Keep `main` 
 6. Open a pull request to `main` and wait for green CI.
 7. Squash merge the pull request and delete the task branch.
 
-Do not create `develop`, release, hotfix, or person-based branches. The Developer A and Developer B labels in the original project plan now represent morning and afternoon work blocks for the same developer.
+Do not create `develop`, release, hotfix, or person-based branches. The Developer A and Developer B labels in the project plan are historical role assignments, not branch names.

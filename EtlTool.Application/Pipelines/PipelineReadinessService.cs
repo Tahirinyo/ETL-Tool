@@ -573,6 +573,14 @@ public sealed class PipelineReadinessService : IPipelineReadinessService
         MappingState mappingState,
         List<PipelineReadinessProblem> problems)
     {
+        if (pipeline.DestinationType == DestinationType.PostgreSql)
+        {
+            // PostgreSQL names its conflict key by destination column. The destination
+            // validator verifies that column is mapped from an active output field and
+            // that the processing key is that mapping's output field.
+            return;
+        }
+
         ValidateMappedField(
             pipeline.UpsertKeyField,
             "The pipeline upsert-key field",

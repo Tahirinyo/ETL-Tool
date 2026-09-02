@@ -252,13 +252,14 @@ public sealed class MongoDbExecutionIntegrationTests(MongoDbFixture fixture)
                 new FieldMappingService(),
                 database.TargetAccessService);
 
-            var exception = await Assert.ThrowsAsync<MongoSourceSchemaChangedException>(() =>
+            var failure = await Assert.ThrowsAsync<BatchExecutionException>(() =>
                 CreateExecutor(
                         database,
                         readiness,
                         temporaryRoot,
                         sourceSchemaSampleDocumentLimit: 1)
                     .ExecuteAsync(new BackgroundJob(run.Id), CancellationToken.None));
+            var exception = Assert.IsType<MongoSourceSchemaChangedException>(failure.ExecutionFailure);
 
             Assert.Equal(MongoSourceSchemaChangedException.SafeMessage, exception.Message);
             var partial = Assert.IsType<EtlRun>(await database.EtlRunRepository.GetByIdAsync(

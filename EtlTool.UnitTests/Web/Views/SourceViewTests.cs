@@ -18,6 +18,9 @@ public sealed class SourceViewTests
         Assert.Contains("asp-for=\"PostgreSqlSavedConnectionId\"", view);
         Assert.Contains("/Pipelines/Discovery/MongoDb/Databases", view);
         Assert.Contains("/Pipelines/Discovery/PostgreSql/Databases", view);
+        Assert.Contains("id=\"source-metadata-error\"", view);
+        Assert.Contains("showMetadataError(data?.error", view);
+        Assert.Contains("mongoCollection, mongoDatabase, []", view);
         Assert.DoesNotContain("Configured application MongoDB connection", view);
         Assert.DoesNotContain("Load options", view);
         Assert.DoesNotContain("asp-for=\"DestinationDatabase\"", view);
